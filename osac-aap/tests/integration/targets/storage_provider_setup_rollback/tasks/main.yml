@@ -427,7 +427,7 @@
 
     - name: Assert no deletions were issued against the surviving backend's array
       vars:
-        _rbmulti_a_window: "{{ _rbmulti_calls_a.json[_rbmulti_mark_a | int:] }}"
+        _rbmulti_a_window: "{{ _rbmulti_calls_a.json[_rbmulti_mark_a | int :] }}"
       ansible.builtin.assert:
         that:
           - _rbmulti_a_window | selectattr('method', 'equalto', 'DELETE') | list | length == 0
@@ -655,7 +655,7 @@
 
     - name: Check for tenant deletions in rollback window
       vars:
-        _rbsame_window: "{{ _rbsame_calls.json[_rbsame_mark | int:] }}"
+        _rbsame_window: "{{ _rbsame_calls.json[_rbsame_mark | int :] }}"
         _tenant_deletes: >-
           {{
             _rbsame_window

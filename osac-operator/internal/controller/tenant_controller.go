@@ -18,20 +18,27 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
 	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -47,6 +54,8 @@ type TenantReconciler struct {
 	Scheme          *runtime.Scheme
 	Recorder        events.EventRecorder
 	tenantNamespace string
+	mgr             mcmanager.Manager
+	targetCluster   mc.ClusterName
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
@@ -55,9 +64,11 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
+// NewTenantReconciler creates a TenantReconciler for the target cluster.
 func NewTenantReconciler(
 	mgr mcmanager.Manager,
 	tenantNamespace string,
+	targetCluster mc.ClusterName,
 ) *TenantReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -68,6 +79,8 @@ func NewTenantReconciler(
 		Scheme:          mgr.GetLocalManager().GetScheme(),
 		Recorder:        mgr.GetLocalManager().GetEventRecorder(tenantControllerName),
 		tenantNamespace: tenantNamespace,
+		mgr:             mgr,
+		targetCluster:   targetCluster,
 	}
 }
 
@@ -115,6 +128,11 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 	}
 
 	instance.Status.Namespace = ""
+	instance.Status.Phase = v1alpha1.TenantPhaseProgressing
+	if err := r.ensureRemoteTenantNamespace(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	instance.Status.Phase = v1alpha1.TenantPhaseReady
 	return ctrl.Result{}, nil
 }
@@ -129,6 +147,41 @@ func (r *TenantReconciler) handleDelete(ctx context.Context, instance *v1alpha1.
 
 	instance.Status.Phase = v1alpha1.TenantPhaseDeleting
 
+	if r.targetCluster != mcmanager.LocalCluster {
+		for _, finalizer := range instance.Finalizers {
+			if finalizer != tenantFinalizer {
+				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			}
+		}
+
+		cluster, err := r.mgr.GetCluster(ctx, r.targetCluster)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		namespace := &corev1.Namespace{}
+		key := types.NamespacedName{Name: instance.GetName()}
+		if err := cluster.GetAPIReader().Get(ctx, key, namespace); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("get remote tenant namespace %q: %w", key.Name, err)
+			}
+		} else {
+			if err := requireRemoteTenantNamespaceOwner(namespace, instance); err != nil {
+				return ctrl.Result{}, err
+			}
+			if namespace.DeletionTimestamp.IsZero() {
+				uid := namespace.UID
+				resourceVersion := namespace.ResourceVersion
+				if err := cluster.GetClient().Delete(ctx, namespace, client.Preconditions{
+					UID:             &uid,
+					ResourceVersion: &resourceVersion,
+				}); err != nil && !apierrors.IsNotFound(err) {
+					return ctrl.Result{}, fmt.Errorf("delete remote tenant namespace %q: %w", key.Name, err)
+				}
+			}
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
+	}
+
 	controllerutil.RemoveFinalizer(instance, tenantFinalizer)
 	if err := r.Update(ctx, instance); err != nil {
 		return ctrl.Result{}, err
@@ -136,6 +189,83 @@ func (r *TenantReconciler) handleDelete(ctx context.Context, instance *v1alpha1.
 
 	log.Info("tenant finalizer removed, deletion will proceed")
 	return ctrl.Result{}, nil
+}
+
+// ensureRemoteTenantNamespace creates or repairs the Tenant's namespace on the
+// remote cluster.
+func (r *TenantReconciler) ensureRemoteTenantNamespace(ctx context.Context, instance *v1alpha1.Tenant) error {
+	if r.targetCluster == mcmanager.LocalCluster {
+		return nil
+	}
+
+	cluster, err := r.mgr.GetCluster(ctx, r.targetCluster)
+	if err != nil {
+		return err
+	}
+	key := types.NamespacedName{Name: instance.GetName()}
+	namespace := &corev1.Namespace{}
+	err = cluster.GetAPIReader().Get(ctx, key, namespace)
+	if apierrors.IsNotFound(err) {
+		if instance.UID == "" {
+			return fmt.Errorf("cannot create remote tenant namespace %q: Tenant UID is missing", key.Name)
+		}
+		labels := tenantNamespaceLabels(instance)
+		labels[osacTenantUIDLabel] = string(instance.UID)
+		namespace = &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   key.Name,
+				Labels: labels,
+			},
+		}
+		if err := cluster.GetClient().Create(ctx, namespace); err == nil {
+			return nil
+		} else if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create remote tenant namespace %q: %w", key.Name, err)
+		}
+		if err := cluster.GetAPIReader().Get(ctx, key, namespace); err != nil {
+			return fmt.Errorf("get remote tenant namespace %q after AlreadyExists: %w", key.Name, err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("get remote tenant namespace %q: %w", key.Name, err)
+	}
+
+	if err := requireRemoteTenantNamespaceOwner(namespace, instance); err != nil {
+		return err
+	}
+	if !namespace.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("remote tenant namespace %q is being deleted", key.Name)
+	}
+
+	labels := tenantNamespaceLabels(instance)
+	if namespace.Labels[osacTenantRefLabel] != labels[osacTenantRefLabel] ||
+		namespace.Labels[osacProjectRefLabel] != labels[osacProjectRefLabel] {
+		base := namespace.DeepCopy()
+		for key, value := range labels {
+			namespace.Labels[key] = value
+		}
+		patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		if err := cluster.GetClient().Patch(ctx, namespace, patch); err != nil {
+			return fmt.Errorf("set tenant association labels on remote namespace %q: %w", key.Name, err)
+		}
+	}
+	return nil
+}
+
+// requireRemoteTenantNamespaceOwner checks the UID of the Tenant object, since
+// a new Tenant object can have the same name and Fulfillment ID.
+func requireRemoteTenantNamespaceOwner(namespace *corev1.Namespace, tenant *v1alpha1.Tenant) error {
+	if tenant.UID == "" || namespace.Labels[osacTenantUIDLabel] != string(tenant.UID) {
+		return fmt.Errorf("cannot verify ownership of remote tenant namespace %q: %s must match the Tenant UID", namespace.Name, osacTenantUIDLabel)
+	}
+	return nil
+}
+
+// tenantNamespaceLabels returns the association labels used by Fulfillment.
+func tenantNamespaceLabels(instance *v1alpha1.Tenant) map[string]string {
+	return map[string]string{
+		osacTenantRefLabel:  instance.GetName(),
+		osacProjectRefLabel: instance.GetNamespace(),
+	}
 }
 
 func (r *TenantReconciler) mapObjectToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -163,8 +293,24 @@ func (r *TenantReconciler) mapObjectToTenant(ctx context.Context, obj client.Obj
 	}
 }
 
+func tenantNamespaceWatchPredicate(namespace string) (predicate.Predicate, error) {
+	labelSelector := tenantLabelSelector(namespace)
+	selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
+	if err != nil {
+		return nil, err
+	}
+	matches := func(obj client.Object) bool {
+		return selector.Matches(labels.Set(obj.GetLabels()))
+	}
+	watch := predicate.NewPredicateFuncs(matches)
+	watch.UpdateFunc = func(update event.UpdateEvent) bool {
+		return matches(update.ObjectOld) || matches(update.ObjectNew)
+	}
+	return watch, nil
+}
+
 func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
-	tenantLabelPredicate, err := predicate.LabelSelectorPredicate(tenantLabelSelector(r.tenantNamespace))
+	tenantLabelPredicate, err := tenantNamespaceWatchPredicate(r.tenantNamespace)
 	if err != nil {
 		return err
 	}

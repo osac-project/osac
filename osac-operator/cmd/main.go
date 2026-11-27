@@ -680,6 +680,7 @@ func setupTenantController(mgr mcmanager.Manager, grpcConn grpc.ClientConnInterf
 	if err := (controller.NewTenantReconciler(
 		mgr,
 		tenantNamespace,
+		targetClusterFromManager(mgr),
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("tenant controller: %w", err)
 	}

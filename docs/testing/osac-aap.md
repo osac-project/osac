@@ -27,6 +27,11 @@ in `osac-aap/Makefile`.
   is not exercised. VM readiness may be overridden; synthetic Volume IDs prove no Volume
   API recovery, CDI/KubeVirt, PVC binding or guest I/O; minimal CRDs prove no
   provider admission.
+- `compute_instance_create:missing_target_namespace` ([OSAC-7297](https://redhat.atlassian.net/browse/OSAC-7297))
+  checks the selected namespace against the real Kind API. A missing namespace
+  stops VM creation and publishes a retryable `osac_error`; an existing namespace
+  publishes no error. The test reads Ansible's custom stats, not a deployed AAP
+  job; it runs no operator or KubeVirt.
 - Storage target-routing scenarios: separate management/workload Kind APIs;
   placement and kubeconfig use are real. Tenant status resolution, VM boot and
   deployed AAP/provider lifecycle are outside the fixture.
@@ -135,6 +140,12 @@ only. Run the applicable integration tests separately for workflow behavior.
   boundary and link missing coverage to [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850)
   or the relevant [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843)
   follow-up.
+- VM provisioning when the target namespace is missing on the remote workload
+  cluster ([OSAC-7297](https://redhat.atlassian.net/browse/OSAC-7297)):
+  the AAP namespace check and operator retry are tested separately. No deployed
+  end-to-end test verifies that AAP delivers the retryable `osac_error` to the
+  operator and that the operator retries after the namespace becomes available.
+  Follow-up: [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850).
 - Template publishing OAuth has unit and local mock-server coverage only; no
   deployed test proves AAP worker secret delivery or connectivity across
   Keycloak, AAP and Fulfillment. Track under

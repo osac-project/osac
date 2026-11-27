@@ -1,0 +1,77 @@
+---
+- name: Check VM create namespace errors
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run VM create with missing and existing namespaces
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+          - -i
+          - localhost,
+          - -c
+          - local
+          - tests/integration/targets/compute_instance_create/tasks/missing_target_namespace_job.yml
+          - -e
+          - "target_test_namespace={{ item }}"
+        chdir: "{{ playbook_dir }}/../../../../.."
+      environment:
+        ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+        ANSIBLE_SHOW_CUSTOM_STATS: "true"
+        ANSIBLE_PYTHON_INTERPRETER: "{{ ansible_playbook_python }}"
+        ANSIBLE_LOCALHOST_WARNING: "False"
+        ANSIBLE_INVENTORY_UNPARSED_WARNING: "False"
+        OSAC_REMOTE_CLUSTER_KUBECONFIG: ""
+      loop:
+        - osac-7297-missing-target
+        - default
+      register: namespace_jobs
+      changed_when: false
+      failed_when: false
+
+    - name: Parse VM create job outputs
+      ansible.builtin.set_fact:
+        missing_job: "{{ namespace_jobs.results[0] }}"
+        existing_job: "{{ namespace_jobs.results[1] }}"
+        missing_output: >-
+          {{ namespace_jobs.results[0].stdout | from_json
+             if namespace_jobs.results[0].stdout is match('^\s*\{') else {} }}
+        existing_output: >-
+          {{ namespace_jobs.results[1].stdout | from_json
+             if namespace_jobs.results[1].stdout is match('^\s*\{') else {} }}
+
+    - name: Find the missing namespace failure
+      ansible.builtin.set_fact:
+        namespace_failure: >-
+          {{ missing_output.plays | default([]) | map(attribute='tasks') | flatten
+             | selectattr('task.name', 'search', 'Require target namespace to exist')
+             | map(attribute='hosts.localhost') | first | default({}) }}
+
+    - name: Verify the missing namespace failure is retryable
+      ansible.builtin.assert:
+        that:
+          - missing_job.rc != 0
+          - missing_output.global_custom_stats | default({}) == expected_stats
+          - namespace_failure.failed | default(false) | bool
+          - namespace_failure.msg | default('') == expected_stats.osac_error.message
+          - "'Step - Create secrets' not in missing_job.stdout"
+        fail_msg: >-
+          VM create did not report the expected retryable missing namespace failure:
+          rc={{ missing_job.rc }}, JSON parsed={{ missing_output | length > 0 }}.
+      vars:
+        expected_stats:
+          osac_error:
+            message: "VM target namespace 'osac-7297-missing-target' does not exist on the target cluster."
+            retryable: true
+
+    - name: Verify an existing namespace does not publish an error
+      ansible.builtin.assert:
+        that:
+          - existing_job.rc == 0
+          - existing_output | length > 0
+          - existing_output.global_custom_stats | default({}) == {}
+          - "'Step - Create secrets' in existing_job.stdout"
+        fail_msg: >-
+          VM create did not accept the existing namespace without an error:
+          rc={{ existing_job.rc }}, JSON parsed={{ existing_output | length > 0 }}.

@@ -31,12 +31,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	clocktesting "k8s.io/utils/clock/testing"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -793,6 +795,53 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 		f.aap.finish(computeInstanceProvisionTask, "error", "")
 		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
 			g.Expect(ci.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRetrying))
+			g.Expect(ci.Status.Phase).NotTo(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+		})
+	})
+
+	It("retries a provision job after its target namespace is available", func() {
+		const namespace = "vmaas-missing-namespace-retry"
+		f := newFixture("vmaas-missing-ns-retry", false)
+		backoffClock := clocktesting.NewFakeClock(time.Now())
+		f.r.Engine.WithClock(backoffClock)
+
+		tenantKey := types.NamespacedName{Namespace: ns, Name: f.tenant}
+		tenant := &osacv1alpha1.Tenant{}
+		Expect(k8sClient.Get(ctx, tenantKey, tenant)).To(Succeed())
+		tenant.Status.Namespace = namespace
+		Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+		Eventually(func(g Gomega) {
+			cached := &osacv1alpha1.Tenant{}
+			g.Expect(f.r.Get(ctx, tenantKey, cached)).To(Succeed())
+			g.Expect(cached.Status.Namespace).To(Equal(namespace))
+		}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
+			g.Expect(ci.Status.Jobs).To(HaveLen(1))
+			g.Expect(ci.Status.Jobs[0].JobID).NotTo(BeEmpty())
+		})
+		Expect(f.aap.last(computeInstanceProvisionTask).vars["vm_network"]).To(Equal(disabledVMNetwork(namespace, f.id)))
+		f.aap.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"VM target namespace 'vmaas-missing-namespace-retry' does not exist on the target cluster.","retryable":true}}`)
+		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
+			g.Expect(ci.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRetrying))
+			g.Expect(ci.Status.Jobs[0].Attempt).To(Equal(int32(1)))
+			g.Expect(ci.Status.Jobs[0].Message).To(ContainSubstring("does not exist"))
+			g.Expect(ci.Status.Phase).NotTo(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+		})
+		Expect(f.aap.tasks()).To(HaveLen(1))
+
+		createNamespace(namespace)
+		backoffClock.Step(networktask.Backoff(computeInstanceProvisionTask, 1, 1) + time.Second)
+		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
+			g.Expect(ci.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
+			g.Expect(ci.Status.Jobs[0].Attempt).To(Equal(int32(2)))
+			g.Expect(ci.Status.Jobs[0].JobID).NotTo(BeEmpty())
+		})
+		Expect(f.aap.tasks()).To(HaveLen(2))
+		Expect(f.aap.last(computeInstanceProvisionTask).vars["vm_network"]).To(Equal(disabledVMNetwork(namespace, f.id)))
+		f.aap.finish(computeInstanceProvisionTask, "successful", "")
+		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
+			g.Expect(ci.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateSucceeded))
 			g.Expect(ci.Status.Phase).NotTo(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
 		})
 	})

@@ -50,6 +50,11 @@ var (
 )
 
 func TestControllers(t *testing.T) {
+	// Per-spec cleanup removes the containers. Disable Ryuk's separate image pull.
+	t.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+	if tool := os.Getenv("CONTAINER_TOOL"); tool != "" {
+		t.Setenv("TESTCONTAINERS_PROVIDER", filepath.Base(tool))
+	}
 	RegisterFailHandler(Fail)
 
 	RunSpecs(t, "Controller Suite")

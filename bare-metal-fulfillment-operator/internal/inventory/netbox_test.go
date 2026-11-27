@@ -728,18 +728,22 @@ var _ = Describe("NetBox assignment eligibility", func() {
 		Expect(api.patchCalls).To(Equal(1))
 	})
 
-	It("does not claim a device that became active without an owner", func() {
-		api := &selectorQueryTestAPI{
-			deviceSnapshot: testNetBoxAssignmentSnapshot(netBoxStatusActive, ""),
-		}
-		client := newTestNetBoxClientWithCredentials(api)
+	DescribeTable("rejects a device with an invalid owner before claiming",
+		func(status, owner, message string) {
+			api := &selectorQueryTestAPI{
+				deviceSnapshot: testNetBoxAssignmentSnapshot(status, owner),
+			}
+			client := newTestNetBoxClientWithCredentials(api)
 
-		host, err := client.AssignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
+			host, err := client.AssignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
 
-		Expect(host).To(BeNil())
-		Expect(err).To(MatchError(ContainSubstring("active without an assigned instance")))
-		Expect(api.patchCalls).To(BeZero())
-	})
+			Expect(host).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring(message)))
+			Expect(api.patchCalls).To(BeZero())
+		},
+		Entry("active device without an owner", netBoxStatusActive, "", "active without an assigned instance"),
+		Entry("staged device with a whitespace-only owner", netBoxStatusStaged, "   ", "malformed osac_instance_id"),
+	)
 
 	It("claims a free managed device with its ETag and confirms the assignment", func() {
 		freeDevice := testNetBoxAssignmentSnapshot(netBoxStatusStaged, "")

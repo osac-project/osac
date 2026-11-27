@@ -10,10 +10,10 @@ name: CI
 # applied passed.
 #
 # The checks themselves are reusable workflows in this directory
-# (helm-lint.yaml, build-image.yaml, ...); the unit and integration tests are legs of one matrix
-# (.github/ci-tests.yml, run by tests.yml). They hold no
-# path gating of their own. To add a check: create (or extend) its workflow,
-# add a filter for it to ci-filters.yml, add a job here, and add the job to
+# (helm-lint.yaml, build-image.yaml, ...); the unit and integration tests are selected from .github/ci-tests.yml.
+# BMF uses a separate matrix so its inventory suites can share an image build. Reusable workflows hold no path gating.
+# To add a check, create or extend its workflow, add a filter to ci-filters.yml,
+# and add a job here and to
 # the `needs` of `CI`.
 #
 # E2E is a separate required check, `E2E`, handled by e2e-pr.yml (pull
@@ -46,8 +46,9 @@ jobs:
       # except proto-check unless it matched; the emergency override enables
       # every filter. Tested with contains(changed, '|name|').
       changed: ${{ steps.pick.outputs.changed }}
-      # The unit and integration test legs this change needs (see .github/ci-tests.yml), as a JSON list for a matrix.
+      # Matrices for the selected test legs from .github/ci-tests.yml.
       tests: ${{ steps.tests.outputs.tests }}
+      bmf_tests: ${{ steps.tests.outputs.bmf_tests }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
       # so the repository must be checked out with enough history for base..head.
@@ -99,7 +100,11 @@ jobs:
                 then .pr_repetitions as $n | range(1; $n + 1) as $i
                   | . + {id: "\(.id) (\($i)/\($n))", repeat: $i}
                 else . end ]')
-          echo "tests=${tests}" >> "$GITHUB_OUTPUT"
+          jq -r '
+            def bmf: .kind == "it-bare-metal-fulfillment-operator";
+            {tests: map(select(bmf | not)), bmf_tests: map(select(bmf))}
+            | to_entries[] | "\(.key)=\(.value | tojson)"
+          ' <<< "$tests" >> "$GITHUB_OUTPUT"
           echo "Tests that run: $(jq -r 'map(.id) | join(", ") | if . == "" then "none" else . end' <<<"${tests}")" >> "$GITHUB_STEP_SUMMARY"
 
   # Run on every change: they look at the whole diff, not at one component.
@@ -185,6 +190,9 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/build-bmf-image.yaml
+    with:
+      # Both builds use the same Containerfile. The integration build is counted by CI.
+      build_image: ${{ needs.plan.outputs.bmf_tests == '[]' }}
 
   # osac-ui: generated types, lint (the UI and its Go proxy), and typecheck. The unit tests of osac-ui are a leg of the matrix below.
   osac-ui-generated-types:
@@ -211,7 +219,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/osac-ui-typecheck.yaml
 
-  # Every unit and integration test the change needs, one job per leg (a matrix built by `plan` from .github/ci-tests.yml).
+  # One job per test leg selected by plan, with BMF handled below.
   # A test that is not needed has no job, so the pull request shows no skipped row for it. A leg that repeats on a pull
   # request has one job per repetition, all of them at once.
   tests:
@@ -231,6 +239,21 @@ jobs:
       cmd: ${{ matrix.cmd || '' }}
       timeout: ${{ matrix.timeout || 360 }}
       # The repetitions of one leg upload the same artifact name; name them apart so none overwrites another.
+      artifact_suffix: ${{ matrix.repeat != null && format('-repeat-{0}', matrix.repeat) || '' }}
+
+  bmf-tests:
+    name: ${{ matrix.id }}
+    needs: plan
+    if: needs.plan.outputs.bmf_tests != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.bmf_tests) }}
+    permissions:
+      contents: read  # The build and test jobs check out the repository.
+    uses: ./.github/workflows/bmf-integration-tests.yml
+    with:
+      timeout: ${{ matrix.timeout || 360 }}
       artifact_suffix: ${{ matrix.repeat != null && format('-repeat-{0}', matrix.repeat) || '' }}
 
   # The one required check. It also runs when a check failed, and fails then;
@@ -253,6 +276,7 @@ jobs:
       - osac-ui-lint
       - osac-ui-typecheck
       - tests
+      - bmf-tests
     runs-on: ubuntu-latest
     permissions: {}
     steps:

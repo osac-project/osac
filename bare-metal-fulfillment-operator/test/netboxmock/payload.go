@@ -14,52 +14,50 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package netboxclient
+// Package netboxmock configures the NetBox device API used by BMF tests.
+package netboxmock
 
 import (
-	"net/http"
+	"maps"
 	"strconv"
 	"strings"
 )
 
-// NewClientForTest creates a Client with an injected HTTP client and API token.
-func NewClientForTest(httpClient *http.Client, endpoint, token string) *Client {
-	testClient := *httpClient
-	transport := testClient.Transport
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-	testClient.Transport = &requestExtensionTransport{base: transport}
-	testClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-
-	return &Client{api: newAPIClient(strings.TrimRight(endpoint, "/"), token, &testClient)}
-}
-
-// DevicePayloadForTest returns the dcim.device response shape the generated SDK
+// DevicePayload returns the dcim.device response shape the generated SDK
 // requires, so tests share one fixture instead of maintaining their own copies.
-func DevicePayloadForTest(id int, name, status string, customFields map[string]interface{}) map[string]interface{} {
-	fields := cloneCustomFields(customFields)
-	return map[string]interface{}{
+//
+//nolint:goconst // Keep the JSON keys visible in the wire fixture.
+func DevicePayload(id int, name, status string, customFields map[string]any) map[string]any {
+	fields := maps.Clone(customFields)
+	label := status
+	if status != "" {
+		label = strings.ToUpper(status[:1]) + status[1:]
+	}
+	return map[string]any{
 		"id":      id,
 		"url":     "/api/dcim/devices/" + strconv.Itoa(id) + "/",
 		"display": name,
 		"name":    name,
-		"device_type": map[string]interface{}{
+		"device_type": map[string]any{
 			"id":      1,
 			"url":     "/api/dcim/device-types/1/",
 			"display": "Test device type",
-			"manufacturer": map[string]interface{}{
+			"manufacturer": map[string]any{
 				"id": 1, "url": "/api/dcim/manufacturers/1/", "display": "Test manufacturer",
 				"name": "Test manufacturer", "slug": "test-manufacturer",
 			},
 			"model": "Test model",
 			"slug":  "test-device-type",
 		},
-		"role":                      map[string]interface{}{"id": 1, "url": "/api/dcim/device-roles/1/", "display": "Server", "name": "Server", "slug": "server", "_depth": 0},
-		"site":                      map[string]interface{}{"id": 1, "url": "/api/dcim/sites/1/", "display": "Test site", "name": "Test site", "slug": "test-site"},
-		"status":                    map[string]interface{}{"value": status, "label": strings.ToUpper(status[:1]) + status[1:]},
+		"role": map[string]any{
+			"id": 1, "url": "/api/dcim/device-roles/1/", "display": "Server",
+			"name": "Server", "slug": "server", "_depth": 0,
+		},
+		"site": map[string]any{
+			"id": 1, "url": "/api/dcim/sites/1/", "display": "Test site",
+			"name": "Test site", "slug": "test-site",
+		},
+		"status":                    map[string]any{"value": status, "label": label},
 		"custom_fields":             fields,
 		"console_port_count":        0,
 		"console_server_port_count": 0,

@@ -1,11 +1,16 @@
 name: Build bare-metal-fulfillment-operator image
 
 # On a pull request or in the merge queue ci.yml calls this (job build-bare-metal-fulfillment-operator)
-# when the component changes: the unit tests, then an image build that is not
-# pushed. On main it tests, builds, pushes and signs the image.
+# when the component changes. CI can reuse the BMF integration image build.
+# On main this workflow tests, builds, pushes and signs the image.
 
 on:  # yamllint disable-line rule:truthy
   workflow_call:
+    inputs:
+      build_image:
+        description: Build the BMF image when the integration workflow is not building it
+        type: boolean
+        default: true
   workflow_dispatch:
   push:
     branches:
@@ -47,6 +52,7 @@ jobs:
 
   build:
     needs: test
+    if: (github.event_name != 'pull_request' && github.event_name != 'merge_group') || inputs.build_image
     runs-on: ubuntu-latest
     permissions:
       contents: read

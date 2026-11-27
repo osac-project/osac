@@ -39,6 +39,14 @@ on:  # yamllint disable-line rule:truthy
         required: false
         type: string
         default: ""
+      bmf_suite:
+        description: BMF inventory suite using shared images, or empty to run both sequentially
+        type: string
+        default: ""
+      bmf_image_artifact_id:
+        description: ID of the shared image archive for the selected BMF suite
+        type: string
+        default: ""
       timeout:
         description: Minutes before the job is cancelled
         required: false
@@ -450,17 +458,31 @@ jobs:
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 
       - name: Test BMF NetBox Secret lookup
-        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator' && inputs.bmf_suite != 'bmf'
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           uv run --project . python osac-installer/scripts/test-bmf-netbox-render.py --live-lookup-only
+
+      - name: Download BMF test images
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator' && inputs.bmf_image_artifact_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          artifact-ids: ${{ inputs.bmf_image_artifact_id }}
+          path: ${{ runner.temp }}
+
+      - name: Load BMF test images into Kind
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator' && inputs.bmf_suite != ''
+        run: kind load image-archive "$RUNNER_TEMP/bmf-integration-images.tar" --name osac-dev
 
       - name: Run integration tests
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         env:
           CONTAINER_TOOL: docker
           JUNIT_REPORT_DIR: ${{ github.workspace }}/it-junit
-        run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf
+          BMF_SUITE: ${{ inputs.bmf_suite || 'bmf' }}
+          BMF_NETBOX_TEST: ${{ inputs.bmf_suite == '' }}
+          BMF_TEST_IMAGES_PRELOADED: ${{ inputs.bmf_suite != '' }}
+        run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE="$BMF_SUITE"
 
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-bare-metal-fulfillment-operator' && failure()

@@ -1,0 +1,94 @@
+# The installer test target fills in the mock tokens before applying this fixture.
+apiVersion: v1
+kind: Secret
+metadata:
+  # The installer selects this Secret with bmf.secrets.netboxToken.
+  name: bmf-netbox-fixture-token
+  annotations:
+    osac.openshift.io/tenant: system
+    osac.openshift.io/owner-reference: bmf-netbox-integration
+stringData:
+  token: "@NETBOX_TOKEN@"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bmf-netbox-fixture-rotated-token
+  annotations:
+    osac.openshift.io/tenant: system
+    osac.openshift.io/owner-reference: bmf-netbox-integration
+stringData:
+  token: "@NETBOX_ROTATED_TOKEN@"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bmf-netbox-fixture
+  annotations:
+    osac.openshift.io/tenant: system
+    osac.openshift.io/owner-reference: bmf-netbox-integration
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bmf-netbox-fixture
+  template:
+    metadata:
+      labels:
+        app: bmf-netbox-fixture
+      annotations:
+        osac.openshift.io/tenant: system
+        osac.openshift.io/owner-reference: bmf-netbox-integration
+    spec:
+      automountServiceAccountToken: false
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: wiremock
+          image: "@WIREMOCK_IMAGE@"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            tcpSocket:
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /__admin/health
+              port: http
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bmf-netbox-fixture
+  annotations:
+    osac.openshift.io/tenant: system
+    osac.openshift.io/owner-reference: bmf-netbox-integration
+spec:
+  selector:
+    app: bmf-netbox-fixture
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

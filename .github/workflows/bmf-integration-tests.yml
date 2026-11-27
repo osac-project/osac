@@ -1,0 +1,68 @@
+---
+name: BMF integration tests
+
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
+    inputs:
+      timeout:
+        description: Minutes before each inventory test job is cancelled
+        required: true
+        type: number
+      artifact_suffix:
+        description: Suffix for artifacts when repeating the suite
+        type: string
+        default: ""
+
+permissions:
+  contents: read  # The build and test jobs check out the repository.
+
+jobs:
+  images:
+    name: Build integration test images
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout }}
+    permissions:
+      contents: read  # Checkout of the tested commit only.
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and save images
+        id: build
+        run: |
+          make -C osac-installer bmf-test-images PLATFORM=kind PROFILE=dev CONTAINER_TOOL=docker SUITE=bmf-netbox
+          docker save -o "$RUNNER_TEMP/bmf-integration-images.tar" \
+            localhost/bmf-operator:it localhost/metering-service:it localhost/fulfillment-service:it
+      - name: Upload integration test images
+        id: upload
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: bmf-integration-images-${{ github.run_attempt }}${{ inputs.artifact_suffix }}
+          path: ${{ runner.temp }}/bmf-integration-images.tar
+          if-no-files-found: error
+          retention-days: 30
+
+  test:
+    name: ${{ matrix.inventory }}
+    needs: images
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - inventory: Metal3
+            suite: bmf
+          - inventory: NetBox
+            suite: bmf-netbox
+    permissions:
+      contents: read  # Checkout of the tested commit only.
+    uses: ./.github/workflows/tests.yml
+    with:
+      kind: it-bare-metal-fulfillment-operator
+      timeout: ${{ inputs.timeout }}
+      bmf_suite: ${{ matrix.suite }}
+      bmf_image_artifact_id: ${{ needs.images.outputs.artifact }}
+      artifact_suffix: -${{ matrix.suite }}-attempt-${{ github.run_attempt }}${{ inputs.artifact_suffix }}

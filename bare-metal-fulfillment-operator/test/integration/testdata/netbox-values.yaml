@@ -1,0 +1,35 @@
+global:
+  services:
+    bmaas:
+      enabled: true
+  networking:
+    provisioningEnabled: false
+service:
+  enabled: true
+  images:
+    service:
+      repository: localhost/fulfillment-service
+      tag: it
+      pullPolicy: Never
+  controller:
+    sync: false
+bmf:
+  replicaCount: 1
+  image:
+    repository: localhost/bmf-operator
+    tag: it
+    pullPolicy: Never
+  testBackend:
+    metal3:
+      enabled: false
+  secrets:
+    inventoryConfig: osac-inventory-config
+    managementConfig: osac-management-config
+    netboxToken: bmf-netbox-fixture-token
+  netbox:
+    enabled: true
+    clientAllowInsecureHTTP: true
+operator:
+  enabled: false
+  networkManagers:
+    enabled: false

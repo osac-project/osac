@@ -1,0 +1,9 @@
+{{~val (arrayJoin '' 'netbox-device-' request.pathSegments.[3]) assign='device'~}}
+{{~val (jsonPath request.body '$.status') assign='status'~}}
+{{~val (jsonPath request.body '$.custom_fields.osac_instance_id') assign='owner'~}}
+{{~#jsonMerge (state context=device property='document')~}}
+{
+  "status": {"value":"{{status}}","label":"{{capitalize status}}"},
+  "custom_fields": {"osac_instance_id": {{#if owner}}{{{toJson owner}}}{{else}}null{{/if}} }
+}
+{{~/jsonMerge~}}

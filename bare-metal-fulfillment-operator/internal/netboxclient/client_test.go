@@ -34,6 +34,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxmock"
 )
 
 const testToken = "nbt_aaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -205,7 +207,7 @@ var _ = Describe("NetBox client", func() {
 
 	It("encodes status and custom-field filters for device queries", func() {
 		longFieldName := strings.Repeat("x", 51)
-		freeDevicePayload, err := json.Marshal(DevicePayloadForTest(
+		freeDevicePayload, err := json.Marshal(netboxmock.DevicePayload(
 			42, "host-42", "staged",
 			map[string]interface{}{"osac_managed": true, "osac_instance_id": ""},
 		))
@@ -790,7 +792,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func deviceResponse(id int, name, status string) string {
-	payload := DevicePayloadForTest(id, name, status, map[string]interface{}{"osac_instance_id": "instance-42"})
+	payload := netboxmock.DevicePayload(id, name, status, map[string]interface{}{"osac_instance_id": "instance-42"})
 	encoded, err := json.Marshal(payload)
 	Expect(err).NotTo(HaveOccurred())
 	return string(encoded)

@@ -8,7 +8,9 @@ metadata:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "31"
+    # Same weight as publish-templates: registering the LVMS backend and
+    # publishing templates are independent API calls and run in parallel.
+    "helm.sh/hook-weight": "20"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     "helm.sh/hook-output-log-policy": hook-failed
 spec:

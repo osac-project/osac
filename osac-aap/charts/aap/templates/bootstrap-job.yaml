@@ -1,4 +1,14 @@
 {{- if .Values.bootstrap.enabled }}
+{{- /* With an external AAP the bootstrap only talks to the already-running
+       AAP and reads secrets staged before the install (admin password,
+       license manifest, CA bundle, vcluster token), so it can run as a
+       pre-install hook and overlap the pod rollout. With the bundled AAP
+       the hook itself deploys the AAP subscription and must wait for the
+       release: keep it post-install there. */}}
+{{- $aapHookPhase := "post-install,post-upgrade" }}
+{{- if not .Values.aap.instance.enabled }}
+{{- $aapHookPhase = "pre-install,pre-upgrade" }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -6,6 +16,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac-aap.labels" . | nindent 4 }}
+  {{- if not .Values.aap.instance.enabled }}
+  annotations:
+    "helm.sh/hook": {{ $aapHookPhase }}
+    "helm.sh/hook-weight": "9"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -14,6 +30,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac-aap.labels" . | nindent 4 }}
+  {{- if not .Values.aap.instance.enabled }}
+  annotations:
+    "helm.sh/hook": {{ $aapHookPhase }}
+    "helm.sh/hook-weight": "9"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  {{- end }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -34,6 +56,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac-aap.labels" . | nindent 4 }}
+  {{- if not .Values.aap.instance.enabled }}
+  annotations:
+    "helm.sh/hook": {{ $aapHookPhase }}
+    "helm.sh/hook-weight": "9"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  {{- end }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -51,7 +79,7 @@ metadata:
   labels:
     {{- include "osac-aap.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": {{ $aapHookPhase }}
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation
     "helm.sh/hook-output-log-policy": hook-failed

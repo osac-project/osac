@@ -53,8 +53,15 @@
 #   Test 16 (Windows without user-data -- no sysprep created):
 #     ansible-playbook ... -e test_windows_no_userdata=true
 #
-#   Test 17 (Linux with user-data -- cloud-init path regression):
+#   Test 17 (Linux with user data, with and without an SSH key):
 #     ansible-playbook ... -e test_linux_userdata_cloudinit=true
+#     ansible-playbook ... -e test_linux_userdata_and_ssh_key=true
+#
+#   Test 18 (Linux with only an SSH key):
+#     ansible-playbook ... -e test_linux_ssh_key_only_configdrive=true
+#
+#   Test 19 (Linux without first-boot inputs):
+#     ansible-playbook ... -e test_linux_no_first_boot_inputs=true
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Verify spec defaults are merged into a minimal fixture
@@ -747,13 +754,13 @@
 # ──────────────────────────────────────────────────────────────
 # Test 15: Windows VM with user-data — pre-secrets base spec
 # Expected: vm_user_data_secret_ref extracted, Windows template spec built
-#           (EFI, no cloudInitNoCloud), base spec has only root-disk before
-#           create_secrets runs.
+#           (EFI, no cloud-init volume), base spec has only root-disk before
+#           first-boot preparation runs.
 # The actual sysprep Secret copy, SATA CD-ROM disk/volume injection,
 # destination Secret reference, and byte-identical userdata→Unattend.xml
 # assertions are covered by the Kind-backed sysprep_secret_copy scenario
 # (tests/integration/targets/compute_instance_create/tasks/
-# sysprep_secret_copy.yml), which exercises the real create_secrets.yaml
+# sysprep_secret_copy.yml), which exercises the real prepare_first_boot.yaml
 # path end-to-end.
 # ──────────────────────────────────────────────────────────────
 - name: "Test ocp_virt_vm -- Windows VM with user-data pre-secrets base spec"
@@ -823,19 +830,19 @@
               Expected Windows EFI secureBoot=true,
               got {{ vm_template_spec.domain.firmware | default('undefined') }}
 
-        - name: Verify base template spec has only root-disk volume (no cloudInitNoCloud)
+        - name: Verify base template spec has only root-disk volume (no cloud-init volume)
           ansible.builtin.assert:
             that:
               - vm_template_spec.volumes | length == 1
               - vm_template_spec.volumes[0].name == 'root-disk'
             fail_msg: >-
-              Expected only root-disk volume before create_secrets runs,
+              Expected only root-disk volume before first-boot preparation,
               got {{ vm_template_spec.volumes }}
 
 # ──────────────────────────────────────────────────────────────
 # Test 16: Windows VM without user-data — no sysprep created
 # Expected: vm_user_data_secret_ref is empty, base template spec has only
-#           root-disk volume, no sysprep or cloudInitNoCloud volumes
+#           root-disk volume, no sysprep or cloud-init volumes
 # ──────────────────────────────────────────────────────────────
 - name: "Test ocp_virt_vm -- Windows VM without user-data skips sysprep"
   hosts: localhost
@@ -886,13 +893,10 @@
               Expected empty vm_user_data_secret_ref when userDataSecretRef is absent,
               got '{{ vm_user_data_secret_ref | default('undefined') }}'
 
-        - name: Verify sysprep path is skipped (empty ref fails condition)
-          ansible.builtin.assert:
-            that:
-              - not (guest_os_family == 'windows' and vm_user_data_secret_ref | length > 0)
-            fail_msg: >-
-              Sysprep path condition should be false; got guest_os_family='{{ guest_os_family }}'
-              vm_user_data_secret_ref='{{ vm_user_data_secret_ref }}'
+        - name: Prepare Windows first boot without user data
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: prepare_first_boot.yaml
 
         - name: Verify only root-disk volume in template spec (no sysprep, no cloudInit)
           ansible.builtin.assert:
@@ -914,7 +918,7 @@
 # ──────────────────────────────────────────────────────────────
 # Test 17: Linux VM with user-data — cloud-init path (regression check)
 # Expected: vm_user_data_secret_ref extracted, Linux template spec built
-#           (no EFI/clock), cloud-init patch adds cloudInitNoCloud volume
+#           (no EFI/clock), cloud-init patch adds cloudInitConfigDrive volume
 #           with virtio bus, no sysprep volume present
 # ──────────────────────────────────────────────────────────────
 - name: "Test ocp_virt_vm -- Linux VM with user-data uses cloud-init path"
@@ -929,7 +933,7 @@
     vm_network_interfaces: [{name: tenant, binding: {name: l2bridge}}]
 
   tasks:
-    - when: test_linux_userdata_cloudinit | default(false) | bool
+    - when: test_linux_userdata_cloudinit | default(false) | bool or test_linux_userdata_and_ssh_key | default(false) | bool
       block:
         - name: Load ocp_virt_vm role defaults
           ansible.builtin.include_vars:
@@ -951,6 +955,7 @@
                   - subnetRef: test-subnet
                 userDataSecretRef:
                   name: linux-cloud-init
+                sshKey: "{{ 'ssh-ed25519 test-key' if test_linux_userdata_and_ssh_key | default(false) | bool else omit }}"
             guest_os_family: linux
 
         - name: Set compute instance name
@@ -1002,49 +1007,167 @@
               - vm_template_spec.volumes | length == 1
               - vm_template_spec.volumes[0].name == 'root-disk'
             fail_msg: >-
-              Expected only root-disk volume before create_secrets runs,
+              Expected only root-disk volume before first-boot preparation,
               got {{ vm_template_spec.volumes }}
 
-        - name: Apply cloud-init patch (offline replay of create_secrets combine logic)
-          ansible.builtin.set_fact:
-            cloudinit_patched_spec: "{{ vm_template_spec | combine(cloud_init_patch, recursive=True, list_merge='append') }}"
-          vars:
-            cloud_init_patch:
-              domain:
-                devices:
-                  disks:
-                    - name: cloud-init-disk
-                      disk:
-                        bus: virtio
-                      serial: cloud-init
-              volumes:
-                - name: cloud-init-disk
-                  cloudInitNoCloud:
-                    secretRef:
-                      name: "{{ compute_instance_name }}-user-data"
+        - name: Configure the Linux ConfigDrive
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: configure_linux_config_drive.yaml
 
         - name: Verify cloud-init disk uses virtio bus
           ansible.builtin.assert:
             that:
-              - cloudinit_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'cloud-init-disk') | list | length == 1
-              - (cloudinit_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'cloud-init-disk') | first).disk.bus == 'virtio'
+              - vm_template_spec.domain.devices.disks | selectattr('name', 'equalto', 'cloud-init-disk') | list | length == 1
+              - (vm_template_spec.domain.devices.disks | selectattr('name', 'equalto', 'cloud-init-disk') | first).disk.bus == 'virtio'
             fail_msg: >-
               Expected cloud-init-disk with disk.bus=virtio,
-              got {{ cloudinit_patched_spec.domain.devices.disks }}
+              got {{ vm_template_spec.domain.devices.disks }}
 
-        - name: Verify cloudInitNoCloud volume references correct secret
+        - name: Verify cloudInitConfigDrive volume references correct secret
           ansible.builtin.assert:
             that:
-              - cloudinit_patched_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | list | length == 1
-              - (cloudinit_patched_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | first).cloudInitNoCloud.secretRef.name == "test-linux-cloudinit-user-data"
-            fail_msg: >-
-              Expected cloudInitNoCloud volume with secret 'test-linux-cloudinit-user-data',
-              got {{ cloudinit_patched_spec.volumes }}
+              - vm_template_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | list | length == 1
+              - (vm_template_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | first).cloudInitConfigDrive == expected_source
+          vars:
+            expected_source:
+              secretRef:
+                name: test-linux-cloudinit-user-data
 
         - name: Verify no sysprep disk in patched spec
           ansible.builtin.assert:
             that:
-              - cloudinit_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 0
+              - vm_template_spec.domain.devices.disks | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 0
+
+        - name: Verify user data alone adds no credentials
+          ansible.builtin.assert:
+            that: vm_template_spec.accessCredentials is not defined
+          when: test_linux_userdata_cloudinit | default(false) | bool
+
+        - name: Verify an SSH key uses the user-data ConfigDrive
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.accessCredentials | length == 1
+              - vm_template_spec.accessCredentials[0].sshPublicKey.source.secret.secretName == 'test-linux-cloudinit-ssh-public-key'
+              - vm_template_spec.accessCredentials[0].sshPublicKey.propagationMethod == expected_method
+          vars:
+            expected_method: {configDrive: {}}
+          when: test_linux_userdata_and_ssh_key | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 18: Linux VM with only an SSH key — minimal config-drive path
+# Expected: no user-data secret is read; a minimal cloudInitConfigDrive
+#           volume exists solely so KubeVirt generates the config-drive
+#           ISO carrying the accessCredentials key in its meta-data, and
+#           the key propagates via propagationMethod.configDrive
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Linux VM with only an SSH key uses a minimal config-drive"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+    vm_network_networks: [{name: tenant, pod: {}}]
+    vm_network_interfaces: [{name: tenant, binding: {name: l2bridge}}]
+
+  tasks:
+    - when: test_linux_ssh_key_only_configdrive | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Build Linux ComputeInstance with only an SSH key
+          ansible.builtin.set_fact:
+            compute_instance:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ComputeInstance
+              metadata:
+                name: test-linux-key-only
+                namespace: osac-system
+              spec:
+                templateID: osac.templates.ocp_virt_vm
+                vcpus: 2
+                memoryGiB: 2
+                networkAttachments:
+                  - subnetRef: test-subnet
+                sshKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeTestKey test-linux-key-only
+            guest_os_family: linux
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract VM config
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Run create_build_spec to build VM template spec
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_build_spec.yaml
+
+        - name: Verify no user-data secret ref was extracted
+          ansible.builtin.assert:
+            that:
+              - vm_user_data_secret_ref | default('') | length == 0
+              - vm_ssh_key | length > 0
             fail_msg: >-
-              Expected no sysprep-disk for Linux VM,
-              but found one in {{ cloudinit_patched_spec.domain.devices.disks }}
+              Expected an SSH key without user data; got
+              vm_ssh_key='{{ vm_ssh_key | default("undefined") }}'
+              vm_user_data_secret_ref='{{ vm_user_data_secret_ref | default("undefined") }}'
+
+        - name: Configure the Linux ConfigDrive for a key-only VM
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: configure_linux_config_drive.yaml
+
+        - name: Verify minimal cloudInitConfigDrive volume for the key
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | list | length == 1
+              - (vm_template_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | first).cloudInitConfigDrive.userData == "#cloud-config"
+              - (vm_template_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | first).cloudInitConfigDrive.secretRef is not defined
+            fail_msg: >-
+              Expected exactly one minimal cloud-init-disk volume with
+              cloudInitConfigDrive.userData='#cloud-config' and no secretRef,
+              got {{ vm_template_spec.volumes }}
+
+        - name: Verify accessCredentials use configDrive propagation
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.accessCredentials | length == 1
+              - vm_template_spec.accessCredentials[0].sshPublicKey.source.secret.secretName == "test-linux-key-only-ssh-public-key"
+              - vm_template_spec.accessCredentials[0].sshPublicKey.propagationMethod.configDrive is defined
+              - vm_template_spec.accessCredentials[0].sshPublicKey.propagationMethod.noCloud is not defined
+            fail_msg: >-
+              Expected accessCredentials with configDrive propagation and
+              secret 'test-linux-key-only-ssh-public-key',
+              got {{ vm_template_spec.accessCredentials }}
+
+- name: "Test ocp_virt_vm -- no ConfigDrive when neither input is supplied"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    guest_os_family: linux
+    vm_user_data_secret_ref: ''
+    vm_ssh_key: ''
+
+  tasks:
+    - when: test_linux_no_first_boot_inputs | default(false) | bool
+      block:
+        - name: Start with an empty VM spec
+          ansible.builtin.set_fact:
+            vm_template_spec: {}
+
+        - name: Prepare guest first boot without inputs
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: prepare_first_boot.yaml
+
+        - name: Verify the spec has not been modified
+          ansible.builtin.assert:
+            that: vm_template_spec == {}

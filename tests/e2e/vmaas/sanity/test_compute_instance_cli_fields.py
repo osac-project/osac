@@ -41,7 +41,7 @@ def test_compute_instance_cli_explicit_fields(
         network_attachments=[default_network_attachment],
         boot_disk_size=TEST_BOOT_DISK_SIZE,
         run_strategy=TEST_RUN_STRATEGY,
-        user_data_secret_ref=TEST_USER_DATA,
+        user_data=TEST_USER_DATA,
     )
 
     ci_name: str | None = None

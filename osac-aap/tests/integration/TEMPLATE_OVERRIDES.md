@@ -12,7 +12,7 @@ This document describes all overrideable tasks in OSAC templates.
 |-----------|-------------|-------------------|-------------|
 | Validate | osac.templates.ocp_virt_vm (create_validate.yaml) | `create_step_validate_override` | Validates parameters, VM config, exposed_ports |
 | **Build Spec** | osac.templates.ocp_virt_vm (create_build_spec.yaml) | **NOT OVERRIDEABLE** | **Builds VM template spec base** |
-| Secrets | osac.templates.ocp_virt_vm (create_secrets.yaml) | `create_step_secrets_override` | Creates user-data and SSH secrets |
+| Prepare guest first boot | osac.templates.ocp_virt_vm (prepare_first_boot.yaml) | `create_step_secrets_override` | Prepares the Secrets and VM spec for ConfigDrive or Windows sysprep. The override replaces the whole step. |
 | Modify VM Spec Hook | osac.templates.ocp_virt_vm (create_modify_vm_spec.yaml) | `create_step_modify_vm_spec_override` | Hook to customize VM spec (noop by default) |
 | Pre-create Hook | osac.templates.ocp_virt_vm (create_pre_create_hook.yaml) | `create_step_pre_create_hook_override` | Hook before resource creation (noop by default) |
 | **Create Resources** | osac.templates.ocp_virt_vm (create_resources.yaml) | `create_step_resources_override` | **Creates DataVolumes and VirtualMachine** ⚠️ |

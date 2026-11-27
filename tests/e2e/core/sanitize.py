@@ -65,7 +65,7 @@ _JSON_SECRET = re.compile(
 )
 
 # The value after one of these flags is dropped whole: a header holds the token, -d holds the request payload.
-_VALUE_FLAGS = frozenset({"-H", "--header", "-d", "--data", "--token", "--token-script", "--password"})
+_VALUE_FLAGS = frozenset({"-H", "--header", "-d", "--data", "--token", "--token-script", "--password", "--user-data"})
 
 # Compared without case, underscores and hyphens: user_data, userData and UserData are one key.
 _DROPPED_KEYS = frozenset(

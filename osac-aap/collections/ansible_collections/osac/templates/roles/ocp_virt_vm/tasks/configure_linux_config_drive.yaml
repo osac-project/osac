@@ -1,0 +1,36 @@
+---
+- name: Attach one ConfigDrive for user data or SSH key propagation
+  ansible.builtin.set_fact:
+    vm_template_spec: "{{ vm_template_spec | combine(cloud_init_patch, recursive=True, list_merge='append') }}"
+  vars:
+    cloud_init_patch:
+      domain:
+        devices:
+          disks:
+            - name: cloud-init-disk
+              disk:
+                bus: virtio
+              serial: cloud-init
+      volumes:
+        - name: cloud-init-disk
+          cloudInitConfigDrive: "{{ config_drive_source }}"
+    config_drive_source: >-
+      {{ {'secretRef': {'name': compute_instance_name ~ '-user-data'}}
+         if vm_user_data_secret_ref | length > 0 else {'userData': '#cloud-config'} }}
+  when: vm_user_data_secret_ref | length > 0 or (guest_os_family == 'linux' and vm_ssh_key | length > 0)
+
+- name: Propagate the SSH public key through the ConfigDrive
+  ansible.builtin.set_fact:
+    vm_template_spec: "{{ vm_template_spec | combine(ssh_public_key_patch, recursive=True, list_merge='append') }}"
+  vars:
+    ssh_public_key_patch:
+      accessCredentials:
+        - sshPublicKey:
+            source:
+              secret:
+                secretName: "{{ compute_instance_name }}-ssh-public-key"
+            propagationMethod:
+              configDrive: {}
+  when:
+    - guest_os_family == 'linux'
+    - vm_ssh_key | length > 0

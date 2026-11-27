@@ -74,7 +74,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		tenant      string
 		project     string
 		creator     string
-		description string
+		description *string
 	)
 	if metadata != nil {
 		name = metadata.GetName()
@@ -83,7 +83,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		tenant = metadata.GetTenant()
 		project = metadata.GetProject()
 		creator = metadata.GetCreator()
-		description = metadata.GetDescription()
+		description = metadataDescription(metadata)
 	}
 
 	// Validate that tenant is not empty:

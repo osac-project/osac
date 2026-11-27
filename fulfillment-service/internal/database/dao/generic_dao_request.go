@@ -102,7 +102,7 @@ func (r *request[O]) objectFromRow(row storedObject) (O, error) {
 		name:        row.name,
 		labels:      labels,
 		annotations: annotations,
-		description: derefString(row.description),
+		description: row.description,
 		version:     row.version,
 	}))
 	object.SetId(row.id)
@@ -348,6 +348,17 @@ func (r *request[O]) addVisibilityFilter(ctx context.Context) (result bool, err 
 	return
 }
 
+// metadataDescription preserves optional description presence. A nil metadata
+// message or an unset field maps to nil, while an explicitly empty string maps
+// to a non-nil pointer to the empty string.
+func metadataDescription(metadata metadataIface) *string {
+	if metadata == nil || !metadata.HasDescription() {
+		return nil
+	}
+	description := metadata.GetDescription()
+	return &description
+}
+
 type makeMetadataArgs struct {
 	creationTs  time.Time
 	deletionTs  time.Time
@@ -356,7 +367,7 @@ type makeMetadataArgs struct {
 	tenant      string
 	project     string
 	name        string
-	description string
+	description *string
 	labels      map[string]string
 	annotations map[string]string
 	version     int32
@@ -375,7 +386,9 @@ func (r *request[O]) makeMetadata(args makeMetadataArgs) metadataIface {
 	result.SetCreator(args.creator)
 	result.SetTenant(args.tenant)
 	result.SetProject(args.project)
-	result.SetDescription(args.description)
+	if args.description != nil {
+		result.SetDescription(*args.description)
+	}
 	result.SetLabels(args.labels)
 	result.SetAnnotations(args.annotations)
 	result.SetVersion(args.version)
@@ -557,12 +570,4 @@ func (r *request[O]) cleanSQL(sql string) string {
 		result = result[:len(result)-1]
 	}
 	return result
-}
-
-// derefString returns the pointed-to string, or the empty string when the pointer is nil.
-func derefString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }

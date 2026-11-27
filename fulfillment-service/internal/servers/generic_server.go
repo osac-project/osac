@@ -1584,6 +1584,14 @@ func (s *GenericServer[O]) equivalentMetadata(x, y protoreflect.Message) bool {
 		if name == "creation_timestamp" || name == "deletion_timestamp" || name == "version" {
 			continue
 		}
+		xPresent := x.Has(field)
+		yPresent := y.Has(field)
+		if xPresent != yPresent {
+			return false
+		}
+		if !xPresent && !yPresent {
+			continue
+		}
 		xv := x.Get(field)
 		yv := y.Get(field)
 		if !xv.Equal(yv) {

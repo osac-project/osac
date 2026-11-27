@@ -1,8 +1,8 @@
 /*
 Copyright (c) 2026 Red Hat Inc.
 
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
-the License. You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
 
    http://www.apache.org/licenses/LICENSE-2.0
 
@@ -93,72 +93,161 @@ var _ = Describe("Generic DAO description metadata", func() {
 		return &value
 	}
 
-	createProject := func(ctx context.Context, id, description string) *privatev1.Project {
+	project := func(id string, description *string) *privatev1.Project {
+		return privatev1.Project_builder{
+			Id: id,
+			Metadata: privatev1.Metadata_builder{
+				Tenant:      "desc-tenant",
+				Name:        id,
+				Project:     "",
+				Description: description,
+			}.Build(),
+		}.Build()
+	}
+
+	createProject := func(ctx context.Context, id string, description *string) *privatev1.Project {
 		response, err := projectsDao.Create().
-			SetObject(privatev1.Project_builder{
-				Id: id,
-				Metadata: privatev1.Metadata_builder{
-					Tenant:      "desc-tenant",
-					Name:        id,
-					Project:     "",
-					Description: &description,
-				}.Build(),
-			}.Build()).
+			SetObject(project(id, description)).
 			Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		return response.GetObject()
 	}
 
-	It("persists description through create, get, and list", func() {
-		created := createProject(ctx, "desc-project", "doc-123")
+	descriptionCases := []struct {
+		name           string
+		description    *string
+		expectedValue  string
+		expectedExists bool
+		expectedSQL    *string
+	}{
+		{name: "absent", description: nil, expectedExists: false},
+		{name: "empty", description: ptr(""), expectedValue: "", expectedExists: true, expectedSQL: ptr("")},
+		{name: "nonempty", description: ptr("doc-123"), expectedValue: "doc-123", expectedExists: true, expectedSQL: ptr("doc-123")},
+	}
 
-		Expect(created.GetMetadata().GetDescription()).To(Equal("doc-123"))
+	assertDescription := func(metadata *privatev1.Metadata, testCase struct {
+		name           string
+		description    *string
+		expectedValue  string
+		expectedExists bool
+		expectedSQL    *string
+	}) {
+		Expect(metadata.HasDescription()).To(Equal(testCase.expectedExists), testCase.name)
+		Expect(metadata.GetDescription()).To(Equal(testCase.expectedValue), testCase.name)
+	}
 
-		getResponse, err := projectsDao.Get().SetId("desc-project").Do(ctx)
+	assertSQLDescription := func(id string, expected *string) {
+		var actual *string
+		err := tx.QueryRow(ctx, `select description from projects where id = $1`, id).Scan(&actual)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetMetadata().GetDescription()).To(Equal("doc-123"))
+		if expected == nil {
+			Expect(actual).To(BeNil())
+			return
+		}
+		Expect(actual).NotTo(BeNil())
+		Expect(*actual).To(Equal(*expected))
+	}
 
-		listResponse, err := projectsDao.List().
-			SetFilter("this.metadata.name == 'desc-project'").
+	DescribeTable("preserves description presence through create, get, and list",
+		func(testCase struct {
+			name           string
+			description    *string
+			expectedValue  string
+			expectedExists bool
+			expectedSQL    *string
+		}) {
+			id := "desc-project-" + testCase.name
+			created := createProject(ctx, id, testCase.description)
+			assertDescription(created.GetMetadata(), testCase)
+			assertSQLDescription(id, testCase.expectedSQL)
+
+			getResponse, err := projectsDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			assertDescription(getResponse.GetObject().GetMetadata(), testCase)
+
+			listResponse, err := projectsDao.List().
+				SetFilter("this.metadata.name == '" + id + "'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetItems()).To(HaveLen(1))
+			assertDescription(listResponse.GetItems()[0].GetMetadata(), testCase)
+		},
+		Entry("absent", descriptionCases[0]),
+		Entry("empty", descriptionCases[1]),
+		Entry("nonempty", descriptionCases[2]),
+	)
+
+	It("preserves description presence through update transitions", func() {
+		id := "desc-project-update-transitions"
+		createProject(ctx, id, nil)
+
+		updated, err := projectsDao.Update().
+			SetObject(project(id, ptr(""))).
 			Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listResponse.GetItems()).To(HaveLen(1))
-		Expect(listResponse.GetItems()[0].GetMetadata().GetDescription()).To(Equal("doc-123"))
-	})
+		Expect(updated.GetObject().GetMetadata().HasDescription()).To(BeTrue())
+		Expect(updated.GetObject().GetMetadata().GetDescription()).To(BeEmpty())
+		assertSQLDescription(id, ptr(""))
 
-	It("updates description", func() {
-		createProject(ctx, "desc-project", "doc-123")
-
-		updateResponse, err := projectsDao.Update().
-			SetObject(privatev1.Project_builder{
-				Id: "desc-project",
-				Metadata: privatev1.Metadata_builder{
-					Tenant:      "desc-tenant",
-					Name:        "desc-project",
-					Project:     "",
-					Description: ptr("doc-456"),
-				}.Build(),
-			}.Build()).
+		updated, err = projectsDao.Update().
+			SetObject(project(id, ptr("doc-123"))).
 			Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(updateResponse.GetObject().GetMetadata().GetDescription()).To(Equal("doc-456"))
+		Expect(updated.GetObject().GetMetadata().HasDescription()).To(BeTrue())
+		Expect(updated.GetObject().GetMetadata().GetDescription()).To(Equal("doc-123"))
+		assertSQLDescription(id, ptr("doc-123"))
 
-		getResponse, err := projectsDao.Get().SetId("desc-project").Do(ctx)
+		updated, err = projectsDao.Update().
+			SetObject(project(id, nil)).
+			Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetMetadata().GetDescription()).To(Equal("doc-456"))
+		Expect(updated.GetObject().GetMetadata().HasDescription()).To(BeFalse())
+		assertSQLDescription(id, nil)
+
+		getResponse, err := projectsDao.Get().SetId(id).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(getResponse.GetObject().GetMetadata().HasDescription()).To(BeFalse())
 	})
 
-	It("archives description", func() {
-		createProject(ctx, "desc-project", "doc-123")
+	DescribeTable("preserves description presence through deletion and archival",
+		func(testCase struct {
+			name           string
+			description    *string
+			expectedValue  string
+			expectedExists bool
+			expectedSQL    *string
+		}) {
+			id := "desc-project-delete-" + testCase.name
+			createProject(ctx, id, testCase.description)
 
-		deleteResponse, err := projectsDao.Delete().SetId("desc-project").Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(deleteResponse.GetObject().GetMetadata().GetDescription()).To(Equal("doc-123"))
+			deleteResponse, err := projectsDao.Delete().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			assertDescription(deleteResponse.GetObject().GetMetadata(), testCase)
 
-		var description *string
-		err = tx.QueryRow(ctx, `select description from archived_projects where id = 'desc-project'`).Scan(&description)
+			var archived *string
+			err = tx.QueryRow(ctx, `select description from archived_projects where id = $1`, id).Scan(&archived)
+			Expect(err).ToNot(HaveOccurred())
+			if testCase.expectedSQL == nil {
+				Expect(archived).To(BeNil())
+				return
+			}
+			Expect(archived).NotTo(BeNil())
+			Expect(*archived).To(Equal(*testCase.expectedSQL))
+		},
+		Entry("absent", descriptionCases[0]),
+		Entry("empty", descriptionCases[1]),
+		Entry("nonempty", descriptionCases[2]),
+	)
+
+	It("reconstructs an independently stored SQL NULL description as absent", func() {
+		id := "desc-project-sql-null"
+		createProject(ctx, id, ptr("doc-123"))
+
+		_, err := tx.Exec(ctx, `update projects set description = null where id = $1`, id)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(description).NotTo(BeNil())
-		Expect(*description).To(Equal("doc-123"))
+
+		getResponse, err := projectsDao.Get().SetId(id).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(getResponse.GetObject().GetMetadata().HasDescription()).To(BeFalse())
 	})
 })

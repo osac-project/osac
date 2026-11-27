@@ -103,6 +103,7 @@ type metadataIface interface {
 	GetProject() string
 	SetProject(string)
 	GetDescription() string
+	HasDescription() bool
 	SetDescription(string)
 	GetLabels() map[string]string
 	SetLabels(map[string]string)

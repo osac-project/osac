@@ -90,7 +90,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		annotations map[string]string
 		tenant      string
 		project     string
-		description string
+		description *string
 	)
 	if metadata != nil {
 		name = metadata.GetName()
@@ -98,7 +98,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		annotations = metadata.GetAnnotations()
 		tenant = metadata.GetTenant()
 		project = metadata.GetProject()
-		description = metadata.GetDescription()
+		description = metadataDescription(metadata)
 	}
 
 	// Validate that tenant is not empty:
@@ -187,7 +187,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		tenant:      tenant,
 		project:     project,
 		name:        name,
-		description: derefString(storedDescription),
+		description: storedDescription,
 		labels:      labels,
 		annotations: annotations,
 		version:     version,

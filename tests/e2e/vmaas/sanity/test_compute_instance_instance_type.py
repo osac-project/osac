@@ -18,6 +18,7 @@ from tests.e2e.core.helpers import (
     unique_name,
     wait_for_cr,
     wait_for_deletion,
+    wait_for_grpc_removal,
     wait_for_new_vmi,
     wait_for_provision,
     wait_for_restart,
@@ -479,6 +480,8 @@ def test_compute_instance_deletion_protection(
             cli.delete_compute_instance(uuid=ci_uuid)
             if ci_name is not None:
                 wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+            # The instance type stays in use until Fulfillment finishes deleting the instance record.
+            wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid)
 
 
 def test_compute_instance_deprecated_warning(

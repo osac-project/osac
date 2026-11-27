@@ -1,4 +1,0 @@
-minor_changes:
-  - Add unit test execution to GitHub Actions CI workflow (#503)
-  - Add coverage reporting with HTML and XML artifacts (#503)
-  - Add coverage summary to GitHub Actions job output (#503)

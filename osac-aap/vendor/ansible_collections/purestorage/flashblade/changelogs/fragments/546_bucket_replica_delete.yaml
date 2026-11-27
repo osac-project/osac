@@ -1,2 +1,0 @@
-bugfixes:
-  - purefb_bucket_replica - Allow a replica link to be removed when its local bucket no longer exists (https://github.com/Everpure-Ansible/FlashBlade-Collection/issues/545)

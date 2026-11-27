@@ -1,2 +1,0 @@
-minor_changes:
- - purefb_subnet - ``prefix`` removed as a required parameter for updating an existing subnet

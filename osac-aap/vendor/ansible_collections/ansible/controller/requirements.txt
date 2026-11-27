@@ -1,3 +1,6 @@
 pytz  # for schedule_rrule lookup plugin
 python-dateutil>=2.7.0  # schedule_rrule
 awxkit  # For import and export modules
+
+# OSAC security floors; maintained in scripts/patch_vendor_requirements.py.
+urllib3>=2.8.0

@@ -13,7 +13,7 @@ def list_dict_str(value):
 
 def extract_sensitive_values_from_kubeconfig(kubeconfig_data):
     """
-    Extract only sensitive string values from kubeconfig data for no_log_values.
+    Extract sensitive string values from kubeconfig data for no_log_values.
 
     :arg kubeconfig_data: Dictionary containing kubeconfig data
     :returns: Set of sensitive string values to be added to no_log_values
@@ -23,6 +23,8 @@ def extract_sensitive_values_from_kubeconfig(kubeconfig_data):
         "token",
         "password",
         "secret",
+        "client-secret",
+        "id-token",
         "client-key-data",
         "client-certificate-data",
         "certificate-authority-data",
@@ -49,6 +51,10 @@ def extract_sensitive_values_from_kubeconfig(kubeconfig_data):
                 if key in sensitive_fields:
                     if isinstance(value, str):
                         values.add(value)
+                elif key == "env" and current_path.endswith(".exec") and isinstance(value, list):
+                    for entry in value:
+                        if isinstance(entry, dict) and isinstance(entry.get("value"), str):
+                            values.add(entry["value"])
                 else:
                     _extract_recursive(value, path)
         elif isinstance(data, list):
@@ -143,4 +149,19 @@ DELETE_OPTS_ARG_SPEC = {
         "type": "dict",
         "options": {"resourceVersion": {"type": "str"}, "uid": {"type": "str"}},
     },
+}
+
+METADATA_ONLY_HEADERS_SPEC = {
+    "accept": {"type": "str"},
+}
+
+METADATA_ONLY_HEADER_VALUES = {
+    "partial_object": (
+        "application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1,"
+        "application/json;q=0.9"
+    ),
+    "partial_object_list": (
+        "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,"
+        "application/json;q=0.9"
+    ),
 }

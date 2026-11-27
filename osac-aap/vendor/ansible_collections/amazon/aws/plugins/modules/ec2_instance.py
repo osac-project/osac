@@ -354,12 +354,6 @@ options:
       - Whether to stop or terminate an instance upon shutdown.
     choices: ['stop', 'terminate']
     type: str
-  tenancy:
-    description:
-      - What type of tenancy to allow an instance to use. Default is V(shared) tenancy. Dedicated tenancy will incur additional charges.
-      - This field is deprecated and will be removed in a release after 2025-12-01, use O(placement) instead.
-    choices: ['dedicated', 'default']
-    type: str
   termination_protection:
     description:
       - Whether to enable termination protection.
@@ -422,11 +416,6 @@ options:
       - If no full ARN is provided, the role with a matching name will be used from the active AWS account.
     type: str
     aliases: ['instance_role']
-  placement_group:
-    description:
-      - The placement group that needs to be assigned to the instance.
-      - This field is deprecated and will be removed in a release after 2025-12-01, use O(placement) instead.
-    type: str
   placement:
     description:
       - The location where the instance launched, if applicable.
@@ -460,7 +449,7 @@ options:
       tenancy:
         description:
           - Type of tenancy to allow an instance to use. Default is shared tenancy. Dedicated tenancy will incur additional charges.
-          - Support for O(tenancy=host) was added in amazon.aws 7.6.0.
+          - Support for O(placement.tenancy=host) was added in amazon.aws 7.6.0.
         type: str
         required: false
         choices: ['dedicated', 'default', 'host']
@@ -615,7 +604,7 @@ EXAMPLES = r"""
     security_group: default
     tower_callback:
       # IP or hostname of tower server
-      tower_address: 1.2.3.4
+      tower_address: 192.0.2.1
       job_template_id: 876
       host_config_key: '[secret config key goes here]'
     network_interfaces:
@@ -711,9 +700,9 @@ EXAMPLES = r"""
         subnet_id: subnet-0123456
         private_ip_addresses:
           - primary: true
-            private_ip_address: 168.50.4.239
+            private_ip_address: 192.168.4.239
           - primary: false
-            private_ip_address: 168.50.4.237
+            private_ip_address: 192.168.4.237
     state: present
     tags:
       foo: bar
@@ -985,7 +974,7 @@ instances:
                             description: The public IP address or Elastic IP address bound to the network interface.
                             returned: always
                             type: str
-                            sample: 1.2.3.4
+                            sample: 203.0.113.1
                 attachment:
                     description: The network interface attachment.
                     returned: always
@@ -1107,7 +1096,7 @@ instances:
                                     description: The public IP address or Elastic IP address bound to the network interface.
                                     returned: always
                                     type: str
-                                    sample: 1.2.3.4
+                                    sample: 203.0.113.1
                         primary:
                             description: Indicates whether this IPv4 address is the primary private IP address of the network interface.
                             returned: always
@@ -1244,7 +1233,7 @@ instances:
             description: The public IPv4 address assigned to the instance
             returned: always
             type: str
-            sample: 52.0.0.1
+            sample: 203.0.113.12
         root_device_name:
             description: The device name of the root device
             returned: always
@@ -1335,10 +1324,9 @@ except ImportError:
     pass  # caught by AnsibleAWSModule
 
 
-from ansible.module_utils._text import to_native
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
 from ansible.module_utils.common.dict_transformations import snake_dict_to_camel_dict
-from ansible.module_utils.six import string_types
+from ansible.module_utils.common.text.converters import to_native
 
 from ansible_collections.amazon.aws.plugins.module_utils.ec2 import AnsibleEC2Error
 from ansible_collections.amazon.aws.plugins.module_utils.ec2 import associate_iam_instance_profile
@@ -1580,7 +1568,7 @@ def build_network_spec(client, module: AnsibleAWSModule) -> List[Dict[str, Any]]
         # handle list of `network.interfaces` options
         interfaces.extend(
             [
-                {"DeviceIndex": idx, "NetworkInterfaceId": inty if isinstance(inty, string_types) else inty.get("id")}
+                {"DeviceIndex": idx, "NetworkInterfaceId": inty if isinstance(inty, str) else inty.get("id")}
                 for idx, inty in enumerate(network.get("interfaces", []))
             ]
         )
@@ -1713,13 +1701,6 @@ def build_top_level_options(module: AnsibleAWSModule) -> Dict[str, Any]:
         spec["Monitoring"] = {"Enabled": True}
     if params.get("cpu_credit_specification") is not None:
         spec["CreditSpecification"] = {"CpuCredits": params.get("cpu_credit_specification")}
-    if params.get("tenancy") is not None:
-        spec["Placement"] = {"Tenancy": params.get("tenancy")}
-    if params.get("placement_group"):
-        if "Placement" in spec:
-            spec["Placement"]["GroupName"] = str(params.get("placement_group"))
-        else:
-            spec.setdefault("Placement", {"GroupName": str(params.get("placement_group"))})
     if params.get("placement") is not None:
         spec["Placement"] = {}
         if params.get("placement").get("availability_zone") is not None:
@@ -2634,7 +2615,7 @@ def build_filters(client, module: AnsibleAWSModule) -> Dict[str, Any]:
     instance_state_names = ["pending", "running", "stopping", "stopped"]
     filters = {}
     instance_ids = module.params.get("instance_ids")
-    if isinstance(instance_ids, string_types):
+    if isinstance(instance_ids, str):
         filters = {"instance-id": [instance_ids], "instance-state-name": instance_state_names}
     elif isinstance(instance_ids, list) and len(instance_ids):
         filters = {"instance-id": instance_ids, "instance-state-name": instance_state_names}
@@ -2731,8 +2712,6 @@ def main():
                 threads_per_core=dict(type="int", choices=[1, 2], required=True),
             ),
         ),
-        tenancy=dict(type="str", choices=["dedicated", "default"]),
-        placement_group=dict(type="str"),
         placement=dict(
             type="dict",
             options=dict(
@@ -2803,8 +2782,6 @@ def main():
             ["image_id", "image"],
             ["exact_count", "count"],
             ["exact_count", "instance_ids"],
-            ["tenancy", "placement"],
-            ["placement_group", "placement"],
             ["network", "network_interfaces"],
             ["network", "network_interfaces_ids"],
             ["security_group", "network_interfaces_ids"],
@@ -2834,26 +2811,12 @@ def main():
                 "the source_dest_check option has been set therefore network.source_dest_check will be ignored."
             )
 
-    if module.params.get("placement_group"):
-        module.deprecate(
-            "The placement_group parameter has been deprecated, please use placement.group_name instead.",
-            date="2025-12-01",
-            collection_name="amazon.aws",
-        )
-
-    if module.params.get("tenancy"):
-        module.deprecate(
-            "The tenancy parameter has been deprecated, please use placement.tenancy instead.",
-            date="2025-12-01",
-            collection_name="amazon.aws",
-        )
-
     state = module.params.get("state")
 
     retry_decorator = AWSRetry.jittered_backoff(
         catch_extra_error_codes=[
             "IncorrectState",
-            "InsuffienctInstanceCapacity",
+            "InsufficientInstanceCapacity",
             "InvalidInstanceID.NotFound",
         ]
     )

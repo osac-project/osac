@@ -11,9 +11,10 @@ __metaclass__ = type
 import ast
 import re
 
+from collections.abc import MutableMapping, MutableSequence
+
 from ansible.errors import AnsibleActionFail
-from ansible.module_utils._text import to_native
-from ansible.module_utils.common._collections_compat import MutableMapping, MutableSequence
+from ansible.module_utils.common.text.converters import to_native
 from ansible.plugins.action import ActionBase
 from jinja2 import Template, TemplateSyntaxError
 
@@ -70,39 +71,27 @@ class ActionModule(ActionBase):
         :return: the individual parts of the path
         :rtype: list
         """
-        que = list(path)
-        val = que.pop(0)
+        que = path
         fields = []
-        try:
-            while True:
-                field = ""
-                # found a '.', move to the next character
-                if val == ".":
-                    val = que.pop(0)
-                # found a '[', pop until ']' and then get the next
-                if val == "[":
-                    val = que.pop(0)
-                    while val != "]":
-                        field += val
-                        val = que.pop(0)
-                    val = que.pop(0)
-                else:
-                    while val not in [".", "["]:
-                        field += val
-                        val = que.pop(0)
-                try:
-                    # make numbers numbers
-                    fields.append(ast.literal_eval(field))
-                except Exception:
-                    # or strip the quotes
-                    fields.append(re.sub("['\"]", "", field))
-        except IndexError:
-            # pop'ed past the end of the que
-            # so add the final field
+        # regex match dotted values and square brackets
+        regex = re.compile(r"^[^\[\].]+|^\[[\'\"].+?[\'\"]\]|^\[.+?\]")
+        while regex.match(que):
+            m = regex.match(que)
+            # remove outer square brackets
+            field = re.sub(r"(^\[)|(\]$)", "", que[m.start() : m.end()])
             try:
+                # make numbers numbers
                 fields.append(ast.literal_eval(field))
             except Exception:
+                # or strip the quotes
                 fields.append(re.sub("['\"]", "", field))
+            try:
+                if que[m.end()] == ".":
+                    que = que[m.end() + 1 :]
+                else:
+                    que = que[m.end() :]
+            except IndexError:
+                que = ""
         return fields
 
     def set_value(self, obj, path, val):
@@ -162,23 +151,30 @@ class ActionModule(ActionBase):
         self._result["changed"] = False
         self._check_argspec()
         results = set()
+        full_replaces = set()  # keys that were fully replaced (no path)
         self._ensure_valid_jinja()
+        # Use task_vars (top-level) instead of task_vars["vars"] to avoid the
+        # deprecated internal "vars" dictionary (ansible-core 2.24, issue #426).
         for entry in self._task.args["updates"]:
             parts = self._field_split(entry["path"])
             obj, path = parts[0], parts[1:]
             results.add(obj)
-            if obj not in task_vars["vars"]:
+            if obj not in task_vars:
                 msg = "'{obj}' was not found in the current facts.".format(obj=obj)
                 raise AnsibleActionFail(msg)
-            retrieved = task_vars["vars"].get(obj)
+            retrieved = task_vars.get(obj)
             if path:
                 self.set_value(retrieved, path, entry["value"])
             else:
-                if task_vars["vars"][obj] != entry["value"]:
-                    task_vars["vars"][obj] = entry["value"]
+                if retrieved != entry["value"]:
+                    self._result.setdefault("ansible_facts", {})[obj] = entry["value"]
+                    full_replaces.add(obj)
                     self._result["changed"] = True
 
         for key in results:
-            value = task_vars["vars"].get(key)
+            if key in full_replaces:
+                value = self._result.get("ansible_facts", {}).get(key)
+            else:
+                value = task_vars.get(key)
             self._result[key] = value
         return self._result

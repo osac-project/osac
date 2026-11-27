@@ -1,2 +1,0 @@
-minor_changes:
- - module_utils/purefb - Remove `get_blade()` function as not required for REST v2

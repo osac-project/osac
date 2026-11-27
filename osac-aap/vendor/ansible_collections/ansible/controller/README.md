@@ -27,22 +27,17 @@ This collection should be installed from [Content Hub](https://cloud.redhat.com/
 ## Running
 
 Non-deprecated modules in this collection have no Python requirements, but
-may require the AWX CLI
+may require the official [AWX CLI](https://pypi.org/project/awxkit/)
 in the future. The `DOCUMENTATION` for each module will report this.
 
-You can specify authentication by a combination of either:
-
- - host, username, password
- - host, OAuth2 token
-
-The OAuth2 token is the preferred method. You can obtain a token via the
-``login`` command with the AWX CLI.
+You can specify authentication by host, username, and password.
 
 These can be specified via (from highest to lowest precedence):
 
  - direct module parameters
  - environment variables (most useful when running against localhost)
  - a config file path specified by the `tower_config_file` parameter
+ - a config file at `./tower_cli.cfg`, i.e. in the current directory
  - a config file at `~/.tower_cli.cfg`
  - a config file at `/etc/tower/tower_cli.cfg`
 
@@ -52,7 +47,17 @@ Config file syntax looks like this:
 [general]
 host = https://localhost:8043
 verify_ssl = true
-oauth_token = LEdCpKVKc4znzffcpQL5vLG8oyeku6
+username = foo
+password = bar
+```
+
+or like this:
+
+```
+host: https://localhost:8043
+verify_ssl: true
+oauth_token: <token>
+
 ```
 
 ## Release and Upgrade Notes
@@ -62,6 +67,7 @@ Notable releases of the `ansible.controller` collection:
  - 3.7.0 initial release
  - 4.0.0 ansible.tower renamed to ansible.controller
    - tower_ prefix is dropped from the module names, e.g. tower_inventory becomes inventory
+ - 4.7.0 "token" module has been removed as oauth is no longer supported, use basic auth instead
 
 The following notes are changes that may require changes to playbooks:
 
@@ -93,6 +99,7 @@ The following notes are changes that may require changes to playbooks:
  - The `notification_configuration` parameter of `tower_notification_template` has changed from a string to a dict. Please use the `lookup` plugin to read an existing file into a dict.
  - `tower_credential` no longer supports passing a file name to `ssh_key_data`.
  - The HipChat `notification_type` has been removed and can no longer be created using the `tower_notification_template` module.
+ - Lookup plugins now always return a list, and if you want a scalar value use `lookup` as opposed to `query`
 
 
 ## Licensing

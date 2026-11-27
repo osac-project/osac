@@ -69,6 +69,14 @@ controllers:
   # Progressing) and never fails operator startup.
   volume: true
 
+# csiInstall launches one AAP job per Ready ClusterOrder that installs the
+# OSAC CSI driver for that cluster, and reports it in the ClusterOrder's
+# CSIDriverReady condition. The job template defaults to
+# <aap.templatePrefix>-install-cluster-csi; override it with
+# OSAC_CSI_INSTALL_AAP_PROVISION_TEMPLATE in the config Secret.
+csiInstall:
+  enabled: false
+
 # vendorControllers maps provider identifiers to their vendor CSI controller
 # gRPC endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume
 # controller. Optional: leave empty on setups with no vendor storage backend.

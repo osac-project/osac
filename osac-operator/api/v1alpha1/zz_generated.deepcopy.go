@@ -275,6 +275,13 @@ func (in *ClusterOrderStatus) DeepCopyInto(out *ClusterOrderStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.CSIInstallJobs != nil {
+		in, out := &in.CSIInstallJobs, &out.CSIInstallJobs
+		*out = make([]JobStatus, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.APIDNSRecordsPublishedTime != nil {
 		in, out := &in.APIDNSRecordsPublishedTime, &out.APIDNSRecordsPublishedTime
 		*out = (*in).DeepCopy()

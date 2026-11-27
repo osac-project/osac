@@ -362,6 +362,59 @@ var _ = Describe("setupAddOnOperatorController", func() {
 	})
 })
 
+var _ = Describe("CSI install configuration", func() {
+	BeforeEach(func() {
+		for _, variable := range []string{envCSIInstallEnabled, envCSIInstallProvisionTemplate, envAAPTemplatePrefix} {
+			originalValue, wasSet := os.LookupEnv(variable)
+			DeferCleanup(func() {
+				if wasSet {
+					Expect(os.Setenv(variable, originalValue)).To(Succeed())
+					return
+				}
+				Expect(os.Unsetenv(variable)).To(Succeed())
+			})
+			Expect(os.Unsetenv(variable)).To(Succeed())
+		}
+	})
+
+	It("is disabled by default", func() {
+		Expect(csiInstallEnabled()).To(BeFalse())
+	})
+
+	It("is enabled by OSAC_CSI_INSTALL_ENABLED", func() {
+		Expect(os.Setenv(envCSIInstallEnabled, "true")).To(Succeed())
+		Expect(csiInstallEnabled()).To(BeTrue())
+	})
+
+	It("derives the template from the AAP template prefix", func() {
+		Expect(csiInstallProvisionTemplate()).To(Equal("osac-install-cluster-csi"))
+		Expect(os.Setenv(envAAPTemplatePrefix, "acme")).To(Succeed())
+		Expect(csiInstallProvisionTemplate()).To(Equal("acme-install-cluster-csi"))
+	})
+
+	It("uses OSAC_CSI_INSTALL_AAP_PROVISION_TEMPLATE when set", func() {
+		Expect(os.Setenv(envAAPTemplatePrefix, "acme")).To(Succeed())
+		Expect(os.Setenv(envCSIInstallProvisionTemplate, "custom-csi-install")).To(Succeed())
+		Expect(csiInstallProvisionTemplate()).To(Equal("custom-csi-install"))
+	})
+
+	It("registers the CSI install controller with the manager", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		localManager, err := ctrl.NewManager(&rest.Config{Host: "https://127.0.0.1"}, ctrl.Options{
+			Scheme:  scheme,
+			Metrics: metricsserver.Options{BindAddress: "0"},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		manager, err := mcmanager.WithMultiCluster(localManager, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(setupCSIInstallController(manager, provisioning.DefaultMaxJobHistory)).To(Succeed())
+		Expect(setupCSIInstallController(manager, provisioning.DefaultMaxJobHistory)).
+			To(MatchError(ContainSubstring("clusterorder-csi-install")))
+	})
+})
+
 var _ = Describe("startComponents", func() {
 	It("should succeed with manager only (no remote cluster or provider)", func() {
 		ctx, cancel := context.WithCancel(context.Background())

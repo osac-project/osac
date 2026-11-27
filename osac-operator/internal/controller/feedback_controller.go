@@ -669,9 +669,12 @@ var clusterOrderDegradedConditionSources = map[string]struct{}{
 //   - NamespaceCreated is internal bookkeeping with no tenant-facing meaning.
 //   - Deleting is reported through the DELETING state (see syncClusterOrderPhase and
 //     syncClusterOrderDelete), not as a condition.
+//   - CSIDriverReady reports the CSI install job, an operator-side prerequisite of
+//     cluster storage; ClusterStorageReady is the tenant-facing storage signal.
 var clusterOrderUnsurfacedConditions = map[string]struct{}{
 	ckv1alpha1.ConditionNamespaceCreated:                               {},
 	ckv1alpha1.ConditionDeleting:                                       {},
+	string(ckv1alpha1.ClusterOrderConditionCSIDriverReady):             {},
 	string(ckv1alpha1.ClusterOrderConditionFulfillmentTrustReady):      {},
 	string(ckv1alpha1.ClusterOrderConditionManagementPublicationReady): {},
 	string(ckv1alpha1.ClusterOrderConditionEndpointsReady):             {},

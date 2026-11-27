@@ -275,12 +275,30 @@ const (
 	// operators have been successfully installed on the provisioned cluster.
 	// Owned by the AddOnOperatorReconciler. Does not gate Phase=Ready.
 	ClusterOrderConditionAddOnOperatorsReady ClusterOrderConditionType = "AddOnOperatorsReady"
+
+	// ClusterOrderConditionCSIDriverReady indicates whether the OSAC CSI
+	// driver install job has completed for the cluster. Owned by the
+	// CSIInstallReconciler. Does not gate Phase=Ready.
+	ClusterOrderConditionCSIDriverReady ClusterOrderConditionType = "CSIDriverReady"
 	// ClusterOrderConditionFulfillmentTrustReady indicates whether fulfillment trust is synchronized.
 	ClusterOrderConditionFulfillmentTrustReady ClusterOrderConditionType = "FulfillmentTrustReady"
 	// ClusterOrderConditionManagementPublicationReady indicates the management API endpoint is ready.
 	ClusterOrderConditionManagementPublicationReady ClusterOrderConditionType = "ManagementPublicationReady"
 	// ClusterOrderConditionEndpointsReady indicates the requested external endpoints and DNS are ready.
 	ClusterOrderConditionEndpointsReady ClusterOrderConditionType = "EndpointsReady"
+)
+
+// Reasons of the CSIDriverReady ClusterOrder condition.
+const (
+	// ClusterOrderReasonCSIDriverInstalling means no CSI install job has
+	// finished yet, or one is running.
+	ClusterOrderReasonCSIDriverInstalling = "CSIDriverInstalling"
+	// ClusterOrderReasonCSIDriverInstalled means the latest CSI install job
+	// succeeded.
+	ClusterOrderReasonCSIDriverInstalled = "CSIDriverInstalled"
+	// ClusterOrderReasonCSIDriverInstallFailed means the latest CSI install
+	// job failed or could not be launched. It is retried with backoff.
+	ClusterOrderReasonCSIDriverInstallFailed = "CSIDriverInstallFailed"
 )
 
 // ClusterOrderClusterReferenceType contains a reference to the namespace created by this ClusterOrder
@@ -351,6 +369,11 @@ type ClusterOrderStatus struct {
 	// One entry is recorded for each operator attempt.
 	// +kubebuilder:validation:Optional
 	AddOnOperatorJobs []AddOnOperatorJobStatus `json:"addOnOperatorJobs,omitempty"`
+
+	// CSIInstallJobs holds the history of the jobs that install the OSAC CSI
+	// driver for this cluster.
+	// +kubebuilder:validation:Optional
+	CSIInstallJobs []JobStatus `json:"csiInstallJobs,omitempty"`
 	// FulfillmentTrustBundleHash is the hash of the last synchronized fulfillment trust bundle.
 	// +kubebuilder:validation:Optional
 	FulfillmentTrustBundleHash string `json:"fulfillmentTrustBundleHash,omitempty"`

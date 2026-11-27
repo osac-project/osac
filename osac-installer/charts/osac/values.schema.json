@@ -762,6 +762,18 @@
             "minLength": 1
           }
         },
+        "csiInstall": {
+          "type": "object",
+          "description": "Launch one AAP job per Ready ClusterOrder that installs the OSAC CSI driver for that cluster.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable the ClusterOrder CSI install controller"
+            }
+          },
+          "additionalProperties": false
+        },
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"

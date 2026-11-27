@@ -176,6 +176,9 @@ before applying any, and later phases depend on CRDs and secrets that earlier
 phases create. See [docs/helm-deployment-guide.md](docs/helm-deployment-guide.md)
 for a detailed explanation.
 
+Kind infrastructure installation and dry-run rendering on Linux and macOS
+require Python 3.8 or later on `PATH` for cert-manager.
+
 ```bash
 # Full install (infra + osac)
 make install PLATFORM=openshift PROFILE=<profile> NS=<namespace>
@@ -225,6 +228,28 @@ runs (the examples in this file quote values for that reason). Unlike
 `EXTRA_HELM_ARGS`, the `INFRA_VALUES_EXTRA` and `INSTANCE_VALUES_EXTRA` values
 file lists are expanded unquoted by the recipe, so a path containing
 whitespace cannot be passed through them.
+
+#### Kind cert-manager chart settings
+
+| Make variable | Default | Accepted values |
+| --- | --- | --- |
+| `KIND_CERT_MANAGER_CHART` | `oci://quay.io/jetstack/charts/cert-manager` | OCI chart reference without a tag or digest |
+| `KIND_CERT_MANAGER_VERSION` | `v1.20.0` | Exact semantic version with an optional `v` prefix |
+| `KIND_CERT_MANAGER_PULL_TIMEOUT` | `90` | Per-pull deadline in whole seconds, from 1 to 600 |
+| `KIND_CERT_MANAGER_PULL_BACKOFF` | `2 5` | Up to five space-separated retry delays in whole seconds, each from 0 to 60 |
+
+```bash
+make install-infra PLATFORM=kind PROFILE=dev NS=osac \
+  KIND_CERT_MANAGER_CHART=oci://quay.io/jetstack/charts/cert-manager \
+  KIND_CERT_MANAGER_VERSION=v1.20.0 KIND_CERT_MANAGER_PULL_TIMEOUT=120 \
+  KIND_CERT_MANAGER_PULL_BACKOFF='1 3'
+```
+
+`install-infra` checks these settings before setting up the Kind cluster, then
+pulls the chart and installs from the local archive. Each delay allows one pull
+retry after a connection reset. Use `KIND_CERT_MANAGER_PULL_BACKOFF=` for a
+single pull. `DRY_RUN=1` uses the same pull settings and renders the local
+archive once without connecting to the cluster.
 
 #### Two-cluster VMaaS installation (OpenShift)
 
@@ -1000,15 +1025,13 @@ and chart-specific overrides as the installation (`INFRA_HELM_ARGS`,
 same read-only OpenShift lookups for the cluster domain and version.
 Separate external releases installed on Kind (`cert-manager`, `trust-manager`,
 `envoy-gateway`, and `strimzi-cluster-operator`) are not rendered by this gate.
-(With `DRY_RUN=1`, `install` renders offline via
-`install-dry-run` and skips the gate — the dry run is itself an offline
-render. Because `install-dry-run` calls `helm template` directly rather
-than through the gate, it does not suppress Helm's message: a failing dry
-run prints Helm's raw error, which can echo the rejected value, to the
-terminal or CI log.) Invalid values — wrong types, negative numbers where only
-zero-or-positive is allowed, unknown keys in schema-closed sections —
-fail the install before any namespace, secret, or release is created,
-and before any readiness wait. Unknown-key rejection depends on the
+(With `DRY_RUN=1`, `install` renders offline via `install-dry-run` and skips
+the gate. The Kind cert-manager render hides registry diagnostics. Other
+failing dry-run renders print Helm's message, which can echo a rejected
+value to the terminal or CI log.) Invalid values — wrong types, negative
+numbers where only zero-or-positive is allowed, unknown keys in schema-closed
+sections — fail the install before any namespace, secret, or release is
+created, and before any readiness wait. Unknown-key rejection depends on the
 section, in both charts: some sections are closed (for example
 `global.fulfillmentTrust`), while others — `osac-infra`'s `keycloak`
 and `topolvm`, or resource blocks like `operator.resources.requests`

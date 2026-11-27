@@ -613,6 +613,9 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         """Run install-infra with mocked helm, skipping the dependency targets."""
         self.write_command("helm", '''
 if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
+if [[ "${1:-}" == pull ]]; then
+    : >"${@: -1}/cert-manager-v1.20.0.tgz"
+fi
 ''')
         self.write_command("kubectl", 'printf "kubectl %s\\n" "$*" >> "$MOCK_LOG"')
         args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER)]
@@ -749,7 +752,8 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 if provider == "unset":
                     self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
                     (self.bin / "podman").unlink()
-                    for command in ("bash", "env", "awk", "sed", "basename", "dirname", "grep", "mktemp", "rm"):
+                    for command in ("bash", "env", "awk", "sed", "basename", "dirname",
+                                    "grep", "mktemp", "rm", "python3"):
                         (self.bin / command).symlink_to(shutil.which(command))
                     self.env["PATH"] = str(self.bin)
                 else:

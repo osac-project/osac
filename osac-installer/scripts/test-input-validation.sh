@@ -82,6 +82,7 @@ if [ -n "${MOCK_OSAC_ARGV_LOG:-}" ] && [ "$1" = template ] && [ "$2" = osac ]; t
 fi
 case "$1" in
   version) echo "v3.18.0+gstub" ;;
+  pull) : >"${@: -1}/cert-manager-v1.20.0.tgz" ;;
   template)
     if [ "${MOCK_TEMPLATE_FAIL:-0}" = 1 ]; then
       echo "Error: values don't meet the specifications of the schema" >&2

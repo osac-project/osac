@@ -299,6 +299,43 @@ OSAC_CHART_OCI_VERSION ?=
 override OSAC_CHART_OCI_REF := $(value OSAC_CHART_OCI_REF)
 override OSAC_CHART_OCI_VERSION := $(value OSAC_CHART_OCI_VERSION)
 export OSAC_CHART_OCI_REF OSAC_CHART_OCI_VERSION
+# Pass Kind cert-manager overrides literally, before the parse-time shell
+# calls below can expand any auto-exported command-line assignments.
+KIND_CERT_MANAGER_CHART ?= oci://quay.io/jetstack/charts/cert-manager
+KIND_CERT_MANAGER_VERSION ?= v1.20.0
+KIND_CERT_MANAGER_PULL_TIMEOUT ?= 90
+KIND_CERT_MANAGER_PULL_BACKOFF ?= 2 5
+override KIND_CERT_MANAGER_CHART := $(value KIND_CERT_MANAGER_CHART)
+override KIND_CERT_MANAGER_VERSION := $(value KIND_CERT_MANAGER_VERSION)
+override KIND_CERT_MANAGER_PULL_TIMEOUT := $(value KIND_CERT_MANAGER_PULL_TIMEOUT)
+override KIND_CERT_MANAGER_PULL_BACKOFF := $(value KIND_CERT_MANAGER_PULL_BACKOFF)
+export KIND_CERT_MANAGER_CHART KIND_CERT_MANAGER_VERSION
+export KIND_CERT_MANAGER_PULL_TIMEOUT KIND_CERT_MANAGER_PULL_BACKOFF
+# Pass quoted shell expressions for the four values and a fixed CLI mode.
+define run-helm-oci-pull
+command -v python3 >/dev/null \
+	|| { echo "ERROR: Install Python 3.8 or later and make python3 available on PATH to pull Helm OCI charts" >&2; exit 1; }; \
+python3 scripts/pull-helm-oci-chart.py --chart=$(1) --version=$(2) \
+	--pull-timeout=$(3) --pull-backoff=$(4) $(5)
+endef
+
+# Save the values in positional arguments before clearing their exports.
+define run-kind-cert-manager-pull
+( set -- "$${KIND_CERT_MANAGER_CHART}" "$${KIND_CERT_MANAGER_VERSION}" \
+	"$${KIND_CERT_MANAGER_PULL_TIMEOUT}" "$${KIND_CERT_MANAGER_PULL_BACKOFF}"; \
+	unset KIND_CERT_MANAGER_CHART KIND_CERT_MANAGER_VERSION \
+		KIND_CERT_MANAGER_PULL_TIMEOUT KIND_CERT_MANAGER_PULL_BACKOFF; \
+	$(call run-helm-oci-pull,"$$1","$$2","$$3","$$4",$(1)) )
+endef
+
+check-kind-cert-manager-config = $(call run-kind-cert-manager-pull,--check-config)
+
+# The caller's recipe shell owns the local archive through install or render.
+define prepare-kind-cert-manager-chart
+chart_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/osac-cert-manager-XXXXXX"); \
+	trap 'rm -rf -- "$$chart_dir"' EXIT; \
+	$(call run-kind-cert-manager-pull,--output "$$chart_dir/chart.tgz")
+endef
 # Runtime supplies hostnames and credentials; use the minimal CI fixture for
 # local chart checks without loosening the required-values schema.
 HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
@@ -567,6 +604,7 @@ endif
 .PHONY: install-infra
 install-infra: validate-inputs helm-infra-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
+	@$(check-kind-cert-manager-config)
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
 	@$(KIND_RUNTIME_CMD) create-cluster "$(KIND_CLUSTER_NAME)" "$(KIND_CONFIG)" "$$KIND_KUBECONFIG"
@@ -590,8 +628,10 @@ endif
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
 endif
-	helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
-		--version v1.20.0 --namespace cert-manager --create-namespace \
+	@$(prepare-kind-cert-manager-chart); \
+	helm upgrade --install cert-manager "$$chart_dir/chart.tgz" \
+		--version "$${KIND_CERT_MANAGER_VERSION}" \
+		--namespace cert-manager --create-namespace \
 		--set crds.enabled=true $(INSTALL_HELM_TARGET) --wait --timeout 5m
 	helm upgrade --install trust-manager oci://quay.io/jetstack/charts/trust-manager \
 		--version v0.22.0 --namespace cert-manager \
@@ -1100,9 +1140,16 @@ endif
 .PHONY: install-dry-run
 install-dry-run: validate-ns validate-remote-cluster-identifiers helm-deps validate-osac-chart-oci-ref ## Render every release in make install without connecting to a cluster
 ifeq ($(PLATFORM),kind)
-	helm template cert-manager oci://quay.io/jetstack/charts/cert-manager \
-		--version v1.20.0 --namespace cert-manager \
-		--set crds.enabled=true
+	@$(prepare-kind-cert-manager-chart); \
+	if helm template cert-manager "$$chart_dir/chart.tgz" \
+		--version "$${KIND_CERT_MANAGER_VERSION}" --namespace cert-manager \
+		--set crds.enabled=true >"$$chart_dir/rendered.yaml" 2>/dev/null; then \
+		cat "$$chart_dir/rendered.yaml"; \
+	else \
+		status=$$?; \
+		echo "ERROR: cert-manager chart render failed (Helm exit $$status)" >&2; \
+		exit "$$status"; \
+	fi
 	helm template trust-manager oci://quay.io/jetstack/charts/trust-manager \
 		--version v0.22.0 --namespace cert-manager \
 		--set defaultPackage.enabled=false

@@ -27,6 +27,7 @@ const pullSecret = create(SecretSchema, {
 const createTransport = (items = [pullSecret]) => {
   let listFilter: string | undefined;
   let totalsFilter: string | undefined;
+  let getCalls = 0;
 
   const transport = wrapWithAuthInterceptor(
     createRouterTransport((router) => {
@@ -43,7 +44,10 @@ const createTransport = (items = [pullSecret]) => {
           }
           return { items, total: items.length };
         },
-        get: ({ id }) => ({ object: items.find((item) => item.id === id) }),
+        get: ({ id }) => {
+          getCalls += 1;
+          return { object: items.find((item) => item.id === id) };
+        },
       });
       router.service(Projects, {
         list: () => ({ items: [myProject], total: 1 }),
@@ -56,6 +60,7 @@ const createTransport = (items = [pullSecret]) => {
     transport,
     getListFilter: () => listFilter,
     getTotalsFilter: () => totalsFilter,
+    getCalls: () => getCalls,
   };
 };
 
@@ -72,6 +77,22 @@ describe('SecretListPage', () => {
       expect(screen.getByRole('link', { name: 'pull-creds' })).toBeInTheDocument();
     });
     expect(screen.getByText('1 secret')).toBeInTheDocument();
+  });
+
+  it('uses a neutral indicator for opaque keys without fetching secret data', async () => {
+    const opaqueSecret = create(SecretSchema, {
+      id: 'secret-opaque',
+      metadata: { name: 'opaque-secret', project: 'default' },
+      type: SecretType.OPAQUE,
+    });
+    const { transport, getCalls } = createTransport([opaqueSecret]);
+    renderWithProviders(<SecretListPage />, { transport, session: { role: 'tenant-admin' } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'opaque-secret' })).toBeInTheDocument();
+    });
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    expect(getCalls()).toBe(0);
   });
 
   it('shows the type filter toggle', async () => {

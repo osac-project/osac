@@ -1,0 +1,306 @@
+suite: RFC 2136 DNS backend settings for cluster-fulfillment jobs
+# DNS_RFC2136_KEY_SECRET uses an obvious placeholder, never a real or
+# realistic key. The schema only requires it to be non-empty.
+templates:
+  - charts/aap/templates/instance-groups.yaml
+values:
+  - ../ci/default-values.yaml
+set:
+  aap.instanceGroups.clusterFulfillment.enabled: true
+tests:
+  - it: renders the RFC 2136 settings into the ConfigMap and the secret into the Secret
+    set:
+      aap.instanceGroups.clusterFulfillment.config:
+        DNS_CLASS: dns.rfc2136.dns
+        DNS_ZONE: clusters.example.com
+        DNS_SERVER: 192.0.2.53
+        DNS_RFC2136_SERVER: 192.0.2.53
+        DNS_RFC2136_PORT: "5353"
+        DNS_RFC2136_PROTOCOL: udp
+        DNS_RFC2136_KEY_NAME: osac-update
+        DNS_RFC2136_KEY_ALGORITHM: hmac-sha512
+      aap.instanceGroups.clusterFulfillment.secret:
+        DNS_RFC2136_KEY_SECRET: test-only-placeholder
+    asserts:
+      - isKind:
+          of: ConfigMap
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: cluster-fulfillment-ig
+        documentIndex: 0
+      - isKind:
+          of: Secret
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: cluster-fulfillment-ig
+        documentIndex: 1
+      - equal:
+          path: data
+          value:
+            DNS_CLASS: dns.rfc2136.dns
+            DNS_ZONE: clusters.example.com
+            DNS_SERVER: 192.0.2.53
+            DNS_RFC2136_SERVER: 192.0.2.53
+            DNS_RFC2136_PORT: "5353"
+            DNS_RFC2136_PROTOCOL: udp
+            DNS_RFC2136_KEY_NAME: osac-update
+            DNS_RFC2136_KEY_ALGORITHM: hmac-sha512
+            HOSTED_CLUSTER_BASE_DOMAIN: ""
+        documentIndex: 0
+      - exists:
+          path: data.DNS_RFC2136_KEY_SECRET
+        documentIndex: 1
+      - notExists:
+          path: data.DNS_RFC2136_KEY_SECRET
+        documentIndex: 0
+
+  - it: omits optional RFC 2136 settings so the driver defaults apply
+    set:
+      aap.instanceGroups.clusterFulfillment.config:
+        DNS_CLASS: dns.rfc2136.dns
+        DNS_RFC2136_SERVER: 192.0.2.53
+        DNS_RFC2136_KEY_NAME: osac-update
+      aap.instanceGroups.clusterFulfillment.secret:
+        DNS_RFC2136_KEY_SECRET: test-only-placeholder
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: data.DNS_RFC2136_PORT
+      - notExists:
+          path: data.DNS_RFC2136_PROTOCOL
+      - notExists:
+          path: data.DNS_RFC2136_KEY_ALGORITHM
+      - notExists:
+          path: data.DNS_SERVER
+
+  - it: requires DNS_RFC2136_SERVER with dns.rfc2136.dns
+    set:
+      aap.instanceGroups.clusterFulfillment.config:
+        DNS_CLASS: dns.rfc2136.dns
+        DNS_RFC2136_KEY_NAME: osac-update
+      aap.instanceGroups.clusterFulfillment.secret:
+        DNS_RFC2136_KEY_SECRET: test-only-placeholder
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_SERVER"
+
+  - it: requires DNS_RFC2136_KEY_NAME with dns.rfc2136.dns
+    set:
+      aap.instanceGroups.clusterFulfillment.config:
+        DNS_CLASS: dns.rfc2136.dns
+        DNS_RFC2136_SERVER: 192.0.2.53
+      aap.instanceGroups.clusterFulfillment.secret:
+        DNS_RFC2136_KEY_SECRET: test-only-placeholder
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_NAME"
+
+  - it: requires DNS_RFC2136_KEY_SECRET with dns.rfc2136.dns
+    set:
+      aap.instanceGroups.clusterFulfillment.config:
+        DNS_CLASS: dns.rfc2136.dns
+        DNS_RFC2136_SERVER: 192.0.2.53
+        DNS_RFC2136_KEY_NAME: osac-update
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_SECRET"
+
+  - it: rejects an empty DNS_RFC2136_KEY_SECRET
+    set:
+      aap.instanceGroups.clusterFulfillment.config:
+        DNS_CLASS: dns.rfc2136.dns
+        DNS_RFC2136_SERVER: 192.0.2.53
+        DNS_RFC2136_KEY_NAME: osac-update
+      aap.instanceGroups.clusterFulfillment.secret:
+        DNS_RFC2136_KEY_SECRET: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_SECRET"
+
+  - it: rejects a host name as DNS_RFC2136_SERVER
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_SERVER: dns.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_SERVER"
+
+  - it: accepts an IPv6 DNS_RFC2136_SERVER
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_SERVER: "2001:db8::53"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_RFC2136_SERVER
+          value: "2001:db8::53"
+
+  - it: accepts an IPv6 DNS_RFC2136_SERVER with an embedded IPv4 address
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_SERVER: "2001:db8::192.0.2.53"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_RFC2136_SERVER
+          value: "2001:db8::192.0.2.53"
+
+  - it: "rejects a malformed IPv6 DNS_RFC2136_SERVER without ::"
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_SERVER: "2001:db8:53"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_SERVER"
+
+  - it: "rejects an IPv6 DNS_RFC2136_SERVER with two ::"
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_SERVER: "1::2::3"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_SERVER"
+
+  - it: accepts an IPv6 DNS_SERVER with an embedded IPv4 address
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_SERVER: "2001:db8::192.0.2.53"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_SERVER
+          value: "2001:db8::192.0.2.53"
+
+  - it: rejects a malformed IPv6 DNS_SERVER
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_SERVER: "2001:db8:53"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_SERVER"
+
+  - it: accepts a host name as DNS_SERVER
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_SERVER: resolver.example.com
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_SERVER
+          value: resolver.example.com
+
+  - it: rejects an invalid DNS_SERVER
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_SERVER: "not a host!"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_SERVER"
+
+  - it: rejects a TSIG key name that is not a DNS name
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_KEY_NAME: "osac update"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_NAME"
+
+  - it: rejects empty optional settings
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_PROTOCOL: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_PROTOCOL"
+
+  - it: rejects an empty port
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_PORT: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_PORT"
+
+  - it: rejects an unknown DNS driver
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_CLASS: dns.rfc2136
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_CLASS"
+
+  - it: rejects an unsupported transport
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_PROTOCOL: tls
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_PROTOCOL"
+
+  - it: rejects an unsupported TSIG algorithm
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_KEY_ALGORITHM: gss-tsig
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_ALGORITHM"
+
+  - it: rejects the weak HMAC-MD5 algorithm
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_KEY_ALGORITHM: hmac-md5
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_ALGORITHM"
+
+  - it: rejects the weak HMAC-SHA1 algorithm
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_KEY_ALGORITHM: hmac-sha1
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_ALGORITHM"
+
+  - it: accepts the SHA-2 algorithms
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_KEY_ALGORITHM: hmac-sha224
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_RFC2136_KEY_ALGORITHM
+          value: hmac-sha224
+
+  - it: rejects a non-numeric port
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_PORT: domain
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_PORT"
+
+  - it: rejects port 0
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_PORT: "0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_PORT"
+
+  - it: rejects a port above 65535
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_PORT: "65536"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_PORT"
+
+  - it: accepts the highest port
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_PORT: "65535"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_RFC2136_PORT
+          value: "65535"
+
+  - it: renders no RFC 2136 keys from the chart defaults
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: data.DNS_RFC2136_SERVER
+      - notExists:
+          path: data.DNS_RFC2136_PORT
+      - notExists:
+          path: data.DNS_SERVER
+      - notExists:
+          path: data.DNS_RFC2136_KEY_SECRET
+        documentIndex: 1
+
+  - it: rejects a misspelled RFC 2136 setting
+    set:
+      aap.instanceGroups.clusterFulfillment.config.RFC2136_SERVER: 192.0.2.53
+    asserts:
+      - failedTemplate:
+          errorPattern: "additional properties 'RFC2136_SERVER' not allowed"

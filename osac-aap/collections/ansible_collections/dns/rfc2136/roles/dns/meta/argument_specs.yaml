@@ -1,0 +1,56 @@
+---
+# Server and TSIG settings come from the DNS_RFC2136_* environment variables
+# (see defaults/main.yaml); only the shared DNS interface is passed by callers.
+argument_specs:
+  create:
+    short_description: Create or update a DNS record with an RFC 2136 dynamic update
+    options:
+      dns_zone:
+        type: str
+        required: true
+        description: >
+          The zone configured on the DNS server (its SOA owner name, for
+          example "example.com"). The record must be inside this zone.
+      dns_record_name:
+        type: str
+        required: true
+        description: Fully qualified domain name for the record.
+      dns_record_type:
+        type: str
+        required: false
+        default: A
+        choices: [A, AAAA]
+        description: DNS record type.
+      dns_record_value:
+        type: str
+        required: true
+        description: The value for the record.
+      dns_record_ttl:
+        type: int
+        required: false
+        default: 1800
+        description: TTL in seconds.
+      dns_record_overwrite:
+        type: bool
+        required: false
+        default: true
+        description: Whether to overwrite an existing record.
+  delete:
+    short_description: Delete a DNS record with an RFC 2136 dynamic update
+    options:
+      dns_zone:
+        type: str
+        required: true
+        description: >
+          The zone configured on the DNS server (its SOA owner name, for
+          example "example.com"). The record must be inside this zone.
+      dns_record_name:
+        type: str
+        required: true
+        description: Fully qualified domain name for the record.
+      dns_record_type:
+        type: str
+        required: false
+        default: A
+        choices: [A, AAAA]
+        description: DNS record type.

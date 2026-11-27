@@ -13,7 +13,11 @@ metadata:
     "helm.sh/hook-output-log-policy": hook-failed
 spec:
   backoffLimit: 6
-  activeDeadlineSeconds: 1300
+  # The pod must outlive the poll timeout: Kubernetes kills the job at
+  # this deadline regardless of the poll loop, and the init container's
+  # fulfilment wait (up to 600s) shares the same budget. Keep it at least
+  # the poll timeout plus the init wait.
+  activeDeadlineSeconds: {{ max 1300 (add (int .Values.aap.hooks.publishPollTimeout) 700) }}
   template:
     metadata:
       labels:

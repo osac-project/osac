@@ -61,18 +61,25 @@ Values:
 ```yaml
 vast:
   enabled: true
+  protocols:
+    block:
+      enabled: true        # vast-csi-controller, --plugin block
+    nfs:
+      enabled: true        # vast-csi-controller-nfs, --plugin nfs
   config:
-    plugin: block          # block (raw-block) | csi (NFS/filesystem)
     mode: controller       # controller (controller-only) | controller_and_node
     vmsHost: "<vms-management-ip>"
     vipPoolName: "<vip-pool>"
     credentialsSecret: vast-credentials
 ```
 
-The VAST driver serves a **single plugin per process**, so this controller
-handles one protocol at a time. It defaults to `block` (the current priority).
-NFS/filesystem needs its own separate deployment — and object storage likewise
-when it lands — rather than reconfiguring this one; those follow OSAC-4262. Use
+The VAST driver serves a **single plugin per process**, so the chart runs one
+controller per enabled protocol: `vast-csi-controller` (Deployment and Service)
+for block and `vast-csi-controller-nfs` for NFS. The plugin name is the protocol
+key; the image accepts only `block`, `nfs` and `cosi`. Block is enabled by
+default and NFS is not. Point the operator's vendor controller endpoints at the
+matching Services: `vast=vast-csi-controller.osac-csi-backends.svc:50051` and
+`vast/nfs=vast-csi-controller-nfs.osac-csi-backends.svc:50051`. Use
 `mode: controller` for the vendor path: the operator issues only controller
 RPCs, so node-side NVMe probes (which require the host FS at `/host`) are
 skipped, avoiding the block plugin's CrashLoopBackOff under `controller_and_node`.

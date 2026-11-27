@@ -19,13 +19,16 @@ vast:
     tag: v2.6.8
   service:
     port: 50051
+  # VAST serves one plugin type per process, so each enabled protocol runs its
+  # own controller. The plugin name is the protocol key; the image accepts only
+  # "block", "nfs" and "cosi". The block controller is named vast-csi-controller
+  # and the NFS controller vast-csi-controller-nfs.
+  protocols:
+    block:
+      enabled: true
+    nfs:
+      enabled: false
   config:
-    # Vendor plugin this controller serves. VAST selects one plugin per process:
-    #   "block" -> raw-block (support_block=True)
-    #   "csi"   -> NFS/filesystem (support_block=False)
-    # Block is the priority; file/NFS (and object storage, later) need their own
-    # separate deployment rather than sharing this one. See OSAC-4262.
-    plugin: block
     # X_CSI_MODE for the vendor controller:
     #   "controller"           -> controller-only; the operator issues only
     #                             controller RPCs, so node-side NVMe probes

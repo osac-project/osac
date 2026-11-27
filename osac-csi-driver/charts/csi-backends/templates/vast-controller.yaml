@@ -7,57 +7,61 @@ metadata:
   labels:
     {{- include "csi-backends.labels" . | nindent 4 }}
     app.kubernetes.io/name: vast-csi-controller
+{{- range $protocol := list "block" "nfs" }}
+{{- $settings := index $.Values.vast.protocols $protocol }}
+{{- if $settings.enabled }}
+{{- $name := ternary "vast-csi-controller" (printf "vast-csi-controller-%s" $protocol) (eq $protocol "block") }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vast-csi-controller
-  namespace: {{ .Values.namespace }}
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
   labels:
-    {{- include "csi-backends.labels" . | nindent 4 }}
-    app.kubernetes.io/name: vast-csi-controller
+    {{- include "csi-backends.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $name }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: vast-csi-controller
+      app.kubernetes.io/name: {{ $name }}
   template:
     metadata:
       labels:
-        {{- include "csi-backends.labels" . | nindent 8 }}
-        app.kubernetes.io/name: vast-csi-controller
+        {{- include "csi-backends.labels" $ | nindent 8 }}
+        app.kubernetes.io/name: {{ $name }}
     spec:
       serviceAccountName: vast-vendor-sa
-      {{- with .Values.imagePullSecrets }}
+      {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: vast-csi
-          image: "{{ .Values.vast.image.repository }}:{{ .Values.vast.image.tag }}"
-          args: ["serve", "--plugin", {{ .Values.vast.config.plugin | quote }}]
+          image: "{{ $.Values.vast.image.repository }}:{{ $.Values.vast.image.tag }}"
+          args: ["serve", "--plugin", {{ $protocol | quote }}]
           env:
             - name: X_CSI_MODE
-              value: {{ .Values.vast.config.mode | quote }}
+              value: {{ $.Values.vast.config.mode | quote }}
             - name: CSI_ENDPOINT
-              value: "tcp://0.0.0.0:{{ .Values.vast.service.port }}"
+              value: "tcp://0.0.0.0:{{ $.Values.vast.service.port }}"
             - name: X_CSI_VMS_HOST
-              value: {{ .Values.vast.config.vmsHost | quote }}
+              value: {{ $.Values.vast.config.vmsHost | quote }}
             - name: X_CSI_VIP_POOL_NAME
-              value: {{ .Values.vast.config.vipPoolName | quote }}
+              value: {{ $.Values.vast.config.vipPoolName | quote }}
             - name: X_CSI_NFS_EXPORT
-              value: {{ .Values.vast.config.nfsExport | quote }}
+              value: {{ $.Values.vast.config.nfsExport | quote }}
             - name: X_CSI_VIEW_POLICY
-              value: {{ .Values.vast.config.viewPolicy | quote }}
+              value: {{ $.Values.vast.config.viewPolicy | quote }}
             - name: X_CSI_LOG_LEVEL
               value: INFO
             - name: X_CSI_VERIFY_SSL
-              value: {{ .Values.vast.config.verifySsl | quote }}
+              value: {{ $.Values.vast.config.verifySsl | quote }}
           ports:
-            - containerPort: {{ .Values.vast.service.port }}
+            - containerPort: {{ $.Values.vast.service.port }}
               name: csi-grpc
               protocol: TCP
-          {{- if .Values.vast.config.credentialsSecret }}
+          {{- if $.Values.vast.config.credentialsSecret }}
           volumeMounts:
             - name: vast-credentials
               mountPath: /opt/vms-auth
@@ -65,23 +69,25 @@ spec:
       volumes:
         - name: vast-credentials
           secret:
-            secretName: {{ .Values.vast.config.credentialsSecret }}
+            secretName: {{ $.Values.vast.config.credentialsSecret }}
           {{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: vast-csi-controller
-  namespace: {{ .Values.namespace }}
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
   labels:
-    {{- include "csi-backends.labels" . | nindent 4 }}
-    app.kubernetes.io/name: vast-csi-controller
+    {{- include "csi-backends.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $name }}
 spec:
   selector:
-    app.kubernetes.io/name: vast-csi-controller
+    app.kubernetes.io/name: {{ $name }}
   ports:
     - name: csi-grpc
-      port: {{ .Values.vast.service.port }}
-      targetPort: {{ .Values.vast.service.port }}
+      port: {{ $.Values.vast.service.port }}
+      targetPort: {{ $.Values.vast.service.port }}
       protocol: TCP
+{{- end }}
+{{- end }}
 {{- end }}

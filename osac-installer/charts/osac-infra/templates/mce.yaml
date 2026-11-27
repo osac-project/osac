@@ -6,6 +6,20 @@ metadata:
   labels:
     {{- include "osac-infra.labels" . | nindent 4 }}
 data:
+  # Applied after MCE is ready, not as a Helm-owned CR during bootstrap.
+  acm-import-policy.yaml: |
+    apiVersion: addon.open-cluster-management.io/v1alpha1
+    kind: AddOnDeploymentConfig
+    metadata:
+      name: hypershift-addon-deploy-config
+      namespace: multicluster-engine
+      annotations:
+        osac.openshift.io/tenant: platform
+        osac.openshift.io/owner-reference: MultiClusterEngine/multiclusterengine
+    spec:
+      customizedVariables:
+        - name: autoImportDisabled
+          value: "true"
   config.yaml: |
     apiVersion: agent-install.openshift.io/v1beta1
     kind: AgentServiceConfig

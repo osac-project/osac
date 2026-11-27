@@ -140,14 +140,84 @@
     namespace: "{{ hosted_cluster_namespace }}"
     name: "sshkey-cluster-{{ hosted_cluster_name }}"
 
-# Delete ManagedCluster resource; ideally this should be automatically deleted when
-# we remove the HostedCluster, as we do not create the ManagedCluster.
-- name: Delete ManagedCluster resource
+# Manage only the registration this ClusterOrder owns; ideally it would be
+# deleted with the HostedCluster, but the hub creates it. Cleanup runs whatever
+# the opt-in flag says (hosted_cluster_enable_acm_registration): for a cluster
+# provisioned without it this is a no-op, while clusters registered before the
+# flag existed, or with it enabled, still get cleaned up (OSAC-6313). Cleanup
+# stays independent of the flag but not of ownership: registration refuses a
+# foreign object (register_managed_cluster.yaml), so a refused create can leave
+# a same-name ManagedCluster behind, and deleting it by name would destroy
+# another owner's registration. Reporting such an object instead of failing
+# also keeps a squatted name from blocking tenant deletion.
+- name: Discard ManagedCluster teardown projections from earlier invocations
+  ansible.builtin.set_fact:
+    hosted_cluster_teardown_registrations: []
+
+- name: Read ManagedCluster registration before teardown
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    name: "{{ hosted_cluster_name }}"
+  register: hosted_cluster_teardown_registration
+  # A registration can hold hub credentials; only the sanitized projection
+  # below may report on it.
+  no_log: true
+
+- name: Project ManagedCluster teardown ownership
+  # Only the fields below may leave this task: an unrelated annotation can hold
+  # credential-bearing data, and loop labels do not redact verbose output.
+  vars:
+    annotations: "{{ item.metadata.annotations | default({}, true) }}"
+    tenant: "{{ annotations.get('osac.openshift.io/tenant', '') }}"
+    owner_reference: "{{ annotations.get('osac.openshift.io/owner-reference', '') }}"
+    # Pre-flag clusters were registered by the hub's own HyperShift auto-import,
+    # which writes these Hosted-import markers (hypershift-addon-operator)
+    # without OSAC ownership. They are the only positive origin evidence such a
+    # registration has; an object carrying none of them is not ours.
+    legacy_hosted_import: >-
+      {{ tenant == '' and owner_reference == '' and
+      annotations.get('open-cluster-management/created-via', '') == 'hypershift' and
+      annotations.get('import.open-cluster-management.io/klusterlet-deploy-mode', '') == 'Hosted' and
+      (annotations.get('import.open-cluster-management.io/hosting-cluster-name', '') | length > 0) }}
+    owned: >-
+      {{ tenant == hosted_cluster_acm_registration_annotations['osac.openshift.io/tenant'] and
+      owner_reference == hosted_cluster_acm_registration_annotations['osac.openshift.io/owner-reference'] }}
+  ansible.builtin.set_fact:
+    hosted_cluster_teardown_registrations: >-
+      {{ (hosted_cluster_teardown_registrations | default([])) + [{'name': item.metadata.name | default(''),
+      'uid': item.metadata.uid | default(''),
+      'deletable': (owned | bool) or (legacy_hosted_import | bool)}] }}
+  loop: "{{ hosted_cluster_teardown_registration.resources | default([]) }}"
+  no_log: true
+
+- name: Report ManagedCluster registrations this ClusterOrder does not own
+  ansible.builtin.debug:
+    msg: >-
+      Leaving ManagedCluster {{ item.name }} in place: its OSAC ownership annotations do
+      not identify this ClusterOrder, so teardown does not delete it. Ask the hub
+      administrator to review the registration.
+  loop: "{{ hosted_cluster_teardown_registrations | default([]) | rejectattr('deletable') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Delete ManagedCluster registration for this ClusterOrder
   kubernetes.core.k8s:
     state: absent
     api_version: cluster.open-cluster-management.io/v1
     kind: ManagedCluster
-    name: "{{ hosted_cluster_name }}"
+    name: "{{ item.name }}"
+    # The precondition binds the delete to the object inspected above, so a
+    # registration replaced in between is never removed.
+    delete_options:
+      preconditions:
+        uid: "{{ item.uid }}"
+  loop: "{{ hosted_cluster_teardown_registrations | default([]) | selectattr('deletable') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  # The delete returns the object it removed; the projection above is the only
+  # place its metadata may be reported.
+  no_log: true
 
 - name: Delete HostedCluster resource
   kubernetes.core.k8s:

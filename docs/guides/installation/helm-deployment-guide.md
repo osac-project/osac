@@ -1220,6 +1220,31 @@ customers who manage LVMS should leave `lvms.enabled: false` and configure
 their own `LVMCluster` device selector. This change does not alter the separate
 manual prerequisite manifest or remote-cluster bootstrap path.
 
+### CaaS ACM registration policy
+
+Regular CaaS clusters are not registered with ACM; AI MaaS clusters are.
+No tenant-side setting is required.
+
+- **OSAC-managed MCE:** Set `mce.enabled: true` in the infrastructure values.
+  The infrastructure hook applies the policy and waits for the local HyperShift
+  agent to finish rolling out with auto-import disabled.
+- **Existing MCE/RHACM:** Keep `mce.enabled: false`. Ask the hub administrator
+  to add or update this entry in `spec.customizedVariables` on
+  `AddOnDeploymentConfig` `multicluster-engine/hypershift-addon-deploy-config`,
+  preserving other entries:
+
+  ```yaml
+  - name: autoImportDisabled
+    value: "true"
+  ```
+
+On an existing hub, the administrator must verify that the HyperShift agent
+Deployment serving CaaS has `DISABLE_AUTO_IMPORT=true` in its agent container
+and that its rollout is complete before enabling provisioning. AAP jobs do not
+read or change this policy. Recheck the rollout after changing the shared policy
+or agent configuration. The setting affects every HostedCluster served by that
+agent, not just OSAC's clusters. Existing ACM registrations are not removed.
+
 ### Skipping Phase 1 Entirely
 
 Safe only when the cluster already provides everything that the two phase-1

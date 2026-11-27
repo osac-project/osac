@@ -13,7 +13,7 @@ permissions: {}
 
 jobs:
   stale:
-    name: 'Mark stale issues and PRs'
+    name: 'Mark stale issues and manage stale PRs'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -24,10 +24,17 @@ jobs:
         with:
           days-before-stale: 30
           days-before-close: -1
+          days-before-pr-stale: 10
+          days-before-pr-close: 7
+          operations-per-run: 500
           stale-issue-label: 'lifecycle/stale'
-          stale-pr-label: 'lifecycle/stale'
+          stale-pr-label: 'lifecycle/pr-stale'
           exempt-issue-labels: 'lifecycle/frozen,pinned,lifecycle/rotten'
-          exempt-pr-labels: 'lifecycle/frozen,pinned,lifecycle/rotten'
+          exempt-draft-pr: true
+          exempt-pr-labels: >-
+            lifecycle/frozen,pinned,approved,lgtm,ready-for-merge,do-not-merge/hold
+          remove-pr-stale-when-updated: true
+          delete-branch: false
           stale-issue-message: |
             This issue has been automatically labeled as `lifecycle/stale` because it has not had any activity for 30 days.
 
@@ -43,24 +50,16 @@ jobs:
             - Apply the `lifecycle/frozen` label to this issue.
 
             Closed issues can be reopened at any time if they are still relevant.
-          stale-pr-message: |
-            This pull request has been automatically labeled as `lifecycle/stale` because it has not had any activity for 30 days.
-
-            **Lifecycle timeline:**
-            - After 7 more days of inactivity, this PR will be labeled `lifecycle/rotten`.
-            - After 14 more days of inactivity, this PR will be automatically closed.
-
-            **To keep this PR active:**
-            - Add a comment, push a commit, or make an update to reset the lifecycle timer.
-            - The `lifecycle/stale` label will be automatically removed when activity is detected.
-
-            **To prevent automatic lifecycle management:**
-            - Apply the `lifecycle/frozen` label to this PR.
-
-            Closed PRs can be reopened at any time if they are still relevant.
+          stale-pr-message: >-
+            This PR has been inactive for at least 10 days and may close after
+            7 more days without activity. Comment, push a commit, or update the
+            PR to keep it open, or ask a maintainer to apply `lifecycle/frozen`.
+          close-pr-message: >-
+            This PR was closed after at least 7 days without activity following
+            the stale warning. You can reopen it when work resumes.
 
   rotten:
-    name: 'Mark rotten issues and PRs'
+    name: 'Mark rotten issues'
     needs: stale
     runs-on: ubuntu-latest
     permissions:
@@ -71,14 +70,13 @@ jobs:
       - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639  # v9.1.0
         with:
           only-issue-labels: 'lifecycle/stale'
-          only-pr-labels: 'lifecycle/stale'
           days-before-stale: 7
           days-before-close: -1
+          days-before-pr-stale: -1
+          remove-pr-stale-when-updated: false
           stale-issue-label: 'lifecycle/rotten'
-          stale-pr-label: 'lifecycle/rotten'
           labels-to-remove-when-stale: 'lifecycle/stale'
           exempt-issue-labels: 'lifecycle/frozen,pinned'
-          exempt-pr-labels: 'lifecycle/frozen,pinned'
           stale-issue-message: |
             This issue has been automatically labeled as `lifecycle/rotten` because it has had no activity for 37+ days (30 days stale + 7 days without further activity).
 
@@ -92,22 +90,9 @@ jobs:
             - Apply the `lifecycle/frozen` label to this issue.
 
             Closed issues can be reopened at any time if they are still relevant.
-          stale-pr-message: |
-            This pull request has been automatically labeled as `lifecycle/rotten` because it has had no activity for 37+ days (30 days stale + 7 days without further activity).
-
-            **This PR will be automatically closed in 7 days if no further activity occurs.**
-
-            **To keep this PR open:**
-            - Add a comment, push a commit, or make an update to reset the lifecycle timer.
-            - The `lifecycle/rotten` label will be automatically removed when activity is detected.
-
-            **To prevent automatic lifecycle management:**
-            - Apply the `lifecycle/frozen` label to this PR.
-
-            Closed PRs can be reopened at any time if they are still relevant.
 
   close:
-    name: 'Close rotten issues and PRs'
+    name: 'Close rotten issues'
     needs: rotten
     runs-on: ubuntu-latest
     permissions:
@@ -118,18 +103,13 @@ jobs:
       - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639  # v9.1.0
         with:
           only-issue-labels: 'lifecycle/rotten'
-          only-pr-labels: 'lifecycle/rotten'
           stale-issue-label: 'lifecycle/rotten'
-          stale-pr-label: 'lifecycle/rotten'
           days-before-stale: -1
           days-before-close: 7
+          days-before-pr-close: -1
+          remove-pr-stale-when-updated: false
           exempt-issue-labels: 'lifecycle/frozen,pinned'
-          exempt-pr-labels: 'lifecycle/frozen,pinned'
           close-issue-message: |
             This issue has been automatically closed after 44+ days of inactivity (30 days until stale, 7 days until rotten, 7 days until close).
 
             If this issue is still relevant, you can reopen it at any time. To prevent future automatic closure, apply the `lifecycle/frozen` label.
-          close-pr-message: |
-            This pull request has been automatically closed after 44+ days of inactivity (30 days until stale, 7 days until rotten, 7 days until close).
-
-            If this PR is still relevant, you can reopen it at any time. To prevent future automatic closure, apply the `lifecycle/frozen` label.

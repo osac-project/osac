@@ -14,12 +14,14 @@ language governing permissions and limitations under the License.
 package vault
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 
@@ -294,20 +296,27 @@ var _ = Describe("VaultSecretStore", func() {
 				mockTokenSource.EXPECT().VaultToken(gomock.Any(), "tenant-a").Return("token2", nil),
 			)
 
+			var logs bytes.Buffer
 			store, _ := newTestStore(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
 				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"errors":["permission denied"]}`))
+				_, err := w.Write([]byte(`{"errors":["vault-write-body-marker"]}`))
+				Expect(err).To(Succeed())
 			}, func(b *VaultSecretStoreBuilder) {
-				b.SetTokenSource(mockTokenSource)
+				b.SetTokenSource(mockTokenSource).
+					SetLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			})
 
-			err := store.Store(ctx, "tenant-a", "", "s", map[string][]byte{"k": []byte("v")})
+			err := store.Store(ctx, "tenant-a", "private-project", "private-secret", map[string][]byte{"k": []byte("v")})
 			Expect(err).To(HaveOccurred())
 			grpcErr := ToGrpcError(err)
 			st, ok := grpcstatus.FromError(grpcErr)
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(grpccodes.PermissionDenied))
 			Expect(st.Message()).To(Equal("vault access denied"))
+			Expect(logs.String()).To(ContainSubstring("msg=\"Failed to store secret in vault\" tenant=tenant-a error_code=PermissionDenied\n"))
+			Expect(logs.String()).NotTo(ContainSubstring("vault-write-body-marker"))
+			Expect(logs.String()).NotTo(ContainSubstring("private-project/private-secret"))
 		})
 
 		It("maps 404 to NotFound", func() {

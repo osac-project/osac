@@ -137,8 +137,9 @@ func (b *ServiceTenantTokenSourceBuilder) Build() (result *ServiceTenantTokenSou
 		return
 	}
 
+	// Log token acquisition failures here because OAuth errors can include credential material.
 	oauthTokenSource, oauthErr := oauth.NewTokenSource().
-		SetLogger(b.logger).
+		SetLogger(slog.New(slog.DiscardHandler)).
 		SetFlow(oauth.CredentialsFlow).
 		SetIssuer(b.keycloakIssuerURL).
 		SetClientId(b.keycloakClientID).
@@ -185,6 +186,7 @@ func (s *ServiceTenantTokenSource) VaultToken(ctx context.Context, tenant string
 	result, err, _ := s.sfGroup.Do(tenant, func() (any, error) {
 		keycloakToken, kcErr := s.oauthTokenSource.Token(ctx)
 		if kcErr != nil {
+			s.logger.ErrorContext(ctx, "Failed to obtain Keycloak token for Vault", slog.String("tenant", tenant))
 			return "", fmt.Errorf("failed to obtain keycloak token: %w", kcErr)
 		}
 
@@ -199,6 +201,12 @@ func (s *ServiceTenantTokenSource) VaultToken(ctx context.Context, tenant string
 			keycloakToken.Access,
 		)
 		if loginErr != nil {
+			attrs := []slog.Attr{slog.String("tenant", tenant)}
+			var statusErr *vaultLoginStatusError
+			if errors.As(loginErr, &statusErr) {
+				attrs = append(attrs, slog.Int("http_status", statusErr.statusCode))
+			}
+			s.logger.LogAttrs(ctx, slog.LevelError, "Failed to log in to Vault", attrs...)
 			return "", fmt.Errorf("failed to login to vault for tenant %q: %w", tenant, loginErr)
 		}
 

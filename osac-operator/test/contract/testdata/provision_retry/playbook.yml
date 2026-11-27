@@ -1,0 +1,59 @@
+---
+- name: Controlled provisioning retry contract
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Validate controlled fixture inputs
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.task == 'provision'
+          - osac_job_vars.fixture_run is match('^contract-[0-9a-f]{32}$')
+          - osac_job_vars.fixture_case in ['fail_once', 'nonretryable', 'malformed_error', 'missing_error', 'malformed_result', 'unexpected_result']
+          - osac_job_vars.fixture_attempt is integer
+          - osac_job_vars.fixture_attempt in [1, 2]
+          - osac_job_vars.fixture_case == 'fail_once' or osac_job_vars.fixture_attempt == 1
+        quiet: true
+
+    - name: Emit a valid controlled provider failure
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_error:
+            message: 'synthetic-sensitive-marker task provision manager none traceback'
+            retryable: "{{ osac_job_vars.fixture_case == 'fail_once' }}"
+      when: osac_job_vars.fixture_attempt == 1 and osac_job_vars.fixture_case in ['fail_once', 'nonretryable']
+
+    - name: Emit a malformed provider failure
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_error:
+            message: synthetic-sensitive-marker
+            retryable: intentionally-not-a-boolean
+      when: osac_job_vars.fixture_case == 'malformed_error'
+
+    - name: End the controlled failure cases
+      ansible.builtin.fail:
+        msg: Controlled contract failure; no provider was contacted.
+      when: osac_job_vars.fixture_attempt == 1 and osac_job_vars.fixture_case in ['fail_once', 'nonretryable', 'malformed_error', 'missing_error']
+
+    - name: Emit an invalid result shape on an otherwise successful job
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_result:
+            - intentionally-not-an-object
+      when: osac_job_vars.fixture_case == 'malformed_result'
+
+    - name: Emit an unexpected result on an otherwise successful job
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_result:
+            unexpected: synthetic-sensitive-marker
+      when: osac_job_vars.fixture_case == 'unexpected_result'

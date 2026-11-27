@@ -452,6 +452,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
+	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// If the tenant is not ready, requeue
 	if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
 		msg := formatTenantNotReadyMessage(tenant)
@@ -489,10 +493,6 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 			networktask.MessageNetworkingDisabled, v1alpha1.ReasonProvisioningDisabled)
 	}
 
-	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	// The VM recorded in status. A job launched below cannot have created it
 	// yet: the VM watch reconciles again when it appears.
 	var kv *kubevirtv1.VirtualMachine
@@ -506,7 +506,9 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// Capture the persisted reason of the condition that records a storage
 	// readiness gate before this reconcile overwrites it, so the TenantNotReady
 	// event fires only when the gate is first hit.
-	priorGateReason := conditionReason(instance, storageGateCondition(kv))
+	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	gateCondition := storageGateCondition(kv, entry != nil && entry.State == v1alpha1.NetworkJobStateRetrying)
+	priorGateReason := conditionReason(instance, gateCondition)
 
 	// Decided once for the pass: only a pass that may launch resolves the
 	// storage context, and only such a pass launches (see handleProvisioning).
@@ -519,7 +521,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		}
 	}
 
-	// A gated pass starts no job and leaves status.jobs as it is; the status
+	// A gated pass starts no job and preserves job state and retry timing; the status
 	// steps below still run, with the zero Outcome: the job they would report
 	// on is the one that waits, not a failed one.
 	var provision networktask.Outcome
@@ -548,7 +550,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		// as the next attempt (see handleProvisioning); the same spec stays failed (VMaaS design,
 		// Create step 5).
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse,
-			provision.Entry.Message, v1alpha1.ReasonProvisioningFailed)
+			"Provisioning failed; no retry is scheduled.", v1alpha1.ReasonProvisioningFailed)
 		if kv == nil {
 			setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
 		}
@@ -569,12 +571,18 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 
 	recordRunningConfig(instance)
 
-	// Written last: the status steps above set Provisioned ("VirtualMachine not
-	// yet created") and ConfigurationApplied ("Applying configuration"), and
-	// neither may replace the reason the job is waiting.
+	// Record the gate after ordinary progress writers so the next pass can
+	// distinguish a continuing storage wait from a new transition.
 	if gateMessage != "" {
-		r.deferProvisioningForStorage(ctx, instance, tenant, kv, priorGateReason, gateMessage)
+		r.deferProvisioningForStorage(ctx, instance, tenant, gateCondition, priorGateReason, gateMessage)
 	}
+	if provision.Entry.Task == "" {
+		if entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone); entry != nil {
+			provision.Entry = *entry
+			provision.LastFailure = entry.LastFailure
+		}
+	}
+	updateComputeInstanceProvisioningStatus(instance, provision)
 	return result, nil
 }
 
@@ -815,6 +823,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	}
 
 	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+
 	if provisionRerunDue(instance, entry) {
 		log.Info("configuration changed after the provision job ended; running it again",
 			"state", entry.State,
@@ -1111,6 +1120,9 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 	log.Info("deleting compute instance")
 
 	setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseDeleting)
+	instance.Status.LastProvisioningFailure = nil
+	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse,
+		"ComputeInstance is being deleted", v1alpha1.ReasonDeleting)
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse,
 		"ComputeInstance is being deleted", v1alpha1.ReasonDeleting)
 
@@ -1422,13 +1434,31 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, instan
 	}
 }
 
-// handleDesiredConfigVersion sets status.desiredConfigVersion to the hash of spec.
-func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(_ context.Context, instance *v1alpha1.ComputeInstance) error {
+// handleDesiredConfigVersion records the spec hash and invalidates failure data
+// from an earlier configuration before readiness gates can defer provisioning.
+func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Context, instance *v1alpha1.ComputeInstance) error {
 	version, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
 	if err != nil {
 		return err
 	}
 	instance.Status.DesiredConfigVersion = version
+	if instance.Annotations[osacComputeInstanceManagementStateAnnotation] == ManagementStateManual {
+		return nil
+	}
+	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	if instance.Status.ProvisionConfigVersion != version ||
+		(entry != nil && entry.State == v1alpha1.NetworkJobStateSucceeded) {
+		instance.Status.LastProvisioningFailure = nil
+	}
+	if entry != nil && (entry.State == v1alpha1.NetworkJobStateRetrying ||
+		entry.State == v1alpha1.NetworkJobStateCancelled || entry.State == v1alpha1.NetworkJobStateFailed) &&
+		instance.Status.ProvisionConfigVersion != version && entry.LastFailure != nil {
+		// Keep the job state and retry tracking; only the old failure is stale.
+		entry.LastFailure = nil
+		if err := r.Status().Update(ctx, instance); err != nil {
+			return fmt.Errorf("clear previous provision configuration failure: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -1841,12 +1871,10 @@ func (r *ComputeInstanceReconciler) willTriggerProvisioning(
 		r.Engine.LaunchDue(instance, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
 }
 
-// storageGateCondition returns the ComputeInstance condition that records a
-// storage readiness gate: Provisioned before the KubeVirt VM exists, and
-// ConfigurationApplied for a day-2 job on an existing VM, so the Provisioned
-// and Ready conditions keep reporting the running VM while the job waits.
-func storageGateCondition(kv *kubevirtv1.VirtualMachine) v1alpha1.ComputeInstanceConditionType {
-	if kv == nil {
+// Retry progress owns Provisioned during backoff, so its storage gate uses
+// ConfigurationApplied, as for a day-2 job, to retain the gate transition.
+func storageGateCondition(kv *kubevirtv1.VirtualMachine, retrying bool) v1alpha1.ComputeInstanceConditionType {
+	if kv == nil && !retrying {
 		return v1alpha1.ComputeInstanceConditionProvisioned
 	}
 	return v1alpha1.ComputeInstanceConditionConfigurationApplied
@@ -1859,14 +1887,14 @@ func (r *ComputeInstanceReconciler) deferProvisioningForStorage(
 	ctx context.Context,
 	instance *v1alpha1.ComputeInstance,
 	tenant *v1alpha1.Tenant,
-	kv *kubevirtv1.VirtualMachine,
+	gateCondition v1alpha1.ComputeInstanceConditionType,
 	priorGateReason, msg string,
 ) {
-	instance.SetStatusCondition(storageGateCondition(kv), metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)
+	instance.SetStatusCondition(gateCondition, metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)
 	if priorGateReason != v1alpha1.ReasonTenantNotReady {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonTenantNotReady, eventActionReconcile, "%s", msg)
+		ctrllog.FromContext(ctx).Info("tenant storage is not ready for requested tiers, deferring provisioning", "tenant", tenant.GetName(), "reason", msg)
 	}
-	ctrllog.FromContext(ctx).Info("tenant storage is not ready for requested tiers, deferring provisioning", "tenant", tenant.GetName(), "reason", msg)
 }
 
 // storageClassesCoverRequestedTiers reports whether every requested tier
@@ -2027,4 +2055,33 @@ func filterStorageClassesToRequestedTiers(
 		}
 	}
 	return filtered
+}
+
+func updateComputeInstanceProvisioningStatus(instance *v1alpha1.ComputeInstance, provision networktask.Outcome) {
+	manual := instance.Annotations[osacComputeInstanceManagementStateAnnotation] == ManagementStateManual
+	if !manual {
+		instance.Status.LastProvisioningFailure = nil
+	}
+	if failure := provision.LastFailure; failure != nil && instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion {
+		instance.Status.LastProvisioningFailure = &v1alpha1.ComputeInstanceProvisioningFailure{
+			Reason: failure.Reason, Message: failure.Message, Attempt: failure.Attempt,
+			ObservedAt: failure.ObservedAt.DeepCopy(),
+		}
+	}
+	reason, message := "", ""
+	switch {
+	case !manual && provision.Retrying():
+		reason, message = "RetryScheduled", "A provisioning attempt failed; another attempt is scheduled."
+	case !manual && provision.Entry.State == v1alpha1.NetworkJobStateRunning && instance.Status.LastProvisioningFailure != nil:
+		reason, message = "RetryRunning", "A provisioning retry is running."
+	case provision.Failed() && instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion:
+		reason, message = v1alpha1.ReasonProvisioningFailed, "Provisioning failed; no retry is scheduled."
+	}
+	if reason != "" {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, message, reason)
+	} else if current := instance.GetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned); current != nil &&
+		(current.Reason == "RetryScheduled" || current.Reason == "RetryRunning") {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse,
+			"VirtualMachine not yet created, waiting for provisioning", v1alpha1.ReasonWaitingForVM)
+	}
 }

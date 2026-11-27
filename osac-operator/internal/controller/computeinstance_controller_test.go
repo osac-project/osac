@@ -2246,8 +2246,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Expect(reconciler.willTriggerProvisioning(staleCI)).To(BeTrue(), "expected true for stale job state %s", state)
 			}
 
-			Expect(storageGateCondition(nil)).To(Equal(osacv1alpha1.ComputeInstanceConditionProvisioned))
-			Expect(storageGateCondition(&kubevirtv1.VirtualMachine{})).To(Equal(osacv1alpha1.ComputeInstanceConditionConfigurationApplied))
+			Expect(storageGateCondition(nil, false)).To(Equal(osacv1alpha1.ComputeInstanceConditionProvisioned))
+			Expect(storageGateCondition(&kubevirtv1.VirtualMachine{}, false)).To(Equal(osacv1alpha1.ComputeInstanceConditionConfigurationApplied))
 
 			By("Subcase B: envtest Reconcile with ManagementStateManual bypasses CSP gate when CSP storage is unready")
 			const manualName = "test-ci-nontrigger-manual"
@@ -2295,7 +2295,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				wantReason  string
 			}{
 				{name: "test-ci-nontrigger-running", jobState: osacv1alpha1.NetworkJobStateRunning, wantRequeue: true, wantReason: osacv1alpha1.ReasonWaitingForVM},
-				{name: "test-ci-nontrigger-retrying", jobState: osacv1alpha1.NetworkJobStateRetrying, wantRequeue: true, wantReason: osacv1alpha1.ReasonWaitingForVM},
+				{name: "test-ci-nontrigger-retrying", jobState: osacv1alpha1.NetworkJobStateRetrying, wantRequeue: true, wantReason: "RetryScheduled"},
 				{name: "test-ci-nontrigger-succeeded", jobState: osacv1alpha1.NetworkJobStateSucceeded, wantRequeue: false, wantReason: osacv1alpha1.ReasonWaitingForVM},
 				// Failed is final until the spec changes, so unlike a backoff it
 				// does not requeue.
@@ -2349,6 +2349,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Expect(condJob).NotTo(BeNil())
 				Expect(condJob.Reason).NotTo(Equal(osacv1alpha1.ReasonTenantNotReady))
 				Expect(condJob.Reason).To(Equal(tc.wantReason))
+				Expect(updatedJob.Status.LastProvisioningFailure).To(BeNil())
 			}
 		})
 
@@ -3156,7 +3157,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(res.RequeueAfter).To(BeNumerically(">", defaultPreconditionRequeueInterval))
 			Expect(capture.count).To(Equal(1))
 			Expect(catalog.listCallCount).To(Equal(catalogCalls))
-			expectCondition(getCI(nn), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonWaitingForVM)
+			expectCondition(getCI(nn), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "RetryScheduled")
 			waitForCachedCI(reconciler, nn)
 
 			By("Step 2: when backoff has elapsed but CSP tier silver is unmapped, the retry is gated on storage readiness")
@@ -3168,8 +3169,24 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(gated.Status.Jobs).To(HaveLen(1))
 			Expect(gated.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRetrying))
 			Expect(gated.Status.Jobs[0].Attempt).To(Equal(int32(1)))
-			cond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
-			Expect(cond.Message).To(ContainSubstring("missing tier(s): silver"))
+			cond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "RetryScheduled")
+			Expect(cond.Message).To(Equal("A provisioning attempt failed; another attempt is scheduled."))
+			Expect(gated.Status.LastProvisioningFailure).NotTo(BeNil())
+			Expect(gated.Status.Jobs[0].LastFailure).NotTo(BeNil())
+			Expect(gated.Status.LastProvisioningFailure.ObservedAt.Time.Equal(gated.Status.Jobs[0].LastFailure.ObservedAt.Time)).To(BeTrue())
+			waitForCachedCI(reconciler, nn)
+
+			By("clearing the old configuration failure while the due retry is still storage-gated")
+			resizeCI(reconciler, nn)
+			res = reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(Equal(1))
+			changed := getCI(nn)
+			Expect(changed.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRetrying))
+			Expect(changed.Status.Jobs[0].Attempt).To(Equal(int32(1)))
+			Expect(changed.Status.Jobs[0].Message).To(Equal(gated.Status.Jobs[0].Message))
+			Expect(changed.Status.Jobs[0].LastFailure).To(BeNil())
+			Expect(changed.Status.LastProvisioningFailure).To(BeNil())
 			waitForCachedCI(reconciler, nn)
 
 			By("Step 3: once silver is mapped in Tenant.status.storageClasses, the elapsed-backoff retry triggers with injected StorageClasses and JIT tier/backend data")
@@ -3186,6 +3203,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(retried.Status.Jobs).To(HaveLen(1))
 			Expect(retried.Status.Jobs[0].Attempt).To(Equal(int32(2)))
 			Expect(retried.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
+			Expect(retried.Status.Jobs[0].LastFailure).To(BeNil())
 			Expect(retried.Status.Jobs[0].JobID).To(Equal(strconv.Itoa(aapFake.last(computeInstanceProvisionTask).id)))
 		})
 
@@ -3213,6 +3231,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(res.RequeueAfter).To(BeZero())
 			Expect(capture.count).To(Equal(1))
 			failed := getCI(nn)
+			Expect(failed.Status.Jobs[0].LastFailure).NotTo(BeNil())
 			Expect(failed.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
 			expectCondition(failed, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonProvisioningFailed)
 			waitForCachedCI(reconciler, nn)
@@ -3225,6 +3244,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			gated := getCI(nn)
 			Expect(gated.Status.Jobs).To(HaveLen(1))
 			Expect(gated.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateFailed))
+			Expect(gated.Status.Jobs[0].LastFailure).To(BeNil())
 			Expect(gated.Status.Jobs[0].Attempt).To(Equal(int32(1)))
 			Expect(gated.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
 			cond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)

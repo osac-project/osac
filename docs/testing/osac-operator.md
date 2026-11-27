@@ -70,6 +70,15 @@ Fulfillment servers suite (see the
 readiness or packet continuity; deployed provider coverage remains
 [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
+### ComputeInstance retry-status projection
+
+Controller Envtest checks durable failure projection across real status-write
+conflicts and restart, using in-memory AAP and a Fulfillment client double.
+The combined Kind suite checks public feedback against deployed Fulfillment
+and PostgreSQL with an AAP recorder and fixture-controlled VM state. See the
+[suite boundary and commands](fulfillment-service.md#computeinstance-retry-status-projection)
+for prerequisites, timing bounds and the real-AAP follow-up.
+
 ## Bare-metal worker coverage ([DEV])
 
 Worker specs use the `baremetalworker` label in the `internal/controller/`

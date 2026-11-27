@@ -97,6 +97,55 @@ func (m *mockComputeInstancesClient) Signal(ctx context.Context, in *privatev1.C
 }
 
 var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
+
+	Context("provisioning failure feedback", func() {
+		DescribeTable("maps fixed safe failure data and explicitly clears it through update and delete", func(reason string, want privatev1.ComputeInstanceProvisioningFailureReason, message string) {
+			observed := metav1.NewTime(time.Date(2026, 11, 24, 8, 30, 0, 0, time.UTC))
+			obj := &osacv1alpha1.ComputeInstance{}
+			obj.Status.Phase = osacv1alpha1.ComputeInstancePhaseStarting
+			obj.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse,
+				"A provisioning retry is running.", "RetryRunning")
+			obj.Status.LastProvisioningFailure = &osacv1alpha1.ComputeInstanceProvisioningFailure{
+				Reason: reason, Message: message, Attempt: 2, ObservedAt: &observed,
+			}
+			remote := privatev1.ComputeInstance_builder{Status: privatev1.ComputeInstanceStatus_builder{}.Build()}.Build()
+			mock := &mockComputeInstancesClient{}
+			bridge := newComputeInstanceFeedbackBridge(k8sClient, mock)
+			Expect(bridge.SyncUpdate(context.Background(), obj, remote)).To(Succeed())
+			Expect(bridge.Save(context.Background(), remote)).To(Succeed())
+			mapped := mock.lastUpdate.GetStatus().GetLastProvisioningFailure()
+			Expect(mapped).NotTo(BeNil())
+			Expect(mapped.GetReason()).To(Equal(want))
+			Expect(mapped.GetMessage()).To(Equal(message))
+			Expect(mapped.GetAttempt()).To(Equal(int32(2)))
+			Expect(mapped.GetObservedAt().AsTime().Equal(observed.Time)).To(BeTrue())
+			Expect(mock.lastUpdateMask.GetPaths()).To(ContainElement("status.last_provisioning_failure"))
+			Expect(mock.lastUpdateMask.GetPaths()).NotTo(ContainElement("spec.disk_volume_ids"))
+			Expect(bridge.SyncUpdate(context.Background(), obj, remote)).To(Succeed())
+			Expect(remote.GetStatus().GetLastProvisioningFailure().GetObservedAt().AsTime().Equal(observed.Time)).To(BeTrue())
+			obj.Status.LastProvisioningFailure = nil
+			Expect(bridge.SyncUpdate(context.Background(), obj, remote)).To(Succeed())
+			Expect(remote.GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+			mock.updateError = grpcstatus.Error(codes.Aborted, "retry test update")
+			Expect(bridge.Save(context.Background(), remote)).To(HaveOccurred())
+			mock.updateError = nil
+			Expect(bridge.SyncUpdate(context.Background(), obj, remote)).To(Succeed())
+			Expect(bridge.Save(context.Background(), remote)).To(Succeed())
+			Expect(mock.lastUpdate.GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+			Expect(mock.lastUpdateMask.GetPaths()).To(ContainElement("status.last_provisioning_failure"))
+			remote.GetStatus().SetLastProvisioningFailure(mapped)
+			Expect(bridge.SyncDelete(context.Background(), obj, remote)).To(Succeed())
+			Expect(remote.GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+		},
+			Entry("provider", "ProviderReported", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED, "Provisioning failed."),
+			Entry("result", "ResultRejected", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_RESULT_REJECTED, "Internal error"),
+			Entry("timeout", "TimedOut", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT, "The provisioning attempt timed out."),
+			Entry("lost", "JobLost", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_LOST, "Internal error"),
+			Entry("not started", "JobNotStarted", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED, "Internal error"),
+			Entry("invalid", "InvalidResult", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT, "Internal error"),
+			Entry("infrastructure", "ProviderError", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR, "Internal error"),
+		)
+	})
 	const (
 		resourceName      = "test-ci"
 		vmNamespace       = "default"

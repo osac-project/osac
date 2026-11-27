@@ -102,6 +102,7 @@ func newComputeInstanceFeedbackBridge(hubClient clnt.Client, ciClient privatev1.
 					"status.external_ip_address", "status.internal_ip_address",
 					"status.compute_network_attachment_statuses", "status.last_restarted_at",
 					"status.instance_type", "status.instance_type_transition_time",
+					"status.last_provisioning_failure",
 				}},
 			}.Build())
 			return err
@@ -123,6 +124,7 @@ func syncComputeInstanceUpdate(ctx context.Context, obj *ckv1alpha1.ComputeInsta
 	syncCIIPAddresses(obj, remote)
 	syncCILastRestartedAt(obj, remote)
 	syncCIRunningInstanceType(obj, remote)
+	syncCIProvisioningFailure(obj, remote)
 	return nil
 }
 
@@ -341,4 +343,37 @@ func sameInstanceTypeRef(a, b *privatev1.InstanceTypeReference) bool {
 		return a.GetId() == b.GetId()
 	}
 	return a.GetName() != "" && a.GetName() == b.GetName()
+}
+
+func syncCIProvisioningFailure(obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
+	status := remote.GetStatus()
+	failure := obj.Status.LastProvisioningFailure
+	if failure == nil {
+		status.ClearLastProvisioningFailure()
+		return
+	}
+	reason := privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_UNSPECIFIED
+	message := failure.Message
+	switch failure.Reason {
+	case "ProviderReported":
+		reason = privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED
+	case "ResultRejected":
+		reason = privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_RESULT_REJECTED
+	case "TimedOut":
+		reason = privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT
+	case "JobLost":
+		reason = privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_LOST
+	case "JobNotStarted":
+		reason = privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED
+	case "InvalidResult":
+		reason = privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT
+	case "ProviderError":
+		reason = privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR
+	default:
+		message = "Internal error"
+	}
+	status.SetLastProvisioningFailure(privatev1.ComputeInstanceProvisioningFailure_builder{
+		Reason: reason, Message: message, Attempt: failure.Attempt,
+		ObservedAt: timestamppb.New(failure.ObservedAt.Time),
+	}.Build())
 }

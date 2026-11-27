@@ -30,6 +30,41 @@ a recording double; no provider, CSI, or VM execution. The operator-side
 boundary is in the [osac-operator guide](osac-operator.md); deployed disk
 identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
 
+### ComputeInstance retry-status projection
+
+The combined `compute-storage` suite extends the existing AAP HTTP recorder
+to report a retryable failure, hold the next job running, and then complete it.
+Public Get assertions cover `RetryScheduled`, `RetryRunning`, failure retention
+with the original timestamp, and explicit removal after success. The fixture
+then writes VM status to exercise `ProvisioningStorage` and
+`InfrastructureReady`; it does not run a VM, CSI or an AAP provisioning job.
+Kind's existing infrastructure setup installs permissive VirtualMachine and
+VirtualMachineInstance fixture CRDs. These schemas and fixture writes do not
+establish real KubeVirt admission, controller behavior or automatic VM/storage
+progression.
+
+Run from the repository root against an explicitly selected disposable Kind
+environment, with the current local images and manifests available:
+
+```bash
+make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage
+```
+
+The test polls public status once per second with a 60-second observation
+bound for each controllable transition. Retry launch has a separate five-minute
+bound to include the unchanged two-minute initial engine backoff. Jobs and
+VM/storage phases remain under fixture control until their public assertions
+pass. These are test bounds, not a production status-convergence SLA. Follow
+[multi-branch isolation](../MULTI-BRANCH-ISOLATION.md) before concurrent runs.
+
+Controller Envtest covers real Kubernetes write conflicts and checkpoint
+recovery with in-memory AAP and a Fulfillment client double. The deployed
+Fulfillment-only authorization case in
+`fulfillment-service/it/it_compute_instance_update_test.go` checks authorized
+Get/List, cross-tenant hiding and output-only failure ownership. Run that
+boundary with `SUITE=fulfillment`. Real AAP/KubeVirt lifecycle verification
+remains [OSAC-7812](https://redhat.atlassian.net/browse/OSAC-7812).
+
 ## Selecting coverage
 
 - CLI/API-only contracts belong in `it/`; complete provisioning journeys across

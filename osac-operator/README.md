@@ -29,6 +29,34 @@ custom resources and reconciles them to their desired state:
 - **Volume** (`vol`) — provisions block storage on vendor arrays via the
   VendorProvisioner interface (vendor CSI controllers).
 
+## ComputeInstance provisioning status
+
+The `Provisioned` condition reports `False/RetryScheduled` during retry
+backoff and `False/RetryRunning` while a retry with a saved failure is running.
+`status.lastProvisioningFailure` retains only the latest failure: its reason,
+fixed public message, failed attempt number and original observation time.
+The failed attempt number can differ from the current job's attempt number.
+Provider messages and operational job details are not public diagnostics.
+Manual management suppresses retry progress and clears stale retry conditions
+while preserving the latest failure details and saved job state. Returning to
+managed mode resumes normal retry handling.
+
+A terminal job failure reports `False/ProvisioningFailed` and retains its
+diagnostics. Job success clears the failure and retry reason, while
+`WaitingForVM` or `ProvisioningStorage` continues until the existing
+infrastructure check reports `True/InfrastructureReady`. Deletion and a new
+configuration clear the old failure without changing retry policy or power
+state semantics.
+
+The provision job checkpoint survives status conflicts and controller restart;
+reconciliation replays the same failure time or successful clearing. Legacy
+`Retrying` entries without a checkpoint report `RetryScheduled` without failure
+details. Running entries without a checkpoint keep ordinary progress, even
+when their attempt number is greater than one.
+
+Feedback synchronizes these values through the existing Fulfillment API.
+See [API status ownership](../fulfillment-service/docs/API.md#computeinstance-provisioning-failure-status).
+
 ## Configuration
 
 When connected to Fulfillment, the operator compares
@@ -115,6 +143,15 @@ Networking controllers launch one job template per network manager task:
 
 - `OSAC_MAX_JOB_HISTORY` — maximum number of job history entries to retain per
   resource (default: 10).
+
+ComputeInstance provision job entries may include an optional `lastFailure`
+checkpoint. It contains only a fixed reason and message, the failed attempt,
+and when the operator observed it. The latest checkpoint survives retry
+launches and controller restarts, and a new failure replaces it. Accepted
+success, deletion cancellation, or a desired-configuration rerun clears it.
+Older job entries have no checkpoint; OSAC does not infer historical failures
+from their attempt count or operational message. This field is internal to the
+ComputeInstance custom resource job status.
 
 ### Fulfillment service (gRPC)
 

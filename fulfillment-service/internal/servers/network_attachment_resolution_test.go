@@ -23,6 +23,16 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+const (
+	tenantDefaultNetworkingPendingDetail = "Default networking resources pending: ExternalIP/default-nat, " +
+		"NATGateway/default; no READY IPv4 ExternalIPPool"
+	tenantDefaultNetworkingPendingMessage = "tenant default networking is not ready: " +
+		tenantDefaultNetworkingPendingDetail + ". " +
+		"Retry shortly; if the problem persists, contact your cloud provider administrator."
 )
 
 var _ = Describe("Batched attachment SecurityGroup resolution", func() {
@@ -437,8 +447,10 @@ var _ = Describe("Network attachment default networking readiness gate", func() 
 		tenant := response.GetObject()
 		tenant.GetStatus().SetConditions([]*privatev1.TenantCondition{
 			privatev1.TenantCondition_builder{
-				Type:   privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
-				Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				Type:    privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+				Status:  privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				Reason:  proto.String("ResourcesPending"),
+				Message: proto.String(tenantDefaultNetworkingPendingDetail),
 			}.Build(),
 		})
 		_, err = tenants.Update().SetObject(tenant).Do(ctx)
@@ -475,6 +487,70 @@ var _ = Describe("Network attachment default networking readiness gate", func() 
 			source:            "spec.network_attachments[0]",
 		})
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-		Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant default networking is not ready"))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal(tenantDefaultNetworkingPendingMessage))
 	})
+
+	It("reports a tenant that doesn't exist", func() {
+		err := requireDefaultNetworkingReady(ctx, fixtureDAO[*privatev1.Tenant](), "missing-tenant")
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant 'missing-tenant' doesn't exist"))
+	})
+
+	DescribeTable("explains why the tenant default networking is not ready",
+		func(tenant *privatev1.Tenant, expected string) {
+			err := tenantDefaultNetworkingError(tenant)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(expected))
+		},
+		Entry("pending without a ready pool",
+			tenantWithDefaultNetworkingCondition("ResourcesPending", tenantDefaultNetworkingPendingDetail),
+			tenantDefaultNetworkingPendingMessage),
+		Entry("failed without pool capacity",
+			tenantWithDefaultNetworkingCondition("ResourceFailed", "no READY IPv4 ExternalIPPool has capacity"),
+			"tenant default networking is not ready: no READY IPv4 ExternalIPPool has capacity. "+
+				"Contact your cloud provider administrator to repair the default networking resources or add "+
+				"external IP capacity."),
+		Entry("tenant being deleted",
+			tenantWithDefaultNetworkingCondition("Deleting",
+				"Deleting the default networking resources: Subnet/default-ipv4"),
+			"tenant default networking is not ready: the tenant is being deleted; retry after the tenant is "+
+				"recreated"),
+		Entry("tenant marked for deletion",
+			privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:              testTenant,
+					DeletionTimestamp: timestamppb.Now(),
+				}.Build(),
+			}.Build(),
+			"tenant default networking is not ready: the tenant is being deleted; retry after the tenant is "+
+				"recreated"),
+		Entry("condition without a message",
+			tenantWithDefaultNetworkingCondition("ResourcesPending", ""),
+			"tenant default networking is not ready: ResourcesPending. Retry shortly; if the problem persists, "+
+				"contact your cloud provider administrator."),
+		Entry("readiness not reported yet",
+			privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{Name: testTenant}.Build(),
+			}.Build(),
+			"tenant default networking is not ready: the tenant has not reported default networking readiness "+
+				"yet. Retry shortly; if the problem persists, contact your cloud provider administrator."),
+	)
 })
+
+// tenantWithDefaultNetworkingCondition returns a tenant whose DefaultNetworkingReady condition has the given
+// reason and message.
+func tenantWithDefaultNetworkingCondition(reason, message string) *privatev1.Tenant {
+	return privatev1.Tenant_builder{
+		Metadata: privatev1.Metadata_builder{Name: testTenant}.Build(),
+		Status: privatev1.TenantStatus_builder{
+			Conditions: []*privatev1.TenantCondition{
+				privatev1.TenantCondition_builder{
+					Type:    privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+					Status:  privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					Reason:  proto.String(reason),
+					Message: proto.String(message),
+				}.Build(),
+			},
+		}.Build(),
+	}.Build()
+}

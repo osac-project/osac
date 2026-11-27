@@ -8851,8 +8851,10 @@ var _ = Describe("Private clusters server", func() {
 				tenant := tenantResponse.GetObject()
 				tenant.GetStatus().SetConditions([]*privatev1.TenantCondition{
 					privatev1.TenantCondition_builder{
-						Type:   privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
-						Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+						Type:    privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+						Status:  privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+						Reason:  proto.String("ResourcesPending"),
+						Message: proto.String(tenantDefaultNetworkingPendingDetail),
 					}.Build(),
 				})
 				_, err = tenantDao.Update().SetObject(tenant).Do(ctx)
@@ -8870,7 +8872,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(response).To(BeNil())
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-				Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant default networking is not ready"))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal(tenantDefaultNetworkingPendingMessage))
 
 				listed, err := server.List(ctx, privatev1.ClustersListRequest_builder{
 					Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),

@@ -41,11 +41,11 @@ func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterO
 
 	// InfraEnv object, UID evidence and current artifact evidence: one observation
 	// per invocation. Creating the object, replacing stale Ready evidence or
-	// persisting a stale-worker classification is a durable boundary; a missing
-	// creation prerequisite, an unknown lookup or a foreign object is held so
-	// existing-worker work still runs.
+	// persisting a stale-worker classification is a durable boundary. A failed
+	// write at this boundary also stops the pass; prerequisite waits and held
+	// observation errors below still allow existing-worker work.
 	infra, infraRes, infraMutated, infraBoundaryErr := r.observeInfraEnvEvidence(ctx, co, cluster)
-	if infraMutated {
+	if infraMutated || infraBoundaryErr != nil {
 		return infraRes, infraBoundaryErr
 	}
 
@@ -80,9 +80,9 @@ func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterO
 		return ctrl.Result{}, creationErr
 	}
 	if !finishRes.IsZero() {
-		return finishRes, nil
+		return mergeWorkerWaits(infraRes, creationRes, finishRes), nil
 	}
-	return mergeWorkerWaits(creationRes, r.workerRecheckDeadline(co.Status.Workers, time.Now())), nil
+	return mergeWorkerWaits(infraRes, creationRes, r.workerRecheckDeadline(co.Status.Workers, time.Now())), nil
 }
 
 // mergeWorkerWaits keeps the earliest positive recheck delay, clamped so a

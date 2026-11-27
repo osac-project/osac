@@ -184,8 +184,9 @@ var _ = Describe("Worker observation read budget", func() {
 			a.SetLabels(map[string]string{infraEnvAgentLabel: co.Name + infraEnvNameSuffix})
 			_ = unstructured.SetNestedSlice(a.Object, []interface{}{map[string]interface{}{"macAddress": "aa"}}, "status", "inventory", "interfaces")
 			Expect(r.Create(context.Background(), a)).To(Succeed())
-			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-			Expect(err).To(HaveOccurred(), "expected pull-secret gate for unchanged observation")
+			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}), "expected a wait at the pull-secret gate")
 			wantGets := 0
 			if omitted {
 				wantGets = 1
@@ -426,9 +427,14 @@ var _ = It("cleans up workers without image or ignition prerequisites", func() {
 
 	// Cleanup proceeds on the next invocation even though the missing pull secret
 	// is still reported, and it never fetches discovery ignition.
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)}); err == nil {
-		Fail("missing pull secret was not reported")
-	}
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+	Expect(r.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+	cond := apimeta.FindStatusCondition(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)
+	Expect(cond).NotTo(BeNil())
+	Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+	Expect(cond.Reason).To(Equal("PullSecretMissing"))
 	Expect(blocked.deletes).To(HaveLen(1), "cleanup did not request BMI deletion: %v", blocked.deletes)
 	Expect(blocked.deletes[0]).To(Equal("excess-id"), "cleanup did not request BMI deletion: %v", blocked.deletes)
 	Expect(ignition.calls).To(Equal(0), "cleanup fetched ignition or created a BMI: ignition=%d creates=%v", ignition.calls, blocked.names)
@@ -544,11 +550,10 @@ var _ = It("makes independent progress across mixed worker states", func() {
 	}
 })
 
-var _ = It("persists the worker summary before checking Create prerequisites", func() {
+var _ = It("persists the worker summary while creation waits for the disk image", func() {
 	ctx := context.Background()
 	r, base, co := workerReadHarness()
-	imageErr := status.Error(codes.NotFound, "disk image unavailable")
-	blocked := &r04PrereqClient{workerReadClient: base, imageErr: imageErr}
+	blocked := &r04PrereqClient{workerReadClient: base, imageErr: status.Error(codes.NotFound, "disk image unavailable")}
 	r.fulfillment = blocked
 	r.ignition = &countingIgnition{}
 	blocked.listed = []*privatev1.BareMetalInstance{ownedBMIFixture(co, "recorded-bmi", "recorded-id")}
@@ -565,9 +570,11 @@ var _ = It("persists the worker summary before checking Create prerequisites", f
 	createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", "http://ignition.test"))
 	co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "ready", reasonInfraEnvReady)
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
-	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-	Expect(errors.Is(err, imageErr)).To(BeTrue(), "error=%v, want the blocked image lookup", err)
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(res).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}))
 	Expect(r.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(apimeta.IsStatusConditionTrue(co.Status.Conditions, v1alpha1.ConditionRHCOSImageNotFound)).To(BeTrue())
 	Expect(co.Status.ReadyWorkers).NotTo(BeNil(), "stale ready summary was not demoted before the create gate: %+v", co.Status)
 	Expect(*co.Status.ReadyWorkers).To(Equal(int32(0)), "stale ready summary was not demoted before the create gate: %+v", co.Status)
 	Expect(co.Status.DesiredWorkers).NotTo(BeNil(), "aggregate counts were not persisted: %+v", co.Status)
@@ -920,9 +927,14 @@ func workerCreationHarness() (*Reconciler, *workerReadClient, *v1alpha1.ClusterO
 
 type workerImageClient struct {
 	*workerReadClient
+	versionErr error
+	imageErr   error
 }
 
 func (c *workerImageClient) GetClusterVersion(context.Context, string) (*privatev1.ClusterVersion, error) {
+	if c.versionErr != nil {
+		return nil, c.versionErr
+	}
 	return privatev1.ClusterVersion_builder{
 		Id: "cv",
 		Spec: privatev1.ClusterVersionSpec_builder{
@@ -932,8 +944,35 @@ func (c *workerImageClient) GetClusterVersion(context.Context, string) (*private
 }
 
 func (c *workerImageClient) GetDiskImage(context.Context, string) (*privatev1.DiskImage, error) {
+	if c.imageErr != nil {
+		return nil, c.imageErr
+	}
 	return privatev1.DiskImage_builder{Id: "image"}.Build(), nil
 }
+
+var _ = DescribeTable("preserves image prerequisite lookup errors other than NotFound",
+	func(versionLookup bool, lookupErr error) {
+		ctx := context.Background()
+		r, fc, co := workerCreationHarness()
+		createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", "http://ignition.test"))
+		catalog := &workerImageClient{workerReadClient: fc}
+		if versionLookup {
+			catalog.versionErr = lookupErr
+		} else {
+			catalog.imageErr = lookupErr
+		}
+		r.fulfillment = catalog
+
+		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+		Expect(err).To(MatchError(lookupErr))
+		Expect(res.IsZero()).To(BeTrue())
+		Expect(fc.names).To(BeEmpty())
+		Expect(r.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+		Expect(apimeta.FindStatusCondition(co.Status.Conditions, v1alpha1.ConditionRHCOSImageNotFound)).To(BeNil())
+	},
+	Entry("version lookup forbidden", true, status.Error(codes.PermissionDenied, "version lookup forbidden")),
+	Entry("image lookup fails", false, status.Error(codes.Internal, "image lookup failed")),
+)
 
 var _ = Describe("Worker discovery ignition prerequisites", func() {
 	It("waits for a discovery ignition URL before creating a BMI", func() {
@@ -970,7 +1009,7 @@ var _ = Describe("Worker discovery ignition prerequisites", func() {
 		Entry("fetch timeout", context.DeadlineExceeded),
 	)
 
-	It("recovers on retry when its invalid-ignition condition updates are filtered", func() {
+	It("recovers on a fixed retry when its invalid-ignition condition updates are filtered", func() {
 		ctx := context.Background()
 		r, fc, co := workerCreationHarness()
 		r.fulfillment = &workerImageClient{workerReadClient: fc}
@@ -986,8 +1025,8 @@ var _ = Describe("Worker discovery ignition prerequisites", func() {
 
 		before := co.DeepCopy()
 		res, err := r.Reconcile(ctx, request)
-		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
-		Expect(res.IsZero()).To(BeTrue())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}))
 		Expect(r.Get(ctx, request.NamespacedName, co)).To(Succeed())
 		Expect(filter.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: co})).To(BeFalse())
 		cond := apimeta.FindStatusCondition(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)
@@ -1000,8 +1039,8 @@ var _ = Describe("Worker discovery ignition prerequisites", func() {
 		counter := &statusPatchCountingClient{Client: r.Client}
 		r.Client = counter
 		res, err = r.Reconcile(ctx, request)
-		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
-		Expect(res.IsZero()).To(BeTrue())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}))
 		Expect(counter.patches).To(BeZero(), "unchanged blocked evidence wrote status")
 
 		// Only the external response changes; explicit calls represent scheduled retries.

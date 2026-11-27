@@ -6,9 +6,12 @@ package baremetalworker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -33,6 +36,7 @@ const (
 	infraEnvRequeueInterval          = 30 * time.Second
 	eventReasonIgnitionSizeWarning   = "DiscoveryIgnitionSizeWarning"
 	reasonInfraEnvReady              = "InfraEnvReady"
+	reasonPullSecretMissing          = "PullSecretMissing"
 	reasonIgnitionPending            = "IgnitionPending"
 	reasonIgnitionInvalid            = "IgnitionInvalid"
 	reasonIgnitionPendingMessage     = "waiting for discovery ignition URL"
@@ -40,14 +44,14 @@ const (
 	eventReasonStaleIgnition         = "StaleIgnition"
 	reasonInfraEnvRecreated          = "InfraEnvRecreated"
 	reasonStaleIgnitionWorkersMarked = "StaleIgnitionWorkersMarked"
-	sshKeyResolutionRetry            = time.Minute
 )
 
+var errSSHPublicKeyMissing = errors.New("has no public_key data")
+
 // infraEnvEvidence is the invocation-local result of the single InfraEnv
-// observation. object is nil only when absence was authoritative (an uncached
-// read confirmed NotFound). err is an unknown result or a missing creation
-// prerequisite and is never treated as absence: it can hold the invocation's
-// error for the caller to merge after prerequisite-free work has converged.
+// observation. A nil object without an error means absence was authoritative
+// (an uncached read confirmed NotFound). An error is held for the caller to
+// surface after prerequisite-free work has converged.
 type infraEnvEvidence struct {
 	object *unstructured.Unstructured
 	err    error
@@ -59,9 +63,8 @@ type infraEnvEvidence struct {
 // the disk image belong to the stage that needs them. A durable write made here
 // (creating the object, replacing stale Ready evidence, or persisting a
 // stale-worker classification) reports mutated=true and ends the invocation; a
-// missing creation prerequisite, an unknown lookup or a foreign object is
-// returned as evidence.err for the caller to merge, never as a global gate on
-// existing-worker work.
+// missing creation prerequisite reports a fixed wait; an unknown lookup or a
+// foreign object is returned as evidence.err. Neither gates existing-worker work.
 func (r *Reconciler) observeInfraEnvEvidence(
 	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 ) (infraEnvEvidence, ctrl.Result, bool, error) {
@@ -183,7 +186,7 @@ func (r *Reconciler) deriveInfraEnvPending(
 // cleared first, so a replacement object never inherits a stale success and the
 // reset survives a missing pull secret. The pull secret and the owned,
 // deterministically named InfraEnv are then created; that Create is the durable
-// boundary. A missing prerequisite is returned as held evidence instead.
+// boundary. A missing prerequisite returns a fixed wait instead.
 func (r *Reconciler) createMissingInfraEnv(
 	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 ) (infraEnvEvidence, ctrl.Result, bool, error) {
@@ -201,20 +204,30 @@ func (r *Reconciler) createMissingInfraEnv(
 			return infraEnvEvidence{}, ctrl.Result{}, false, err
 		}
 	}
-	if err := r.ensurePullSecret(ctx, co); err != nil {
+	pullSecretReady, err := r.ensurePullSecret(ctx, co)
+	if err != nil {
 		return infraEnvEvidence{err: fmt.Errorf("ensuring pull secret: %w", err)}, ctrl.Result{}, false, nil
 	}
-	// Resolve the Cluster's registered SSH-key Secret only now, immediately
-	// before the InfraEnv Create. Key material goes into the InfraEnv spec and
-	// nowhere else. A resolution failure holds creation with a recoverable
-	// condition identifying the Secret by ID only.
-	sshAuthorizedKey, keyErr := r.resolveClusterSSHAuthorizedKey(ctx, co, cluster)
+	if !pullSecretReady {
+		if err := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, reasonPullSecretMissing,
+			"no pull secret available (neither spec.pullSecret nor templateParameters.pull_secret)"); err != nil {
+			return infraEnvEvidence{}, ctrl.Result{}, false, err
+		}
+		return infraEnvEvidence{}, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, false, nil
+	}
+	// Resolve the Cluster's registered SSH-key Secret immediately before the
+	// InfraEnv Create. Key material goes into the InfraEnv spec and nowhere else.
+	sshAuthorizedKey, keyErr := r.resolveClusterSSHAuthorizedKey(ctx, cluster)
 	if keyErr != nil {
+		id := cluster.GetSpec().GetSshKey().GetId()
 		if condErr := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, v1alpha1.ReasonSSHKeyResolutionPending,
-			keyErr.Error()); condErr != nil {
+			fmt.Sprintf("waiting for a usable SSH key from Secret %q", id)); condErr != nil {
 			return infraEnvEvidence{}, ctrl.Result{}, false, condErr
 		}
-		return infraEnvEvidence{err: keyErr}, ctrl.Result{RequeueAfter: sshKeyResolutionRetry}, false, nil
+		if status.Code(keyErr) == codes.NotFound || errors.Is(keyErr, errSSHPublicKeyMissing) {
+			return infraEnvEvidence{}, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, false, nil
+		}
+		return infraEnvEvidence{err: keyErr}, ctrl.Result{}, false, nil
 	}
 	infraEnv, err := r.buildInfraEnv(co, key.Name, sshAuthorizedKey)
 	if err != nil {
@@ -233,9 +246,9 @@ func (r *Reconciler) createMissingInfraEnv(
 
 // fetchDiscoveryIgnition is the create stage's input reader: it fetches and
 // validates the observed InfraEnv's discovery ignition and reports Ready only for
-// bytes it actually verified. A missing URL reports pending evidence and waits.
-// Invalid JSON reports blocked evidence and an error; fetch and status-write
-// failures also remain errors.
+// bytes it actually verified. A missing URL or invalid JSON reports the current
+// condition and waits on a fixed retry. Fetch and status-write failures remain
+// errors.
 func (r *Reconciler) fetchDiscoveryIgnition(
 	ctx context.Context, co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured,
 ) ([]byte, ctrl.Result, error) {
@@ -261,7 +274,8 @@ func (r *Reconciler) fetchDiscoveryIgnition(
 			"discovery ignition is not valid JSON"); err != nil {
 			return nil, ctrl.Result{}, err
 		}
-		return nil, ctrl.Result{}, fmt.Errorf("discovery ignition for %s is not valid JSON", key)
+		// The response can be repaired at the same URL without a watched event.
+		return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
 	}
 	if len(ignition) > ignitionSizeWarningThreshold {
 		r.recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonIgnitionSizeWarning, "FetchIgnition",
@@ -278,16 +292,19 @@ func (r *Reconciler) fetchDiscoveryIgnition(
 
 // ensurePullSecret ensures the pull secret K8s Secret referenced by the InfraEnv exists.
 // It checks co.Spec.PullSecret first, then falls back to extracting the pull_secret key
-// from co.Spec.TemplateParameters (a JSON-encoded map).
-func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterOrder) error {
+// from co.Spec.TemplateParameters (a JSON-encoded map). False with no error means
+// neither the Secret nor its inputs exist yet.
+func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterOrder) (bool, error) {
 	secretName := co.Name + pullSecretNameSuffix
 	key := client.ObjectKey{Name: secretName, Namespace: co.Namespace}
 
 	existing := &corev1.Secret{}
-	if err := r.Get(ctx, key, existing); err == nil {
-		return nil
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("checking pull secret %s: %w", key, err)
+	err := r.Get(ctx, key, existing)
+	if err == nil {
+		return true, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("checking pull secret %s: %w", key, err)
 	}
 
 	pullSecret := co.Spec.PullSecret
@@ -300,7 +317,7 @@ func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterO
 		}
 	}
 	if pullSecret == "" {
-		return fmt.Errorf("no pull secret available on ClusterOrder %s (neither spec.pullSecret nor templateParameters.pull_secret)", co.Name)
+		return false, nil
 	}
 
 	secret := &corev1.Secret{
@@ -314,27 +331,24 @@ func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterO
 		},
 	}
 	if err := controllerutil.SetControllerReference(co, secret, r.scheme); err != nil {
-		return fmt.Errorf("setting pull secret owner reference: %w", err)
+		return false, fmt.Errorf("setting pull secret owner reference: %w", err)
 	}
 	if err := r.Create(ctx, secret); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			return nil
+			return true, nil
 		}
-		return fmt.Errorf("creating pull secret %s: %w", key, err)
+		return false, fmt.Errorf("creating pull secret %s: %w", key, err)
 	}
 	ctrllog.FromContext(ctx).Info("created pull secret for InfraEnv", "secret", key.String())
-	return nil
+	return true, nil
 }
 
 // resolveClusterSSHAuthorizedKey resolves the Cluster's registered SSH-key
 // Secret through the fulfillment private API and returns its public-key
-// material for the InfraEnv. The tenant comes from the ClusterOrder
-// annotation. A nil Cluster reference or an empty Secret ID returns an empty
-// string so the provider default remains available. Resolution failures are
-// returned so the caller can hold creation with a recoverable condition; error
-// messages identify the Secret by ID only and never carry key material.
+// material for the InfraEnv. A nil Cluster reference or an empty Secret ID
+// returns an empty string so the provider default remains available.
 func (r *Reconciler) resolveClusterSSHAuthorizedKey(
-	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
+	ctx context.Context, cluster *privatev1.Cluster,
 ) (string, error) {
 	if cluster == nil || cluster.GetSpec().GetSshKey().GetId() == "" {
 		return "", nil
@@ -349,7 +363,7 @@ func (r *Reconciler) resolveClusterSSHAuthorizedKey(
 	}
 	key := string(response.GetObject().GetData()["public_key"])
 	if key == "" {
-		return "", fmt.Errorf("SSH key Secret %q has no public_key data", id)
+		return "", fmt.Errorf("SSH key Secret %q %w", id, errSSHPublicKeyMissing)
 	}
 	return key, nil
 }

@@ -23,13 +23,16 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -45,7 +48,7 @@ type stubWorkerSecretsClient struct {
 func (s *stubWorkerSecretsClient) Get(_ context.Context, in *privatev1.SecretsGetRequest, _ ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
 	s.requests = append(s.requests, in.GetId())
 	if s.err != nil {
-		return nil, status.Error(codes.NotFound, s.err.Error())
+		return nil, s.err
 	}
 	return privatev1.SecretsGetResponse_builder{
 		Object: privatev1.Secret_builder{
@@ -88,54 +91,54 @@ func sshFlowHarness(clusterSSHKey *privatev1.SecretReference, orderSSHKey *v1alp
 var _ = Describe("Cluster SSH key reference flow", func() {
 	Describe("resolveClusterSSHAuthorizedKey", func() {
 		It("resolves the registered Secret material for the order tenant", func() {
-			r, _, co, cluster := sshFlowHarness(
+			r, _, _, cluster := sshFlowHarness(
 				privatev1.SecretReference_builder{Id: "key-id"}.Build(),
 				&v1alpha1.FulfillmentSecretReference{ID: "key-id"})
 			secrets := &stubWorkerSecretsClient{key: sshFlowKeyMaterial}
 			r.SetSecretsClient(secrets)
 
-			key, err := r.resolveClusterSSHAuthorizedKey(context.Background(), co, cluster)
+			key, err := r.resolveClusterSSHAuthorizedKey(context.Background(), cluster)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(key).To(Equal(sshFlowKeyMaterial))
 			Expect(secrets.requests).To(ConsistOf("key-id"))
 		})
 
 		It("returns an empty key when the Cluster has no reference", func() {
-			r, _, co, cluster := sshFlowHarness(nil, nil)
+			r, _, _, cluster := sshFlowHarness(nil, nil)
 			r.SetSecretsClient(&stubWorkerSecretsClient{})
 
-			key, err := r.resolveClusterSSHAuthorizedKey(context.Background(), co, cluster)
+			key, err := r.resolveClusterSSHAuthorizedKey(context.Background(), cluster)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(key).To(BeEmpty())
 		})
 
 		It("fails when the Secret cannot be resolved", func() {
-			r, _, co, cluster := sshFlowHarness(
+			r, _, _, cluster := sshFlowHarness(
 				privatev1.SecretReference_builder{Id: "missing-key"}.Build(),
 				&v1alpha1.FulfillmentSecretReference{ID: "missing-key"})
-			r.SetSecretsClient(&stubWorkerSecretsClient{err: errors.New("ssh key secret 'missing-key' not found")})
+			r.SetSecretsClient(&stubWorkerSecretsClient{err: status.Error(codes.NotFound, "ssh key secret 'missing-key' not found")})
 
-			_, err := r.resolveClusterSSHAuthorizedKey(context.Background(), co, cluster)
+			_, err := r.resolveClusterSSHAuthorizedKey(context.Background(), cluster)
 			Expect(err).To(MatchError(ContainSubstring("missing-key")))
 			Expect(err.Error()).NotTo(ContainSubstring(sshFlowKeyMaterial))
 		})
 
 		It("fails when the resolved Secret has no public key", func() {
-			r, _, co, cluster := sshFlowHarness(
+			r, _, _, cluster := sshFlowHarness(
 				privatev1.SecretReference_builder{Id: "empty-key"}.Build(),
 				&v1alpha1.FulfillmentSecretReference{ID: "empty-key"})
 			r.SetSecretsClient(&stubWorkerSecretsClient{})
 
-			_, err := r.resolveClusterSSHAuthorizedKey(context.Background(), co, cluster)
+			_, err := r.resolveClusterSSHAuthorizedKey(context.Background(), cluster)
 			Expect(err).To(MatchError(ContainSubstring("empty-key")))
 		})
 
 		It("fails when no Secrets client is configured", func() {
-			r, _, co, cluster := sshFlowHarness(
+			r, _, _, cluster := sshFlowHarness(
 				privatev1.SecretReference_builder{Id: "key-id"}.Build(),
 				&v1alpha1.FulfillmentSecretReference{ID: "key-id"})
 
-			_, err := r.resolveClusterSSHAuthorizedKey(context.Background(), co, cluster)
+			_, err := r.resolveClusterSSHAuthorizedKey(context.Background(), cluster)
 			Expect(err).To(MatchError(ContainSubstring("not configured")))
 		})
 	})
@@ -201,29 +204,68 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 		})
 	})
 
-	Describe("createMissingInfraEnv", func() {
-		It("holds InfraEnv creation with a recoverable condition when the Secret is missing", func() {
-			r, _, co, cluster := sshFlowHarness(
-				privatev1.SecretReference_builder{Id: "missing-key"}.Build(),
-				&v1alpha1.FulfillmentSecretReference{ID: "missing-key"})
-			r.SetSecretsClient(&stubWorkerSecretsClient{err: errors.New("ssh key secret 'missing-key' not found")})
-			// The pull secret must resolve so the SSH key is the only blocker.
+	Describe("InfraEnv SSH-key prerequisites", func() {
+		setUpOrder := func() (*Reconciler, *v1alpha1.ClusterOrder) {
+			GinkgoHelper()
+			r, _, co, _ := sshFlowHarness(
+				privatev1.SecretReference_builder{Id: "pending-key"}.Build(),
+				&v1alpha1.FulfillmentSecretReference{ID: "pending-key"})
 			co.Spec.PullSecret = `{"auths":{}}`
+			co.Finalizers = []string{bmWorkerFinalizer}
+			Expect(r.Update(context.Background(), co)).To(Succeed())
+			return r, co
+		}
 
-			evidence, result, _, err := r.createMissingInfraEnv(context.Background(), co, cluster)
+		DescribeTable("requeues InfraEnv creation until the referenced SSH key becomes usable", func(secretErr error) {
+			ctx := context.Background()
+			r, co := setUpOrder()
+			secrets := &stubWorkerSecretsClient{err: secretErr}
+			r.SetSecretsClient(secrets)
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)}
+			ie := assistedservice.NewInfraEnvObject()
+			ieKey := client.ObjectKey{Name: assistedservice.InfraEnvName(co.Name), Namespace: co.Namespace}
+
+			result, err := r.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(evidence.err).To(MatchError(ContainSubstring("missing-key")))
-			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-
-			// The condition is persisted on the stored order; read it back.
-			stored := &v1alpha1.ClusterOrder{}
-			Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), stored)).To(Succeed())
-			cond := conditionOfType(stored, v1alpha1.ConditionInfraEnvReady)
+			Expect(result).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}))
+			Expect(apierrors.IsNotFound(r.Get(ctx, ieKey, ie))).To(BeTrue(), "no InfraEnv should be created without the referenced key")
+			Expect(r.Get(ctx, req.NamespacedName, co)).To(Succeed())
+			cond := conditionOfType(co, v1alpha1.ConditionInfraEnvReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal(v1alpha1.ReasonSSHKeyResolutionPending))
-			Expect(cond.Message).To(ContainSubstring("missing-key"))
+			Expect(cond.Message).To(ContainSubstring("pending-key"))
 			Expect(cond.Message).NotTo(ContainSubstring(sshFlowKeyMaterial))
+
+			secrets.err, secrets.key = nil, sshFlowKeyMaterial
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Get(ctx, ieKey, ie)).To(Succeed())
+			key, found, err := unstructuredString(ie.Object, "spec", "sshAuthorizedKey")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(key).To(Equal(sshFlowKeyMaterial))
+		},
+			Entry("lookup returns NotFound", status.Error(codes.NotFound, "secret not found")),
+			Entry("Secret has no public key", nil),
+		)
+
+		It("returns operational Secrets API failures for backoff", func() {
+			r, co := setUpOrder()
+			lookupErr := status.Error(codes.Unavailable, "secrets service unavailable")
+			r.SetSecretsClient(&stubWorkerSecretsClient{err: lookupErr})
+			result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+			Expect(err).To(MatchError(lookupErr))
+			Expect(result.IsZero()).To(BeTrue())
+		})
+
+		It("surfaces a failed prerequisite condition write instead of reporting a wait", func() {
+			r, co := setUpOrder()
+			r.SetSecretsClient(&stubWorkerSecretsClient{err: status.Error(codes.NotFound, "secret not found")})
+			r.Client = &bmiConflictClient{Client: r.Client, beforePatch: func() {}}
+			result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+			Expect(apierrors.IsConflict(err)).To(BeTrue(), "condition-write conflict must be propagated: %v", err)
+			Expect(result.IsZero()).To(BeTrue())
 		})
 
 		It("creates the InfraEnv with the resolved key when the Secret resolves", func() {

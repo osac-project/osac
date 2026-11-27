@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -362,39 +363,131 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(err).To(HaveOccurred(), "an unmanaged ClusterOrder must be skipped (no InfraEnv)")
 	})
 
-	It("reports invalid discovery ignition as an error and recovers when HTTP content is repaired", func() {
+	It("keeps a fixed retry for invalid discovery ignition and recovers after HTTP-only repair", func() {
 		preloadDiskImageChain()
-		create(newBareMetalClusterOrder("bmw-invalid-ignition"))
+		const name = "bmw-invalid-ignition"
+		create(newBareMetalClusterOrder(name))
 		ign.SetContent([]byte("not-json"))
 
-		_, err := runReconcile("bmw-invalid-ignition")
+		_, err := runReconcile(name)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(setWorkerIgnitionURL(ctx, "bmw-invalid-ignition-infraenv", testNamespace, ign.URL())).To(Succeed())
+		Expect(setWorkerIgnitionURL(ctx, name+"-infraenv", testNamespace, ign.URL())).To(Succeed())
 
-		res, err := runReconcile("bmw-invalid-ignition")
-		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
-		Expect(res.IsZero()).To(BeTrue())
-		Expect(fc.CreateCalls()).To(BeEmpty())
-		blocked := getClusterOrder("bmw-invalid-ignition")
+		res, err := runReconcile(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}))
+		blocked := getClusterOrder(name)
 		cond := apimeta.FindStatusCondition(blocked.Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
 		Expect(cond).NotTo(BeNil())
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		Expect(cond.Reason).To(Equal("IgnitionInvalid"))
 
-		res, err = runReconcile("bmw-invalid-ignition")
-		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
-		Expect(res.IsZero()).To(BeTrue())
-		Expect(getClusterOrder("bmw-invalid-ignition").ResourceVersion).To(Equal(blocked.ResourceVersion),
+		// Drive successive retries without sleeping or changing any Kubernetes inputs.
+		const attempts = 20
+		for i := 1; i < attempts; i++ {
+			res, err := runReconcile(name)
+			Expect(err).NotTo(HaveOccurred(), "attempt %d", i+1)
+			Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}), "attempt %d", i+1)
+		}
+		Expect(ign.Calls()).To(Equal(attempts))
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(getClusterOrder(name).ResourceVersion).To(Equal(blocked.ResourceVersion),
 			"unchanged invalid content must leave status unchanged")
 
-		// Repair the response at the same URL, leaving Kubernetes inputs untouched.
+		// The next scheduled reconcile sees the repaired response at the same URL.
 		ign.SetContent(defaultIgnition)
-		_, err = runReconcile("bmw-invalid-ignition")
+		_, err = runReconcile(name)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fc.CreateCalls()).To(HaveLen(1))
 		Expect(apimeta.IsStatusConditionTrue(
-			getClusterOrder("bmw-invalid-ignition").Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)).To(BeTrue())
+			getClusterOrder(name).Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)).To(BeTrue())
+
+		_, err = runReconcile(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fc.CreateCalls()).To(HaveLen(1), "recovery must not allocate a duplicate worker")
 	})
+
+	It("retries a missing pull secret and creates the InfraEnv when the Secret appears", func() {
+		preloadDiskImageChain()
+		co := newBareMetalClusterOrder("bmw-no-pull-secret")
+		co.Spec.PullSecret = ""
+		create(co)
+
+		ie := newInfraEnv(co.Name + "-infraenv")
+		for range 2 {
+			res, err := runReconcile(co.Name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}))
+			cond := apimeta.FindStatusCondition(getClusterOrder(co.Name).Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("PullSecretMissing"))
+			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(ie), ie))).To(BeTrue())
+		}
+		Expect(fc.CreateCalls()).To(BeEmpty())
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: co.Name + "-pull-secret", Namespace: co.Namespace},
+			Type:       corev1.SecretTypeDockerConfigJson,
+			Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte(`{"auths":{}}`)},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).To(Succeed()) })
+		_, err := runReconcile(co.Name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(ie), ie)).To(Succeed())
+		cond := apimeta.FindStatusCondition(getClusterOrder(co.Name).Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Reason).To(Equal("IgnitionPending"))
+	})
+
+	DescribeTable("retries a missing image prerequisite until the Fulfillment catalog is repaired",
+		func(name, message string, block func(*workerFulfillmentStub)) {
+			preloadDiskImageChain()
+			block(fc)
+			create(newBareMetalClusterOrder(name))
+			_, err := runReconcile(name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(setWorkerIgnitionURL(ctx, name+"-infraenv", testNamespace, ign.URL())).To(Succeed())
+
+			for range 2 {
+				res, err := runReconcile(name)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}))
+				cond := apimeta.FindStatusCondition(getClusterOrder(name).Status.Conditions, osacv1alpha1.ConditionRHCOSImageNotFound)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+				Expect(cond.Message).To(ContainSubstring(message))
+				Expect(fc.CreateCalls()).To(BeEmpty())
+			}
+
+			// No Kubernetes input changed: the next retry sees the restored catalog.
+			preloadDiskImageChain()
+			_, err = runReconcile(name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fc.CreateCalls()).To(HaveLen(1))
+			Expect(apimeta.IsStatusConditionFalse(getClusterOrder(name).Status.Conditions,
+				osacv1alpha1.ConditionRHCOSImageNotFound)).To(BeTrue())
+		},
+		Entry("missing version reference", "bmw-no-version-ref", "has no version reference", func(fc *workerFulfillmentStub) {
+			cluster, err := fc.GetCluster(ctx, clusterUUID)
+			Expect(err).NotTo(HaveOccurred())
+			cluster.GetSpec().ClearVersion()
+			fc.AddCluster(cluster)
+		}),
+		Entry("missing ClusterVersion", "bmw-no-version", "ClusterVersion", func(fc *workerFulfillmentStub) {
+			cluster, err := fc.GetCluster(ctx, clusterUUID)
+			Expect(err).NotTo(HaveOccurred())
+			cluster.GetSpec().SetVersion(privatev1.ClusterVersionReference_builder{Id: "missing-version"}.Build())
+			fc.AddCluster(cluster)
+		}),
+		Entry("missing DiskImage", "bmw-no-image", "DiskImage", func(fc *workerFulfillmentStub) {
+			version, err := fc.GetClusterVersion(ctx, cvID)
+			Expect(err).NotTo(HaveOccurred())
+			version.GetSpec().SetDiskImage(privatev1.DiskImageReference_builder{Id: "missing-image"}.Build())
+			fc.AddClusterVersion(version)
+		}),
+	)
 
 	It("returns an error when the discovery ignition fetch fails", func() {
 		preloadDiskImageChain()
@@ -407,8 +500,9 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(setWorkerIgnitionURL(ctx, "bmw-fetcherr-infraenv", testNamespace,
 			"http://127.0.0.1:0/discovery.ign")).To(Succeed())
 
-		_, err = runReconcile("bmw-fetcherr")
-		Expect(err).To(HaveOccurred())
+		res, err := runReconcile("bmw-fetcherr")
+		Expect(err).To(MatchError(ContainSubstring("fetching discovery ignition")))
+		Expect(res.IsZero()).To(BeTrue())
 	})
 })
 

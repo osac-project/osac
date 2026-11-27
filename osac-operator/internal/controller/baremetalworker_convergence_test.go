@@ -1735,12 +1735,16 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(ignition.Calls()).To(Equal(fetches))
 		Expect(fc.CreateCalls()).To(HaveLen(creates))
 
-		// Cleanup proceeds; the unavailable prerequisite is still reported instead of
-		// silently completing the invocation.
+		// Cleanup proceeds while the missing pull secret remains a scheduled wait.
 		for i := 0; i < 4 && len(fc.DeleteCalls()) == 0; i++ {
-			_, err = run()
+			result, err = run()
+			Expect(err).NotTo(HaveOccurred())
 		}
-		Expect(err).To(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		cond := apimeta.FindStatusCondition(getOrder().Status.Conditions, api.ConditionInfraEnvReady)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("PullSecretMissing"))
 		Expect(fc.DeleteCalls()).To(ContainElement(retiring.BareMetalInstance.ID))
 		Expect(ignition.Calls()).To(Equal(fetches), "cleanup must not fetch discovery ignition")
 		Expect(fc.CreateCalls()).To(HaveLen(creates))
@@ -1841,9 +1845,11 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		}.Build())
 		creates, deletes := len(fc.CreateCalls()), len(fc.DeleteCalls())
 
-		_, err := run()
-		Expect(err).To(HaveOccurred())
+		res, err := run()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.RequeueAfter).To(Equal(30 * time.Second))
 		latest := getOrder()
+		Expect(apimeta.IsStatusConditionTrue(latest.Status.Conditions, api.ConditionRHCOSImageNotFound)).To(BeTrue())
 		Expect(latest.Status.ReadyWorkers).To(HaveValue(Equal(int32(0))))
 		Expect(latest.Status.DesiredWorkers).To(HaveValue(Equal(int32(2))))
 		Expect(latest.Status.CurrentWorkers).To(HaveValue(Equal(int32(1))))

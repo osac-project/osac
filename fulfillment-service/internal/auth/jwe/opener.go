@@ -22,12 +22,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lestrrat-go/httprc/v3"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwe"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
 	"github.com/lestrrat-go/jwx/v3/jwt"
-	"golang.org/x/sync/singleflight"
 )
 
 // Claims contains the parsed standard and custom claims from a verified token.
@@ -63,10 +63,17 @@ type Opener struct {
 	jwksURL       string
 	issuer        string
 	audience      string
-	cache         *jwk.Cache         // periodically refreshes JWKS in background
-	refreshGroup  singleflight.Group // coalesces concurrent forced JWKS refreshes
+	cache         *jwk.Cache // periodically refreshes JWKS in background
+	refreshMu     sync.Mutex
+	refresh       *jwksRefresh
 	mu            sync.Mutex
 	seen          map[string]time.Time // jti -> cleanup expiry
+}
+
+type jwksRefresh struct {
+	done chan struct{}
+	set  jwk.Set
+	err  error
 }
 
 // NewOpener creates a builder that can then be used to configure and create a new token opener.
@@ -239,9 +246,13 @@ func (o *Opener) resolveKeySet(ctx context.Context, jwsPayload []byte) (jwk.Set,
 		return nil, fmt.Errorf("parse JWS: %w", err)
 	}
 
-	set, err := o.cache.Lookup(ctx, o.jwksURL)
+	resource, err := o.cache.LookupResource(ctx, o.jwksURL)
 	if err != nil {
-		return o.refreshJWKS(ctx)
+		return o.refreshJWKS(ctx, "", nil)
+	}
+	set := resource.Resource()
+	if set == nil {
+		return o.refreshJWKS(ctx, "", nil)
 	}
 
 	sigs := jwsMsg.Signatures()
@@ -255,36 +266,67 @@ func (o *Opener) resolveKeySet(ctx context.Context, jwsPayload []byte) (jwk.Set,
 	if _, found := set.LookupKeyID(kid); found {
 		return set, nil
 	}
-	return o.refreshJWKS(ctx)
+	return o.refreshJWKS(ctx, kid, resource)
 }
 
-// refreshJWKS forces an immediate JWKS re-fetch via the cache, coalescing
-// concurrent callers via singleflight.
-func (o *Opener) refreshJWKS(ctx context.Context) (jwk.Set, error) {
+// refreshJWKS coalesces concurrent fetches and avoids a redundant fetch if
+// the requested key has already arrived in the cache.
+func (o *Opener) refreshJWKS(ctx context.Context, kid string, resource *httprc.ResourceBase[jwk.Set]) (jwk.Set, error) {
+	o.refreshMu.Lock()
+	if refresh := o.refresh; refresh != nil {
+		o.refreshMu.Unlock()
+		select {
+		case <-refresh.done:
+			return refresh.set, refresh.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	// Check and register a refresh under the same lock so a late caller
+	// either joins a fetch or sees its result in the cache. Resource()
+	// reads the cached value without waiting on the cache controller.
+	if kid != "" && resource != nil {
+		if cached := resource.Resource(); cached != nil {
+			if _, found := cached.LookupKeyID(kid); found {
+				o.refreshMu.Unlock()
+				return cached, nil
+			}
+		}
+	}
+	refresh := &jwksRefresh{done: make(chan struct{})}
+	o.refresh = refresh
+	o.refreshMu.Unlock()
+	defer func() {
+		if refresh.set == nil && refresh.err == nil {
+			refresh.err = errors.New("JWKS refresh ended without a keyset")
+		}
+		o.refreshMu.Lock()
+		o.refresh = nil
+		close(refresh.done)
+		o.refreshMu.Unlock()
+	}()
+
 	// Detach from the caller's context so one cancelled request does
 	// not abort the shared fetch. Also strips deadline intentionally —
 	// the HTTP transport timeout bounds the fetch.
-	ctx = context.WithoutCancel(ctx)
+	refresh.set, refresh.err = o.fetchJWKS(context.WithoutCancel(ctx))
+	return refresh.set, refresh.err
+}
 
-	v, err, _ := o.refreshGroup.Do("jwks", func() (any, error) {
-		set, err := o.cache.Refresh(ctx, o.jwksURL)
-		if err != nil {
-			o.logger.WarnContext(ctx, "JWKS refresh failed, using cached keyset",
-				slog.String("jwks_url", o.jwksURL),
-				slog.Any("error", err),
-			)
-			cached, lookupErr := o.cache.Lookup(ctx, o.jwksURL)
-			if lookupErr != nil {
-				return nil, fmt.Errorf("JWKS refresh failed and no cached keyset available: %w", err)
-			}
-			return cached, nil
-		}
+func (o *Opener) fetchJWKS(ctx context.Context) (jwk.Set, error) {
+	set, err := o.cache.Refresh(ctx, o.jwksURL)
+	if err == nil {
 		return set, nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	return v.(jwk.Set), nil
+	o.logger.WarnContext(ctx, "JWKS refresh failed, using cached keyset",
+		slog.String("jwks_url", o.jwksURL),
+		slog.Any("error", err),
+	)
+	cached, lookupErr := o.cache.Lookup(ctx, o.jwksURL)
+	if lookupErr != nil {
+		return nil, fmt.Errorf("JWKS refresh failed and no cached keyset available: %w", err)
+	}
+	return cached, nil
 }
 
 // extractClaims reads standard and custom claims from a verified JWT token.

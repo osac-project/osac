@@ -383,9 +383,10 @@ unique in both directions. An already-labelled or bound Agent is never a MAC
 fallback, an incompatible candidate fails closed as an observable error, and
 ambiguity or unreadable inventory never authorizes an Agent patch or deletion.
 
-After initial OSAC correlation, CAP-Agent owns the installation binding and may
-replace `spec.clusterDeploymentName` with its ClusterDeployment reference. That
-deployment has `status.clusterReference.hostedClusterName` as its name and lives
+OSAC labels and approves the correlated Agent without setting
+`spec.clusterDeploymentName`. CAP-Agent claims the unbound Agent and sets that
+reference together with the Ignition settings. The ClusterDeployment has
+`status.clusterReference.hostedClusterName` as its name and lives
 in the hosted-control-plane namespace formed as
 `status.clusterReference.namespace + "-" + hostedClusterName`, not the Agent's
 namespace. OSAC accepts only this exact reference for an Agent already carrying

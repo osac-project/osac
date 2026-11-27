@@ -600,16 +600,9 @@ var _ = Describe("reconcileAgent with transient Agent conflicts", func() {
 				Name: expected.name, Namespace: namespace,
 			}, agent)).To(Succeed())
 
-			clusterDeploymentName, found, err := unstructured.NestedString(
-				agent.Object, "spec", "clusterDeploymentName", "name")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(found).To(BeTrue())
-			Expect(clusterDeploymentName).To(Equal(clusterOrderName))
-			clusterDeploymentNamespace, found, err := unstructured.NestedString(
-				agent.Object, "spec", "clusterDeploymentName", "namespace")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(found).To(BeTrue())
-			Expect(clusterDeploymentNamespace).To(Equal(namespace))
+			_, found, err := unstructured.NestedFieldNoCopy(agent.Object, "spec", "clusterDeploymentName")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeFalse(), "OSAC must leave the Agent unbound for CAP-Agent to claim")
 
 			approved, found, err := unstructured.NestedBool(agent.Object, "spec", "approved")
 			Expect(err).ToNot(HaveOccurred())

@@ -1882,12 +1882,16 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 		Expect(co.Status.Workers).To(HaveLen(1))
 		Expect(co.Status.Workers[0].Phase).To(Equal("Binding"))
 
-		// Verify the agent got the worker-name label and clusterDeploymentName.
+		// OSAC labels and approves the Agent without claiming it for the ClusterDeployment.
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "bmw-corr-agent-0", Namespace: testNamespace}, agentObj)).To(Succeed())
-		Expect(agentObj.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/worker-name", getClusterOrder("bmw-corr").Status.Workers[0].Name))
+		Expect(agentObj.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/worker-name", co.Status.Workers[0].Name))
 		Expect(agentObj.GetLabels()).To(HaveKeyWithValue("agentBareMetal", "true"))
-		cdName, _, _ := unstructured.NestedString(agentObj.Object, "spec", "clusterDeploymentName", "name")
-		Expect(cdName).To(Equal("bmw-corr"))
+		approved, _, err := unstructured.NestedBool(agentObj.Object, "spec", "approved")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(approved).To(BeTrue())
+		_, hasDeployment, err := unstructured.NestedFieldNoCopy(agentObj.Object, "spec", "clusterDeploymentName")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(hasDeployment).To(BeFalse())
 
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, agentObj) })
 	})

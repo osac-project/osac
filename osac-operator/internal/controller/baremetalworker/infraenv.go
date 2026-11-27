@@ -362,8 +362,8 @@ func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name, sshAuthorize
 	infraEnv.SetNamespace(co.Namespace)
 
 	// The pull-secret Secret is ensured by ensurePullSecret before InfraEnv creation.
-	// No clusterRef is set (late binding): agents
-	// register unbound and are bound explicitly after MAC correlation (OSAC-4160).
+	// Leave clusterRef unset so Agents register unbound and CAP-Agent can
+	// claim them after OSAC matches their MACs.
 	spec := map[string]interface{}{
 		"pullSecretRef": map[string]interface{}{"name": co.Name + pullSecretNameSuffix},
 	}

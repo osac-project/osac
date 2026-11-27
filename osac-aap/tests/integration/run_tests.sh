@@ -37,6 +37,15 @@ run_ansible_playbook() {
     "$@"
 }
 
+run_storage_provider_test() {
+  local storage_test="$1"
+  if [[ "$storage_test" == netapp_storage_provider ]]; then
+    local -x ANSIBLE_STRATEGY_PLUGINS="${SCRIPT_DIR}/strategy_plugins"
+    local -x ANSIBLE_STRATEGY=netapp_tbc_diagnostics
+  fi
+  run_ansible_playbook "targets/${storage_test}/tasks/main.yml" -e "@common_vars.yml" -v
+}
+
 run_config_as_code_playbook() {
   ANSIBLE_CONFIG="${SCRIPT_DIR}/ansible.cfg" \
   ANSIBLE_JINJA2_NATIVE=true \
@@ -375,7 +384,7 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
   for storage_test in "${STORAGE_TESTS[@]}"; do
     echo "  Running: $storage_test"
     log_file="/tmp/osac_storage_test_${storage_test}.log"
-    if run_ansible_playbook "targets/${storage_test}/tasks/main.yml" -e "@common_vars.yml" -v > "${log_file}" 2>&1; then
+    if run_storage_provider_test "$storage_test" > "${log_file}" 2>&1; then
       echo "  ✓ ${storage_test} passed"
       PASSED+=("$storage_test:baseline")
     else

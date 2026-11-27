@@ -14,9 +14,12 @@ language governing permissions and limitations under the License.
 package dao
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/gobuffalo/flect"
@@ -46,7 +49,15 @@ type GenericDAOBuilder[O Object] struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	localVariables    []localVariable
 }
+
+type localVariable struct {
+	name  string
+	value func(ctx context.Context) (result any, err error)
+}
+
+var localVariableName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // GenericDAO provides generic data access operations for protocol buffers messages. It assumes that objects will be
 // stored in tables with the following columns:
@@ -81,6 +92,7 @@ type GenericDAO[O Object] struct {
 	unmarshalOptions protojson.UnmarshalOptions
 	filterTranslator *FilterTranslator
 	tenancyLogic     auth.TenancyLogic
+	localVariables   []localVariable
 
 	// Metrics:
 	opDurationMetric *prometheus.HistogramVec
@@ -187,6 +199,19 @@ func (b *GenericDAOBuilder[O]) SetFilterDesc(value protoreflect.MessageDescripto
 	return b
 }
 
+// AddLocalVariable registers a callback to set osac.<name> in the current transaction before a Create, Update,
+// Delete or Signal writes to the database. Callbacks run once per mutation, in registration order, before any
+// settings are applied. Values are encoded as JSON (using protobuf field names for protobuf messages); a nil
+// result or typed nil pointer clears the setting, while explicit JSON null is stored as "null".
+// Names must be unique lowercase identifiers containing only letters, digits and underscores, and may not start
+// with a digit. The name "signal" is reserved for the Signal operation. Build rejects invalid registrations.
+func (b *GenericDAOBuilder[O]) AddLocalVariable(
+	name string, value func(ctx context.Context) (result any, err error),
+) *GenericDAOBuilder[O] {
+	b.localVariables = append(b.localVariables, localVariable{name: name, value: value})
+	return b
+}
+
 // Build creates a new generic DAO using the configuration stored in the builder.
 func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 	// Check parameters:
@@ -213,6 +238,19 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 	if b.tenancyLogic == nil {
 		err = errors.New("tenancy logic is mandatory")
 		return
+	}
+	names := make(map[string]struct{}, len(b.localVariables))
+	for _, variable := range b.localVariables {
+		if !localVariableName.MatchString(variable.name) || variable.name == "signal" {
+			return nil, fmt.Errorf("invalid DAO local variable name %q", variable.name)
+		}
+		if variable.value == nil {
+			return nil, fmt.Errorf("missing callback for DAO local variable %q", variable.name)
+		}
+		if _, exists := names[variable.name]; exists {
+			return nil, fmt.Errorf("duplicate DAO local variable name %q", variable.name)
+		}
+		names[variable.name] = struct{}{}
 	}
 
 	// Get descriptors of well known types:
@@ -309,6 +347,7 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 		unmarshalOptions: unmarshalOptions,
 		filterTranslator: filterTranslator,
 		tenancyLogic:     b.tenancyLogic,
+		localVariables:   slices.Clone(b.localVariables),
 		opDurationMetric: opDurationMetric,
 	}
 	return

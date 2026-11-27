@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -45,6 +46,48 @@ type request[O Object] struct {
 		filter strings.Builder
 		params []any
 	}
+}
+
+func (r *request[O]) setLocalVariables(ctx context.Context) error {
+	// A callback may perform a nested write in this transaction. Prepare all values
+	// first so the outer write's settings are applied after any nested writes.
+	type setting struct{ name, value string }
+	settings := make([]setting, 0, len(r.dao.localVariables))
+	for _, variable := range r.dao.localVariables {
+		name := "osac." + variable.name
+		value, err := variable.value(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to evaluate local variable %q: %w", name, err)
+		}
+
+		data, err := r.marshalLocalVariable(value)
+		if err != nil {
+			return fmt.Errorf("failed to encode local variable %q: %w", name, err)
+		}
+		settings = append(settings, setting{name: name, value: string(data)})
+	}
+	for _, setting := range settings {
+		_, err := r.tx.Exec(ctx, "select set_config($1, $2, true)", setting.name, setting.value)
+		if err != nil {
+			return fmt.Errorf("failed to set local variable %q: %w", setting.name, err)
+		}
+	}
+	return nil
+}
+
+func (r *request[O]) marshalLocalVariable(value any) ([]byte, error) {
+	// An empty string clears any previous value, unlike explicit JSON null.
+	reflected := reflect.ValueOf(value)
+	if value == nil || (reflected.Kind() == reflect.Pointer && reflected.IsNil()) {
+		return nil, nil
+	}
+	if message, ok := value.(proto.Message); ok {
+		if !message.ProtoReflect().IsValid() {
+			return nil, nil
+		}
+		return r.dao.marshalOptions.Marshal(message)
+	}
+	return json.Marshal(value)
 }
 
 type archiveArgs struct {

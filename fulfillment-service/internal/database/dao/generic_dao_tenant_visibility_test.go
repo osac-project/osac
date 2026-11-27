@@ -42,7 +42,7 @@ var _ = Describe("Generic DAO visibility", func() {
 		ctx = context.Background()
 
 		// Prepare the database pool:
-		db, err := server.NewInstance().Build()
+		db, err := databaseServer(ctx).NewInstance().Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(db.Close)
 		pool, err = db.Pool(ctx)

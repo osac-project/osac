@@ -31,11 +31,12 @@ func TestDAO(t *testing.T) {
 }
 
 var (
-	logger *slog.Logger
-	server *database.Container
+	logger         *slog.Logger
+	server         *database.Container
+	serverStartErr error
 )
 
-var _ = BeforeSuite(func(ctx context.Context) {
+var _ = BeforeSuite(func() {
 	var err error
 
 	// Create the logger:
@@ -44,16 +45,25 @@ var _ = BeforeSuite(func(ctx context.Context) {
 		SetWriter(GinkgoWriter).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
+})
 
-	// Create and start the database server:
-	server, err = database.NewContainer().
-		SetLogger(logger).
-		Build()
-	Expect(err).ToNot(HaveOccurred())
-	DeferCleanup(func(ctx context.Context) {
-		err = server.Stop(ctx)
-		Expect(err).ToNot(HaveOccurred())
-	})
-	err = server.Start(ctx)
-	Expect(err).ToNot(HaveOccurred())
+// Start PostgreSQL on first use so mock-only runs do not require a container.
+func databaseServer(ctx context.Context) *database.Container {
+	GinkgoHelper()
+	if server == nil && serverStartErr == nil {
+		server, serverStartErr = database.NewContainer().
+			SetLogger(logger).
+			Build()
+		if serverStartErr == nil {
+			serverStartErr = server.Start(ctx)
+		}
+	}
+	Expect(serverStartErr).NotTo(HaveOccurred())
+	return server
+}
+
+var _ = AfterSuite(func(ctx context.Context) {
+	if server != nil {
+		Expect(server.Stop(ctx)).To(Succeed())
+	}
 })

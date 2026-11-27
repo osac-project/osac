@@ -39,7 +39,7 @@ var _ = Describe("Immutable columns", func() {
 		ctx = context.Background()
 
 		// Prepare the database:
-		db, err = server.NewInstance().Build()
+		db, err = databaseServer(ctx).NewInstance().Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(db.Close)
 		conn, err = db.Connection(ctx)

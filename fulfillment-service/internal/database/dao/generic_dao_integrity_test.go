@@ -46,7 +46,7 @@ var _ = Describe("Referential integrity", func() {
 
 		// Prepare the database pool (all migrations are applied, so the clusters and tenants
 		// tables exist with the tenant FK constraint already in place):
-		db, err := server.NewInstance().Build()
+		db, err := databaseServer(ctx).NewInstance().Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(db.Close)
 		pool, err := db.Pool(ctx)

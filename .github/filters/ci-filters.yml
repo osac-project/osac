@@ -119,6 +119,7 @@ connectivity:
 # (no test-file exclusions).
 e2e-code:
   - '**'
+  - '!.coderabbit.yaml'
   - '!**/LICENSE'
   - '!**/*.md'
   - '!**/docs/**'
@@ -189,6 +190,7 @@ e2e-suite:
 #   costs CI minutes; being wrong the other way risks a false skip.
 vmaas-outside-known-safe:
   - '**'
+  - '!.coderabbit.yaml'
   - '!**/*.md'
   - '!**/docs/**'
   - '!**/LICENSE'
@@ -206,6 +208,7 @@ vmaas-outside-known-safe:
   - '!tools/pr-notify/**'
 caas-outside-known-safe:
   - '**'
+  - '!.coderabbit.yaml'
   - '!**/*.md'
   - '!**/docs/**'
   - '!**/LICENSE'
@@ -221,6 +224,7 @@ caas-outside-known-safe:
   - '!tools/pr-notify/**'
 bmaas-outside-known-safe:
   - '**'
+  - '!.coderabbit.yaml'
   - '!**/*.md'
   - '!**/docs/**'
   - '!**/LICENSE'
@@ -248,6 +252,7 @@ bmaas-outside-known-safe:
 # falling through to "nothing matched, skip everything".
 code:
   - '**'
+  - '!.coderabbit.yaml'
   - '!**/LICENSE'
   - '!**/*.md'
   - '!**/docs/**'

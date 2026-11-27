@@ -116,7 +116,13 @@ func (m *Metal3Client) GetPowerState(ctx context.Context, hostID string) (*Power
 		return nil, err
 	}
 	if bmh.Status.OperationalStatus == metal3api.OperationalStatusError {
-		return nil, fmt.Errorf("BareMetalHost %s has error status: %s", hostID, bmh.Status.ErrorMessage)
+		if bmh.Status.ErrorType == metal3api.PowerManagementError {
+			// Power-management faults (BMC resets, transient Ironic errors) are
+			// recoverable; keep the power/restart path retryable instead of marking
+			// the instance terminally Failed.
+			return nil, fmt.Errorf("BareMetalHost %s has power-management error: %s", hostID, bmh.Status.ErrorMessage)
+		}
+		return nil, fmt.Errorf("%w: BareMetalHost %s has error status: %s", ErrHostOperational, hostID, bmh.Status.ErrorMessage)
 	}
 
 	var state PowerState
@@ -174,14 +180,32 @@ func (m *Metal3Client) SetPowerState(ctx context.Context, hostID string, target 
 	return nil
 }
 
-func (m *Metal3Client) TriggerRestart(ctx context.Context, hostID string) error {
+// RestartRequestAnnotation records the request identity of the last reboot
+// submitted to Metal3. It is written in the same patch as the reboot annotation,
+// so a retry whose response was lost can recognize the accepted request and avoid
+// rebooting the host twice.
+const RestartRequestAnnotation = "osac.openshift.io/restart-request"
+
+func (m *Metal3Client) TriggerRestart(ctx context.Context, hostID, requestID string) error {
 	bmh, err := m.getBMH(ctx, hostID)
 	if err != nil {
 		return err
 	}
 
+	// The API server already accepted this exact request even if the earlier
+	// response was lost: treat it as submitted instead of rebooting again.
+	if bmh.Annotations[RestartRequestAnnotation] == requestID {
+		return nil
+	}
+
 	// Check if reboot is already in progress
 	if _, hasRebootAnnotation := bmh.Annotations[metal3api.RebootAnnotationPrefix]; hasRebootAnnotation {
+		return fmt.Errorf("host %s: %w", hostID, ErrTransitioning)
+	}
+
+	// A host that is powering on or off must not receive a reboot annotation; it
+	// would race the power change. SetPowerState rejects the same state.
+	if bmh.Spec.Online != bmh.Status.PoweredOn {
 		return fmt.Errorf("host %s: %w", hostID, ErrTransitioning)
 	}
 
@@ -191,12 +215,29 @@ func (m *Metal3Client) TriggerRestart(ctx context.Context, hostID string) error 
 		bmh.Annotations = make(map[string]string)
 	}
 	bmh.Annotations[metal3api.RebootAnnotationPrefix] = ""
+	bmh.Annotations[RestartRequestAnnotation] = requestID
 
-	if err := m.client.Patch(ctx, bmh, client.MergeFrom(original)); err != nil {
+	// Optimistic lock: a concurrent power change fails this patch instead of
+	// racing it, keeping the trigger pending for the next reconcile.
+	if err := m.client.Patch(ctx, bmh, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("failed to trigger restart for host %s: %w", hostID, err)
 	}
 
 	return nil
+}
+
+// IsRestartSubmitted reports whether the backend already accepted this request.
+// The annotation is written in the same patch as the reboot annotation, so it is
+// durable evidence even when the response to that patch was lost.
+func (m *Metal3Client) IsRestartSubmitted(ctx context.Context, hostID, requestID string) (RestartSubmissionState, error) {
+	bmh, err := m.getBMH(ctx, hostID)
+	if err != nil {
+		return RestartSubmissionUnknown, err
+	}
+	if bmh.Annotations[RestartRequestAnnotation] == requestID {
+		return RestartSubmissionSubmitted, nil
+	}
+	return RestartSubmissionNotSubmitted, nil
 }
 
 func (m *Metal3Client) IsRestartComplete(ctx context.Context, hostID string) (bool, error) {

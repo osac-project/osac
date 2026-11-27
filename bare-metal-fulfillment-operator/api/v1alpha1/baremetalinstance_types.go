@@ -164,6 +164,11 @@ const (
 	// Set condition status to False and reason to IronicAPIFailure when the operation fails.
 	HostConditionPowerSynced BareMetalInstanceConditionType = "PowerSynced"
 
+	// HostConditionRestartInProgress tracks a restart initiated by the controller.
+	// Set True once the restart is triggered and False once it completes, so the
+	// completion poll is not confused with a power transition.
+	HostConditionRestartInProgress BareMetalInstanceConditionType = "RestartInProgress"
+
 	// HostConditionProvisionTemplateComplete tracks provision template completion.
 	// Set condition status True on success.
 	// Set condition status False with reason Progressing or TemplateFailed while not complete.
@@ -222,6 +227,22 @@ const (
 	// restart as already in flight, so the reconciler keeps re-triggering until a real
 	// restart is initiated. Set by triggerRestart on management.ErrTransitioning.
 	HostConditionReasonPowerSyncRequired = "PowerSyncRequired"
+
+	// HostConditionReasonPowerReadFailed indicates a transient power-state read
+	// failure. The lifecycle stays in its last confirmed state; no power
+	// transition is reported.
+	HostConditionReasonPowerReadFailed = "PowerReadFailed"
+
+	// HostConditionReasonRestartSubmissionPending marks a durable restart claim
+	// written before the reboot is dispatched. It is not yet a power cycle and
+	// must not be reported as RESTART_IN_PROGRESS.
+	HostConditionReasonRestartSubmissionPending = "RestartSubmissionPending"
+
+	// HostConditionReasonRestartSubmissionUnconfirmed marks a restart whose
+	// submission could not be confirmed by the backend (no durable request
+	// identity) and whose completion cannot be distinguished from a host that was
+	// already settled. It is preserved instead of re-dispatching the request.
+	HostConditionReasonRestartSubmissionUnconfirmed = "RestartSubmissionUnconfirmed"
 
 	// HostConditionReasonNoMatchingHosts indicates no hosts match the selector labels
 	HostConditionReasonNoMatchingHosts = "NoMatchingHosts"
@@ -327,6 +348,11 @@ type BareMetalInstanceStatus struct {
 	// RestartTrigger is the observed restart version of the instance
 	// +kubebuilder:validation:Optional
 	RestartTrigger int64 `json:"restartTrigger"`
+	// RestartRequestID is the durable identity of the last restart request. It
+	// distinguishes a retry of the same request from a new request that reuses an
+	// earlier trigger value.
+	// +kubebuilder:validation:Optional
+	RestartRequestID string `json:"restartRequestID,omitempty"`
 	// NetworkAttachmentStatuses captures runtime networking state for each NIC.
 	// Populated by the operator after DHCP lease discovery.
 	// +kubebuilder:validation:Optional

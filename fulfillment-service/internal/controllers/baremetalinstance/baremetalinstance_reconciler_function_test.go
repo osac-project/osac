@@ -2457,6 +2457,425 @@ var _ = Describe("syncStatus", func() {
 			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED))
 	})
 
+	It("should keep STARTING while an owned restart is retried despite PowerSyncFailed", func() {
+		t := newTask(42)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyAlways,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionTrue,
+					},
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncFailed,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING))
+	})
+
+	It("should keep STARTING when a restart initiation is retried after a conflict", func() {
+		t := newTask(42)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyAlways,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionFalse,
+					},
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncRequired,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING))
+	})
+
+	It("should keep STARTING when a restart initiation failure is retried", func() {
+		t := newTask(42)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyAlways,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase:          bmfov1alpha1.BareMetalInstancePhaseProgressing,
+				RestartTrigger: 41,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncRequired,
+					},
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncRequired,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING))
+
+		inProgress := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
+		Expect(inProgress).ToNot(BeNil())
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+
+		failed := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
+		Expect(failed).ToNot(BeNil())
+		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	})
+
+	It("should not report RESTART_IN_PROGRESS for a pre-dispatch claim", func() {
+		t := newTask(42)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyAlways,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonRestartSubmissionPending,
+					},
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncRequired,
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		inProgress := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
+		Expect(inProgress).ToNot(BeNil())
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+
+		failed := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
+		Expect(failed).ToNot(BeNil())
+		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	})
+
+	It("should keep the last state for a read-only power failure", func() {
+		t := newTask(42)
+		stored := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		status.SetStateTransitionTime(timestamppb.New(stored))
+
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyAlways,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 42,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerReadFailed,
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stored))
+	})
+
+	It("should wait for a stop observation instead of backdating from a restart", func() {
+		t := newTask(42)
+		restartTime := time.Date(2026, time.January, 1, 12, 5, 0, 0, time.UTC)
+		stored := restartTime.Add(-time.Hour)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		status.SetStateTransitionTime(timestamppb.New(stored))
+
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyHalted,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonProgressing,
+					},
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonProgressing,
+						LastTransitionTime: metav1.NewTime(restartTime),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		// The observation belongs to the restart, not the requested stop.
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stored))
+	})
+
+	It("should wait for a stop observation after a halted restart is acknowledged", func() {
+		t := newTask(42)
+		stored := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		status.SetStateTransitionTime(timestamppb.New(stored))
+
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyHalted,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 42,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionFalse,
+						Reason: "Cancelled",
+					},
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonProgressing,
+						LastTransitionTime: metav1.NewTime(time.Now()),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		// The host is still transitioning from the restart; no stop observed yet.
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stored))
+	})
+
+	It("should use the later operator timestamp for a stop after a read failure", func() {
+		t := newTask(0)
+		stopTime := time.Date(2026, time.January, 1, 12, 15, 0, 0, time.UTC)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy: bmfov1alpha1.RunStrategyHalted,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonProgressing,
+						LastTransitionTime: metav1.NewTime(stopTime),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stopTime))
+	})
+
+	It("should record STOPPING for a PoweringOff observation", func() {
+		t := newTask(0)
+		stopTime := time.Date(2026, time.January, 1, 12, 15, 0, 0, time.UTC)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RunStrategy: bmfov1alpha1.RunStrategyHalted},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonPoweringOff,
+						LastTransitionTime: metav1.NewTime(stopTime),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stopTime))
+	})
+
+	It("should preserve state on a read failure and use the later stop timestamp", func() {
+		t := newTask(0)
+		running := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		status.SetStateTransitionTime(timestamppb.New(running))
+
+		// Observation 1: a transient read failure keeps the last confirmed state.
+		readFailure := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RunStrategy: bmfov1alpha1.RunStrategyHalted},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerReadFailed,
+					},
+				},
+			},
+		}
+		t.syncStatus(readFailure)
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(running))
+
+		// Observation 2: the stop is observed later; use its timestamp.
+		stopTime := running.Add(10 * time.Minute)
+		stop := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RunStrategy: bmfov1alpha1.RunStrategyHalted},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonProgressing,
+						LastTransitionTime: metav1.NewTime(stopTime),
+					},
+				},
+			},
+		}
+		t.syncStatus(stop)
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stopTime))
+	})
+
+	It("should keep the last state for a withdrawn restart with a read failure", func() {
+		t := newTask(42)
+		stored := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		status.SetStateTransitionTime(timestamppb.New(stored))
+
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyAlways,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 42,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonProgressing,
+					},
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerReadFailed,
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stored))
+
+		inProgress := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
+		Expect(inProgress).ToNot(BeNil())
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	})
+
+	It("should not move a state transition time backwards", func() {
+		t := newTask(0)
+		stored := time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING)
+		status.SetStateTransitionTime(timestamppb.New(stored))
+
+		// Same second: storage allows equal times, so keep the stored value.
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+			&metav1.Time{Time: stored})
+
+		Expect(status.GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(status.GetStateTransitionTime().AsTime()).To(Equal(stored))
+	})
+
+	It("should keep the stored time when the clock is behind it", func() {
+		t := newTask(0)
+		stored := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING)
+		status.SetStateTransitionTime(timestamppb.New(stored))
+
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, nil)
+
+		Expect(status.GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(status.GetStateTransitionTime().AsTime()).To(Equal(stored))
+	})
+
+	It("should keep a later operator-provided transition time", func() {
+		t := newTask(0)
+		stored := time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC)
+		later := stored.Add(5 * time.Second)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING)
+		status.SetStateTransitionTime(timestamppb.New(stored))
+
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+			&metav1.Time{Time: later})
+
+		Expect(status.GetStateTransitionTime().AsTime()).To(Equal(later))
+	})
+
 	It("should map Failed phase to FAILED state", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{
@@ -2618,103 +3037,17 @@ var _ = Describe("syncStatus", func() {
 			metav1.Condition{Type: string(bmfov1alpha1.HostConditionPowerSynced), Status: metav1.ConditionTrue, Reason: bmfov1alpha1.HostConditionReasonPowerOff}),
 	)
 
-	It("should set RESTART_IN_PROGRESS when PowerSynced is False with Progressing reason and restart is pending", func() {
+	It("should pass through RESTART_IN_PROGRESS from the CR restart condition", func() {
 		t := newTask(42)
 		object := &bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
 				Conditions: []metav1.Condition{
 					{
-						Type:    string(bmfov1alpha1.HostConditionPowerSynced),
-						Status:  metav1.ConditionFalse,
-						Reason:  bmfov1alpha1.HostConditionReasonProgressing,
-						Message: "Power cycle in progress",
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonProgressing,
 					},
-				},
-			},
-		}
-		t.syncStatus(object)
-		cond := findProtoCondition(t.bareMetalInstance,
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
-		Expect(cond).ToNot(BeNil())
-		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
-		Expect(cond.GetMessage()).To(Equal("Restart in progress"))
-	})
-
-	It("should not set RESTART_IN_PROGRESS when PowerSynced is False with Progressing reason but no restart pending", func() {
-		t := newTask(0)
-		object := &bmfov1alpha1.BareMetalInstance{
-			Status: bmfov1alpha1.BareMetalInstanceStatus{
-				Conditions: []metav1.Condition{
-					{
-						Type:    string(bmfov1alpha1.HostConditionPowerSynced),
-						Status:  metav1.ConditionFalse,
-						Reason:  bmfov1alpha1.HostConditionReasonProgressing,
-						Message: "node power state is transitioning",
-					},
-				},
-			},
-		}
-		t.syncStatus(object)
-		cond := findProtoCondition(t.bareMetalInstance,
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
-		Expect(cond).To(BeNil())
-	})
-
-	DescribeTable("should set RESTART_FAILED with PowerSyncFailed reason for any failure when restart is pending",
-		func(reason string) {
-			t := newTask(42)
-			object := &bmfov1alpha1.BareMetalInstance{
-				Status: bmfov1alpha1.BareMetalInstanceStatus{
-					Conditions: []metav1.Condition{
-						{
-							Type:    string(bmfov1alpha1.HostConditionPowerSynced),
-							Status:  metav1.ConditionFalse,
-							Reason:  reason,
-							Message: "something went wrong",
-						},
-					},
-				},
-			}
-			t.syncStatus(object)
-			cond := findProtoCondition(t.bareMetalInstance,
-				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
-			Expect(cond).ToNot(BeNil())
-			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
-			Expect(cond.GetReason()).To(Equal("PowerSyncFailed"))
-		},
-		Entry("IronicAPIFailure", bmfov1alpha1.HostConditionReasonIronicAPIFailure),
-		Entry("unknown failure reason", "SomeOtherFailure"),
-	)
-
-	It("should not set RESTART_FAILED when PowerSynced fails but no restart pending", func() {
-		t := newTask(0)
-		object := &bmfov1alpha1.BareMetalInstance{
-			Status: bmfov1alpha1.BareMetalInstanceStatus{
-				Conditions: []metav1.Condition{
-					{
-						Type:    string(bmfov1alpha1.HostConditionPowerSynced),
-						Status:  metav1.ConditionFalse,
-						Reason:  bmfov1alpha1.HostConditionReasonIronicAPIFailure,
-						Message: "backend API call failed",
-					},
-				},
-			},
-		}
-		t.syncStatus(object)
-		cond := findProtoCondition(t.bareMetalInstance,
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
-		Expect(cond).To(BeNil())
-	})
-
-	It("should clear RESTART_FAILED when RESTART_IN_PROGRESS becomes True", func() {
-		t := newTask(42)
-		t.updateCondition(
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED,
-			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "PowerSyncFailed", "Restart failed")
-
-		object := &bmfov1alpha1.BareMetalInstance{
-			Status: bmfov1alpha1.BareMetalInstanceStatus{
-				Conditions: []metav1.Condition{
 					{
 						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
 						Status: metav1.ConditionFalse,
@@ -2727,51 +3060,178 @@ var _ = Describe("syncStatus", func() {
 
 		inProgress := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
+		Expect(inProgress).ToNot(BeNil())
 		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 
 		failed := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
+		Expect(failed).ToNot(BeNil())
 		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+
+		// The operator's acknowledged trigger is passed through as-is.
+		Expect(t.bareMetalInstance.GetStatus().GetRestartTrigger()).To(Equal(int64(41)))
 	})
 
-	It("should clear RESTART_IN_PROGRESS when RESTART_FAILED becomes True", func() {
+	It("should keep RESTART_IN_PROGRESS while a failed poll is retried", func() {
 		t := newTask(42)
-		t.updateCondition(
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS,
-			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "Progressing", "Restart in progress")
-
 		object := &bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
 				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonProgressing,
+					},
 					{
 						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
 						Status: metav1.ConditionFalse,
-						Reason: bmfov1alpha1.HostConditionReasonIronicAPIFailure,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncFailed,
 					},
 				},
 			},
 		}
 		t.syncStatus(object)
 
-		failed := findProtoCondition(t.bareMetalInstance,
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
-		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
-
 		inProgress := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
-		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(inProgress).ToNot(BeNil())
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+
+		failed := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
+		Expect(failed).ToNot(BeNil())
+		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 	})
 
-	It("should clear restart conditions and sync restart trigger when PowerSynced is True", func() {
+	It("should report RESTART_FAILED for a restart initiation failure", func() {
 		t := newTask(42)
 		object := &bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
 				Conditions: []metav1.Condition{
 					{
-						Type:    string(bmfov1alpha1.HostConditionPowerSynced),
-						Status:  metav1.ConditionTrue,
-						Reason:  bmfov1alpha1.HostConditionReasonPowerOn,
-						Message: "Power on complete",
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncFailed,
+					},
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncFailed,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+
+		inProgress := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
+		Expect(inProgress).ToNot(BeNil())
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+
+		failed := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
+		Expect(failed).ToNot(BeNil())
+		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+	})
+
+	It("should echo the acknowledged trigger while a newer request is pending", func() {
+		t := newTask(42)
+		t.bareMetalInstance.GetStatus().SetRestartTrigger(40)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RestartTrigger: 42},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonProgressing,
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		// 41 is what the operator last acknowledged; 42 is still pending.
+		Expect(t.bareMetalInstance.GetStatus().GetRestartTrigger()).To(Equal(int64(41)))
+	})
+
+	It("should clear restart flags when a markerless operator has a pending trigger", func() {
+		t := newTask(42)
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "Progressing", "Restart in progress")
+
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RestartTrigger: 42},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonProgressing,
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		inProgress := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
+		Expect(inProgress).ToNot(BeNil())
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+
+		failed := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
+		Expect(failed).ToNot(BeNil())
+		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	})
+
+	It("should use the operator transition time for an ordinary power transition", func() {
+		transitionTime := time.Date(2026, time.January, 15, 12, 30, 45, 0, time.UTC)
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RunStrategy: bmfov1alpha1.RunStrategyAlways},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseProgressing,
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonProgressing,
+						LastTransitionTime: metav1.NewTime(transitionTime),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(transitionTime))
+	})
+
+	It("should clear restart conditions when the CR reports no restart", func() {
+		t := newTask(42)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 42,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionFalse,
+						Reason: "Completed",
+					},
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonPowerOn,
 					},
 				},
 			},
@@ -2791,49 +3251,55 @@ var _ = Describe("syncStatus", func() {
 		Expect(t.bareMetalInstance.GetStatus().GetRestartTrigger()).To(Equal(int64(42)))
 	})
 
-	It("should not echo restart trigger when operator has not completed restart", func() {
+	It("should clear restart flags when the trigger is withdrawn before the operator catches up", func() {
 		t := newTask(42)
 		object := &bmfov1alpha1.BareMetalInstance{
-			Spec: bmfov1alpha1.BareMetalInstanceSpec{
-				RestartTrigger: 42,
-			},
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RestartTrigger: 41},
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
-				RestartTrigger: 0,
+				RestartTrigger: 41,
 				Conditions: []metav1.Condition{
 					{
-						Type:    string(bmfov1alpha1.HostConditionPowerSynced),
-						Status:  metav1.ConditionTrue,
-						Reason:  bmfov1alpha1.HostConditionReasonPowerOn,
-						Message: "Power on complete",
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionTrue,
+					},
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerSyncFailed,
 					},
 				},
 			},
 		}
 		t.syncStatus(object)
 
-		Expect(t.bareMetalInstance.GetStatus().GetRestartTrigger()).To(Equal(int64(0)))
-
 		inProgress := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
 		Expect(inProgress).ToNot(BeNil())
-		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 
 		failed := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
 		Expect(failed).ToNot(BeNil())
 		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+
+		Expect(t.bareMetalInstance.GetStatus().GetRestartTrigger()).To(Equal(int64(41)))
 	})
 
-	It("should not set restart conditions when PowerSynced is False with unhandled reason", func() {
-		t := newTask(0)
+	It("should clear stale restart flags for a completed request from an older operator", func() {
+		t := newTask(42)
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "Progressing", "Restart in progress")
+
 		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RestartTrigger: 41},
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 41,
 				Conditions: []metav1.Condition{
 					{
-						Type:    string(bmfov1alpha1.HostConditionPowerSynced),
-						Status:  metav1.ConditionFalse,
-						Reason:  "UnknownReason",
-						Message: "Something unexpected",
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonPowerOn,
 					},
 				},
 			},
@@ -2842,11 +3308,13 @@ var _ = Describe("syncStatus", func() {
 
 		inProgress := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
-		Expect(inProgress).To(BeNil())
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 
 		failed := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
-		Expect(failed).To(BeNil())
+		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+
+		Expect(t.bareMetalInstance.GetStatus().GetRestartTrigger()).To(Equal(int64(41)))
 	})
 
 	It("should map multiple conditions in a single call", func() {

@@ -582,6 +582,15 @@ type BareMetalInstanceSpec_builder struct {
 	// Used to trigger a restart of the physical machine. Change it to any value to trigger the restart.
 	// The value itself is not important; only the change matters.
 	// The controller compares this with `status.restart_trigger` and initiates a power cycle when they differ.
+	// A differing change observed by the completion reconcile during a restart coalesces into it; a change
+	// arriving later may remain pending and cause another power cycle. Restoring the acknowledged value
+	// withdraws the request only if the controller observes it before deciding to acknowledge the pending
+	// request; an update after that decision can request another power cycle, even before the new
+	// acknowledgement is visible.
+	// `status.restart_trigger` echoing a value confirms acknowledgement, not that a power cycle ran: a
+	// request on a powered-off host is skipped, a host that still reports `PowerOn` while transitioning is
+	// skipped, and HALTED stops restart tracking without cancelling a power cycle the backend may already
+	// have accepted.
 	RestartTrigger int64
 	// Values of the template parameters passed to the provisioning template.
 	//
@@ -897,8 +906,9 @@ type BareMetalInstanceStatus_builder struct {
 	State BareMetalInstanceState
 	// Contains a list of conditions that describe in detail the status of the bare metal instance.
 	Conditions []*BareMetalInstanceCondition
-	// Echo of `spec.restart_trigger` after the controller has executed the requested restart.
-	// The controller sets this to match `spec.restart_trigger` once the power cycle is complete.
+	// Echo of `spec.restart_trigger` after the controller has acknowledged the requested restart.
+	// This confirms acknowledgement, not that a power cycle ran; see `spec.restart_trigger` for the
+	// skip and cancel cases.
 	RestartTrigger int64
 	// Runtime networking state for each network attachment.
 	// Populated by the operator after DHCP lease discovery and synced via the feedback controller.

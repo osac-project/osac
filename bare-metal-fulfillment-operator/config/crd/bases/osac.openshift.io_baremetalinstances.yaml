@@ -462,6 +462,12 @@ spec:
                   - type
                   type: object
                 type: array
+              restartRequestID:
+                description: |-
+                  RestartRequestID is the durable identity of the last restart request. It
+                  distinguishes a retry of the same request from a new request that reuses an
+                  earlier trigger value.
+                type: string
               restartTrigger:
                 description: RestartTrigger is the observed restart version of the
                   instance

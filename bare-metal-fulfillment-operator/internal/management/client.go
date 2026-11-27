@@ -9,6 +9,14 @@ import (
 
 var ErrTransitioning = errors.New("power state transition already in progress")
 
+// ErrPowerRead marks a transient power-state read failure. The caller must not
+// treat it as an observed power transition.
+var ErrPowerRead = errors.New("power state read failed")
+
+// ErrHostOperational marks a terminal host operational error, as opposed to a
+// transient backend or API failure.
+var ErrHostOperational = errors.New("host operational error")
+
 type PowerState string
 
 const (
@@ -27,10 +35,23 @@ type Config struct {
 	Options map[string]any `json:"options"`
 }
 
+// RestartSubmissionState reports whether the backend accepted a restart request.
+type RestartSubmissionState int
+
+const (
+	// RestartSubmissionUnknown means the backend exposes no durable request identity.
+	RestartSubmissionUnknown RestartSubmissionState = iota
+	// RestartSubmissionSubmitted means the backend already accepted this request.
+	RestartSubmissionSubmitted
+	// RestartSubmissionNotSubmitted means the backend has not accepted this request.
+	RestartSubmissionNotSubmitted
+)
+
 type Client interface {
 	GetPowerState(ctx context.Context, hostID string) (*PowerStatus, error)
 	SetPowerState(ctx context.Context, hostID string, target PowerState) error
-	TriggerRestart(ctx context.Context, hostID string) error
+	TriggerRestart(ctx context.Context, hostID, requestID string) error
+	IsRestartSubmitted(ctx context.Context, hostID, requestID string) (RestartSubmissionState, error)
 	IsRestartComplete(ctx context.Context, hostID string) (bool, error)
 }
 

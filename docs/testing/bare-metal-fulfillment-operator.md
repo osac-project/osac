@@ -20,6 +20,19 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Contract | None dedicated | No real provider boundary | Static Metal3 CRDs, patched status and simulated transitions do not exercise a real contract; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying coverage. |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 
+The chart ships a ServiceMonitor for the controller-runtime secure metrics
+endpoint. The only automated coverage is the installer's input-validation
+gate (`osac-installer/scripts/test-input-validation.sh`, run by the Helm lint
+workflow), which renders it through the umbrella chart with the ServiceMonitor
+CRD present and asserts the scrape interval's value and quoting. Its HTTPS
+scheme, ServiceAccount token, TLS config, selector-to-Service agreement and
+the `.Capabilities.APIVersions.Has` guard that keeps a cluster without the
+Prometheus operator CRDs installable are all unasserted. Verify by hand when
+changing the metrics Service's labels or ports, the ServiceMonitor, or
+`serviceMonitor.*` values. Scrape coverage on a deployed cluster with
+user-workload monitoring is tracked by
+[OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132).
+
 ## Coverage notes
 
 Cover success, no-match and provider-error paths for inventory, selection,

@@ -21,6 +21,31 @@ For commands, see the
 run `make -C osac-installer help` from the repository root for the installer targets that drive the
 deployed suite.
 
+## ServiceMonitor coverage gap
+
+The only automated coverage of the ServiceMonitor this chart ships is the
+installer's input-validation gate
+(`osac-installer/scripts/test-input-validation.sh`, run by the Helm lint
+workflow). It renders the monitor through the umbrella chart with the
+ServiceMonitor CRD present and asserts the scrape interval's value and
+quoting, and that the schema rejects fractional and Go-only-unit intervals.
+Nothing asserts the monitor's structure.
+
+One ServiceMonitor selects every scraped Service by the
+`osac.openshift.io/metrics` label, rather than one monitor per component,
+because the components are gated inconsistently: `consoleProxy.disabled` is
+negated, `eventPublisher.enabled` is positive, and the rest are ungated. A
+Service that is not rendered is then simply not selected. That only holds
+while exactly the Services with a metrics port carry the label, so changing a
+Service's labels or ports can silently drop a target or add an unscrapable
+one. The `.Capabilities.APIVersions.Has` guard that keeps a cluster without
+the Prometheus operator CRDs installable is likewise unasserted.
+
+Verify by hand when changing a Service's labels or ports, the ServiceMonitor,
+or `serviceMonitor.*` values. Scrape coverage on a deployed cluster with
+user-workload monitoring is tracked by
+[OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132).
+
 ## ComputeInstance disk handoff (OSAC-6685)
 
 The `compute-storage` component-integration phase runs through the installer

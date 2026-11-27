@@ -111,6 +111,24 @@ Coverage gaps:
 Offline render checks do not establish a live exporter or Prometheus;
 see the [osac-metering guide](osac-metering.md) for reader boundaries and gaps.
 
+The ServiceMonitors shipped by the component charts the umbrella installs —
+`fulfillment-service/charts/service`, `osac-operator/charts/operator` and
+`bare-metal-fulfillment-operator/charts/operator` — are covered only by
+`scripts/test-input-validation.sh`, which the Helm lint workflow runs. It
+renders each monitor through the umbrella with the ServiceMonitor CRD present
+and asserts the scrape interval's value and quoting, because the CRD types
+`interval` as a string: a bare `0` is rejected at apply time while
+`helm template` accepts it, so an exit-status check cannot see the fault. The
+schema side rejects fractional and Go-only-unit intervals. 18 cases, six per
+chart.
+
+Nothing asserts those monitors' structure — selectors, endpoint TLS or the
+`.Capabilities.APIVersions.Has` guards. The helm-unit leg's offline render
+checks are scoped to the preflight engine and report, so they do not exercise
+component subchart output. See each component's testing guide. Scrape
+coverage on a deployed cluster with user-workload monitoring is tracked by
+[OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132).
+
 ## OSAC-5343 deployed enablement coverage
 
 The release E2E path adds trust assertions to existing `tests/e2e/` journeys

@@ -23,6 +23,19 @@ The CI job runs the installer's Kind target with the operator suite
 | Contract | `test/contract/` | Helm RBAC templates vs permission contract | No deployed operator/provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Environment/provider-dependent. |
 
+The chart ships a ServiceMonitor for the controller-runtime secure metrics
+endpoint. The only automated coverage is the installer's input-validation
+gate (`osac-installer/scripts/test-input-validation.sh`, run by the Helm lint
+workflow), which renders it through the umbrella chart with the ServiceMonitor
+CRD present and asserts the scrape interval's value and quoting. Its HTTPS
+scheme, ServiceAccount token, TLS config, selector-to-Service agreement and
+the `.Capabilities.APIVersions.Has` guard that keeps a cluster without the
+Prometheus operator CRDs installable are all unasserted. Verify by hand when
+changing the metrics Service's labels or ports, the ServiceMonitor, or
+`serviceMonitor.*` values. Scrape coverage on a deployed cluster with
+user-workload monitoring is tracked by
+[OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132).
+
 ## Coverage boundaries
 
 The Kind operator leg disables provider networking and Fulfillment: it proves

@@ -759,6 +759,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'helm-unit'
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
       - name: Set up Helm
         if: inputs.kind == 'helm-unit'
@@ -795,6 +796,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: startsWith(inputs.kind, 'it-osac-installer-preflight')
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
       - name: Set up Helm
         if: startsWith(inputs.kind, 'it-osac-installer-preflight')

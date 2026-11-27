@@ -1436,6 +1436,32 @@ render_infra_failure_matching() {
   fi
 }
 
+# Render the osac chart with the ServiceMonitor CRD present and require every
+# rendered scrape interval to be the given YAML scalar, quoting included. The
+# CRD types interval as a string, so a bare 0 is rejected at apply time while
+# `helm template` is perfectly happy -- an exit-status check cannot see it.
+rendered_interval() {
+  local name=$1 want=$2
+  shift 2
+  local out="${TMP_DIR}/${name}.yaml"
+  echo "checking ${name} (rendered interval is ${want})"
+  "${HELM_BIN}" "${COMMON_ARGS[@]}" \
+    --api-versions monitoring.coreos.com/v1/ServiceMonitor "$@" >"${out}"
+  local found
+  found=$(grep -c "^ *interval: ${want}\$" "${out}" || true)
+  if [ "${found}" -eq 0 ]; then
+    echo "ERROR: ${name}: no rendered interval equal to ${want}" >&2
+    grep -n "interval:" "${out}" >&2 || echo "  (no interval rendered at all)" >&2
+    exit 1
+  fi
+  # Nothing may render the unquoted form alongside it.
+  if grep -Eq "^ *interval: [^\"]" "${out}"; then
+    echo "ERROR: ${name}: an unquoted interval rendered; YAML will type it" >&2
+    grep -nE "^ *interval: [^\"]" "${out}" >&2
+    exit 1
+  fi
+}
+
 # A valid configuration still renders end to end (AC: supported valid
 # configurations are unaffected by the gate).
 render_success valid-defaults
@@ -1494,6 +1520,51 @@ render_failure_matching \
   fulfillment-trust-unknown-key \
   '(global\.fulfillmentTrust|/global/fulfillmentTrust).*additional propert(y|ies).*unknownKey.*(is )?not allowed' \
   --set global.fulfillmentTrust.unknownKey=1
+
+# A scrape interval is a Prometheus duration, not a Go one, so it cannot
+# share positiveDuration with the upgrade timeouts. The three
+# serviceMonitor.interval fields reach the ServiceMonitor endpoint verbatim,
+# where the CRD enforces
+#   ^(0|(([0-9]+)y)?(([0-9]+)w)?(([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?(([0-9]+)ms)?)$
+# -- integers only, with y/w/d and without Go's ns/us. Accepting a value the
+# API server then rejects is exactly the failure this gate exists to catch,
+# so pin both directions of the mismatch. Checked against the CRD shipped by
+# prometheus-operator, not against the Go time.Duration grammar.
+for sm_chart in service operator bmf; do
+  render_failure_matching \
+    "scrape-interval-fractional-${sm_chart}" \
+    "(${sm_chart}\.serviceMonitor\.interval|/${sm_chart}/serviceMonitor/interval)" \
+    --set-string "${sm_chart}.serviceMonitor.interval=1.5m"
+  render_failure_matching \
+    "scrape-interval-go-only-unit-${sm_chart}" \
+    "(${sm_chart}\.serviceMonitor\.interval|/${sm_chart}/serviceMonitor/interval)" \
+    --set-string "${sm_chart}.serviceMonitor.interval=100us"
+  # Empty renders `interval:` as YAML null, which the CRD rejects for a
+  # string field; omit the key instead to fall back to the global interval.
+  render_failure_matching \
+    "scrape-interval-empty-${sm_chart}" \
+    "(${sm_chart}\.serviceMonitor\.interval|/${sm_chart}/serviceMonitor/interval)" \
+    --set-string "${sm_chart}.serviceMonitor.interval="
+  # Valid Prometheus durations positiveDuration would have rejected.
+  render_success \
+    "scrape-interval-days-${sm_chart}" \
+    --set-string "${sm_chart}.serviceMonitor.interval=1d"
+  # 0 means "use the global interval". Schema acceptance is not enough here:
+  # the CRD types interval as a string, and an unquoted 0 renders as a YAML
+  # integer that the API server rejects with
+  #   spec.endpoints[0].interval: Invalid value: "integer"
+  # Rendering has to be asserted, not just the exit status: render_success
+  # discards the manifest, and without --api-versions the monitor's
+  # capability guard renders nothing at all to inspect.
+  rendered_interval \
+    "scrape-interval-global-${sm_chart}" \
+    '"0"' \
+    --set-string "${sm_chart}.serviceMonitor.interval=0"
+  rendered_interval \
+    "scrape-interval-days-rendered-${sm_chart}" \
+    '"1d"' \
+    --set-string "${sm_chart}.serviceMonitor.interval=1d"
+done
 
 # bmaas-netbox-ci is a valid profile the gate must not block: it relies on
 # the infra chart's netbox-token-seed hook to create the NetBox token Secret

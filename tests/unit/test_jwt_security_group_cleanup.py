@@ -26,7 +26,7 @@ def lifecycle_clients(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock, Mock
     k8s.get_virtual_network_name.return_value = "vn-cr"
     k8s.get_subnet_name.return_value = "subnet-cr"
     k8s.get_security_group_name.return_value = "sg-cr"
-    k8s.is_present.return_value = False
+    k8s.is_absent.return_value = True
     return grpc, k8s, sleep
 
 
@@ -37,7 +37,7 @@ def test_jwt_security_group_cleanup_waits_for_api_absence(lifecycle_clients: tup
         if grpc.list_security_group_ids.call_count == 1:
             return ["sg-id"]
         grpc.delete_security_group.assert_called_once_with(sg_id="sg-id")
-        k8s.is_present.assert_called_once_with(resource="securitygroups.osac.openshift.io", name="sg-cr")
+        k8s.is_absent.assert_called_once_with(resource="securitygroups.osac.openshift.io", name="sg-cr")
         grpc.delete_subnet.assert_not_called()
         grpc.delete_virtual_network.assert_not_called()
         return ["sg-id"] if grpc.list_security_group_ids.call_count < 4 else []
@@ -48,7 +48,7 @@ def test_jwt_security_group_cleanup_waits_for_api_absence(lifecycle_clients: tup
 
     def list_subnets() -> list[str]:
         grpc.delete_subnet.assert_called_once_with(subnet_id="subnet-id")
-        k8s.is_present.assert_any_call(resource="subnets.osac.openshift.io", name="subnet-cr")
+        k8s.is_absent.assert_any_call(resource="subnets.osac.openshift.io", name="subnet-cr")
         grpc.delete_virtual_network.assert_not_called()
         return ["subnet-id"] if grpc.list_subnet_ids.call_count == 1 else []
 
@@ -66,10 +66,10 @@ def test_jwt_security_group_cleanup_waits_for_api_absence(lifecycle_clients: tup
 
     grpc.delete_virtual_network.assert_called_once_with(vn_id="vn-id")
     assert sleep.call_args_list == [call(5), call(5), call(2)]
-    assert k8s.is_present.call_args_list == [
+    assert k8s.is_absent.call_args_list == [
         call(resource="securitygroups.osac.openshift.io", name="sg-cr"),
         call(resource="subnets.osac.openshift.io", name="subnet-cr"),
-        call(resource="virtualnetwork", name="vn-cr"),
+        call(resource="virtualnetworks.osac.openshift.io", name="vn-cr"),
     ]
 
 
@@ -84,7 +84,7 @@ def test_jwt_security_group_cleanup_times_out_before_parent_deletion(
     assert failure.value.last_value == "False"
     assert grpc.list_security_group_ids.call_count == 31
     assert sleep.call_args_list == [call(5)] * 29
-    k8s.is_present.assert_called_once_with(resource="securitygroups.osac.openshift.io", name="sg-cr")
+    k8s.is_absent.assert_called_once_with(resource="securitygroups.osac.openshift.io", name="sg-cr")
     grpc.delete_security_group.assert_called_once_with(sg_id="sg-id")
     grpc.delete_subnet.assert_not_called()
     grpc.delete_virtual_network.assert_not_called()
@@ -101,7 +101,7 @@ def test_jwt_security_group_cleanup_propagates_api_list_error(lifecycle_clients:
 
     assert failure.value is error
     assert grpc.list_security_group_ids.call_count == 2
-    k8s.is_present.assert_called_once_with(resource="securitygroups.osac.openshift.io", name="sg-cr")
+    k8s.is_absent.assert_called_once_with(resource="securitygroups.osac.openshift.io", name="sg-cr")
     grpc.delete_security_group.assert_called_once_with(sg_id="sg-id")
     grpc.delete_subnet.assert_not_called()
     grpc.delete_virtual_network.assert_not_called()

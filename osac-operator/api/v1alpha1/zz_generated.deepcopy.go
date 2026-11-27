@@ -424,6 +424,11 @@ func (in *ComputeInstanceSpec) DeepCopyInto(out *ComputeInstanceSpec) {
 		*out = new(corev1.LocalObjectReference)
 		**out = **in
 	}
+	if in.UserDataFulfillmentSecretRef != nil {
+		in, out := &in.UserDataFulfillmentSecretRef, &out.UserDataFulfillmentSecretRef
+		*out = new(FulfillmentSecretReference)
+		**out = **in
+	}
 	if in.NetworkAttachments != nil {
 		in, out := &in.NetworkAttachments, &out.NetworkAttachments
 		*out = make([]ComputeNetworkAttachment, len(*in))

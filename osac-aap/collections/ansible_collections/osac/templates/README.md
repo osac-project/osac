@@ -90,8 +90,17 @@ The following are read from the `ComputeInstance` spec:
 | `spec.diskImage` | DiskImage reference (name or id) |
 | `spec.runStrategy` | VM run strategy (Always, Halted, etc.) |
 | `spec.sshKey` | SSH public key for VM access |
-| `spec.userDataSecretRef.name` | Secret containing cloud-init user data |
+| `spec.userDataSecretRef.name` | Management-cluster staging Secret for inline user data |
+| `spec.userDataFulfillmentSecretRef.id` | Canonical OSAC Secret ID for a direct Fulfillment read |
 | `spec.additionalDisks` | Additional data disks |
+
+The ComputeInstance create job uses the protected Fulfillment Secret reader
+credential for `spec.userDataFulfillmentSecretRef.id` and reads the Secret's
+`userdata` key. Inline user data uses the staging Secret named in
+`spec.userDataSecretRef.name`. Submit ComputeInstances through Fulfillment
+so it validates tenant access and canonicalizes the reference before
+projection to Kubernetes. After rotating the reader credential, verify a
+fresh operator-driven ComputeInstance create with Secret-backed user data.
 
 **Windows-specific behavior** (when guest OS resolves to `windows`): hostname via sysprep unattend.xml (15-character NetBIOS limit), enhanced Hyper-V enlightenments and clock policy, SATA sysprep CD-ROM, optional CloudBase-Init user-data secret, 900s ready wait.
 

@@ -126,7 +126,6 @@ type task struct {
 	hubId              string
 	hubNamespace       string
 	hubClient          clnt.Client
-	userDataSecretName string
 	materializedSSHKey string
 }
 
@@ -309,11 +308,6 @@ func (t *task) update(ctx context.Context) error {
 		return nil
 	}
 
-	// Set the user data Secret name if user data is provided (no K8s call yet):
-	if t.computeInstance.GetSpec().GetUserDataSource() != nil {
-		t.userDataSecretName = fmt.Sprintf("%s%s", t.computeInstance.GetId(), userDataSecretSuffix)
-	}
-
 	// Prepare the changes to the spec:
 	spec, err := t.buildSpecWithNetworkAttachments(ctx, object == nil)
 	if err != nil {
@@ -362,6 +356,11 @@ func (t *task) update(ctx context.Context) error {
 				slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
 		}
 		spec.NetworkAttachments = object.Spec.NetworkAttachments
+		// Preserve the local reference on existing CRs projected before direct reads.
+		if spec.UserDataFulfillmentSecretRef != nil && object.Spec.UserDataSecretRef != nil {
+			spec.UserDataFulfillmentSecretRef = nil
+			spec.UserDataSecretRef = object.Spec.UserDataSecretRef
+		}
 		update := object.DeepCopy()
 		update.Spec = spec
 		// Keep the instance-type-name label in sync with the spec being patched so it
@@ -978,9 +977,15 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 			spec.SSHKey = publicKey
 		}
 	}
-	if t.userDataSecretName != "" {
+	source := ciSpec.GetUserDataSource()
+	if ref := source.GetSecret(); ref != nil {
+		if ref.GetId() == "" {
+			return errors.New("user_data_source.secret must have an id")
+		}
+		spec.UserDataFulfillmentSecretRef = &osacv1alpha1.FulfillmentSecretReference{ID: ref.GetId()}
+	} else if source.HasInline() {
 		spec.UserDataSecretRef = &corev1.LocalObjectReference{
-			Name: t.userDataSecretName,
+			Name: t.computeInstance.GetId() + userDataSecretSuffix,
 		}
 	}
 	diskImageRef := ciSpec.GetDiskImage()
@@ -1050,18 +1055,15 @@ func (t *task) addDiskVolumeIDs(spec *osacv1alpha1.ComputeInstanceSpec) error {
 // provided via the fulfillment API. The Secret is owned by the ComputeInstance CR so that
 // Kubernetes garbage collection handles cleanup automatically on deletion.
 func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.ComputeInstance) error {
-	if t.userDataSecretName == "" {
+	source := t.computeInstance.GetSpec().GetUserDataSource()
+	if !source.HasInline() {
 		return nil
 	}
 
-	userData, err := t.resolveUserData(ctx)
-	if err != nil {
-		return err
-	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: t.hubNamespace,
-			Name:      t.userDataSecretName,
+			Name:      t.computeInstance.GetId() + userDataSecretSuffix,
 			Labels: map[string]string{
 				labels.ComputeInstanceUuid: t.computeInstance.GetId(),
 			},
@@ -1075,11 +1077,11 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.Com
 			},
 		},
 		StringData: map[string]string{
-			userDataSecretKey: userData,
+			userDataSecretKey: source.GetInline(),
 		},
 	}
 
-	err = t.hubClient.Create(ctx, secret)
+	err := t.hubClient.Create(ctx, secret)
 	if apierrors.IsAlreadyExists(err) {
 		return nil
 	}
@@ -1093,28 +1095,6 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.Com
 		slog.String("name", secret.GetName()),
 	)
 	return nil
-}
-
-func (t *task) resolveUserData(ctx context.Context) (string, error) {
-	ref := t.computeInstance.GetSpec().GetUserDataSource().GetSecret()
-	if ref == nil {
-		return t.computeInstance.GetSpec().GetUserDataSource().GetInline(), nil
-	}
-	if t.r.secretsClient == nil {
-		return "", errors.New("secrets client is required to resolve user_data_source.secret")
-	}
-	if ref.GetId() == "" {
-		return "", errors.New("user_data_source.secret must have an id")
-	}
-	response, err := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: ref.GetId()}.Build())
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch user_data_source.secret: %w", err)
-	}
-	value, ok := response.GetObject().GetData()[userDataSecretKey]
-	if !ok || len(value) == 0 {
-		return "", fmt.Errorf("secret %q is missing non-empty data[%q]", ref.GetId(), userDataSecretKey)
-	}
-	return string(value), nil
 }
 
 func mapSourceType(st privatev1.SourceType) osacv1alpha1.ImageSourceType {

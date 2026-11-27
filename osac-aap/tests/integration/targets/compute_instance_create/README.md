@@ -27,6 +27,13 @@ its VMI template and each DataVolume, alongside disk Volume IDs and specs.
 resource creation without contacting Kubernetes. The fixture has a tenant
 annotation; these targets do not create a VMI or verify PVC propagation.
 
+`user_data_sources` runs the VM role against Kind for inline and
+Fulfillment-backed Linux and Windows user data. Synthetic HTTPS Keycloak and
+Fulfillment endpoints record the calls, including zero calls for inline data.
+The test checks workload Secret contents, VM volume references, malformed
+references, and redaction of synthetic secrets and tokens in Ansible output.
+The test supplies a local credential file and stops at the Kubernetes VM spec.
+
 ## Existing integration environment
 
 From `osac-aap/`, `make test` registers this target without requiring

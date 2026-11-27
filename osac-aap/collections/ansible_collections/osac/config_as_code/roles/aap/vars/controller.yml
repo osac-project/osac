@@ -186,6 +186,9 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     ask_labels_on_launch: true
     timeout: 3600
     verbosity: 0
+    prevent_instance_group_fallback: true
+    ask_credential_on_launch: false
+    credentials: "{{ [aap_fulfillment_reader_credential_name] if aap_fulfillment_reader_enabled | bool else omit }}"
   - name: "{{ aap_prefix }}-delete-compute-instance"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"

@@ -108,6 +108,8 @@ type ComputeNetworkAttachment struct {
 // ComputeInstanceSpec defines the desired state of ComputeInstance
 // +kubebuilder:validation:XValidation:rule="has(self.gpu) == has(oldSelf.gpu) && (!has(self.gpu) || self.gpu == oldSelf.gpu)",message="gpu is immutable"
 // +kubebuilder:validation:XValidation:rule="has(self.networkAttachments) == has(oldSelf.networkAttachments) && (!has(self.networkAttachments) || self.networkAttachments == oldSelf.networkAttachments)",message="networkAttachments are immutable after creation"
+// +kubebuilder:validation:XValidation:rule="!(has(self.userDataSecretRef) && has(self.userDataFulfillmentSecretRef))",message="user data Secret references are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="has(self.userDataFulfillmentSecretRef) == has(oldSelf.userDataFulfillmentSecretRef) && (!has(self.userDataFulfillmentSecretRef) || self.userDataFulfillmentSecretRef == oldSelf.userDataFulfillmentSecretRef)",message="userDataFulfillmentSecretRef is immutable"
 type ComputeInstanceSpec struct {
 	// TemplateID is the unique identifier of the compute instance template to use when creating this compute instance
 	// +kubebuilder:validation:Required
@@ -172,6 +174,10 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="userDataSecretRef is immutable"
 	UserDataSecretRef *corev1.LocalObjectReference `json:"userDataSecretRef,omitempty"`
+
+	// UserDataFulfillmentSecretRef references user data fetched by the provisioning job.
+	// +kubebuilder:validation:Optional
+	UserDataFulfillmentSecretRef *FulfillmentSecretReference `json:"userDataFulfillmentSecretRef,omitempty"`
 
 	// SSHKey is the SSH public key
 	// +kubebuilder:validation:Optional

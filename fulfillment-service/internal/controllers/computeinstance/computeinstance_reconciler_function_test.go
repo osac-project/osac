@@ -203,11 +203,12 @@ var _ = Describe("buildSpec", func() {
 				computeInstance: privatev1.ComputeInstance_builder{
 					Id: "test-explicit-fields",
 					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
-						InstanceType: &privatev1.InstanceTypeReference{Name: "standard-4-8"},
-						RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
-						SshKey:       privatev1.SecretReference_builder{Id: "test-ssh-key", Name: "login"}.Build(),
-						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+						Template:       &privatev1.ComputeInstanceTemplateReference{Name: template},
+						InstanceType:   &privatev1.InstanceTypeReference{Name: "standard-4-8"},
+						RunStrategy:    privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+						SshKey:         privatev1.SecretReference_builder{Id: "test-ssh-key", Name: "login"}.Build(),
+						DiskImage:      &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     proto.Int32(20),
 							StorageTier: privatev1.StorageTierReference_builder{Name: "fast"}.Build(),
@@ -227,9 +228,8 @@ var _ = Describe("buildSpec", func() {
 						},
 					}.Build(),
 				}.Build(),
-				userDataSecretName: "test-explicit-fields-user-data",
-				hubNamespace:       hubNamespace,
-				hubClient:          fakeClient,
+				hubNamespace: hubNamespace,
+				hubClient:    fakeClient,
 			}
 
 			spec, err := task.buildSpec(ctx)
@@ -2499,9 +2499,8 @@ var _ = Describe("ensureUserDataSecret", func() {
 					UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config\npackages:\n  - vim")}.Build(),
 				}.Build(),
 			}.Build(),
-			hubNamespace:       hubNamespace,
-			hubClient:          fakeClient,
-			userDataSecretName: ciID + userDataSecretSuffix,
+			hubNamespace: hubNamespace,
+			hubClient:    fakeClient,
 		}
 
 		err := t.ensureUserDataSecret(ctx, owner)
@@ -2527,44 +2526,32 @@ var _ = Describe("ensureUserDataSecret", func() {
 		Expect(ownerRefs[0].Kind).To(Equal("ComputeInstance"))
 	})
 
-	It("should create a Secret from a referenced OSAC Secret", func() {
+	It("projects the canonical reference without retrieving or staging its payload", func() {
 		ctrl := gomock.NewController(GinkgoT())
-		secretsClient := NewMockSecretsClient(ctrl)
-		secretsClient.EXPECT().Get(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, request *privatev1.SecretsGetRequest, _ ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
-				Expect(request.GetId()).To(Equal("source-secret-id"))
-				return privatev1.SecretsGetResponse_builder{Object: privatev1.Secret_builder{
-					Data: map[string][]byte{userDataSecretKey: []byte("referenced-data")},
-				}.Build()}.Build(), nil
-			},
-		)
-		scheme := runtime.NewScheme()
-		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
-		Expect(corev1.AddToScheme(scheme)).To(Succeed())
-		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		instanceTypes := NewMockInstanceTypesClient(ctrl)
+		instanceTypes.EXPECT().Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 2, MemoryGib: 4}.Build(),
+				}.Build(),
+			}.Build(), nil).Times(2)
 		t := &task{
-			r: &function{logger: logger, secretsClient: secretsClient},
+			r: &function{logger: logger, instanceTypesClient: instanceTypes, secretsClient: NewMockSecretsClient(ctrl)},
 			computeInstance: privatev1.ComputeInstance_builder{Id: ciID, Spec: privatev1.ComputeInstanceSpec_builder{
-				UserDataSource: privatev1.UserDataSource_builder{Secret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build()}.Build(),
+				InstanceType: &privatev1.InstanceTypeReference{Name: "standard-2-4"},
+				UserDataSource: privatev1.UserDataSource_builder{
+					Secret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build(),
+				}.Build(),
 			}.Build()}.Build(),
-			hubNamespace: hubNamespace, hubClient: fakeClient, userDataSecretName: ciID + userDataSecretSuffix,
 		}
-		Expect(t.ensureUserDataSecret(ctx, owner)).To(Succeed())
-		secret := &corev1.Secret{}
-		Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: hubNamespace, Name: ciID + userDataSecretSuffix}, secret)).To(Succeed())
-		Expect(secret.StringData[userDataSecretKey]).To(Equal("referenced-data"))
-	})
-
-	It("should reject a referenced OSAC Secret without userdata", func() {
-		ctrl := gomock.NewController(GinkgoT())
-		secretsClient := NewMockSecretsClient(ctrl)
-		secretsClient.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
-			privatev1.SecretsGetResponse_builder{Object: privatev1.Secret_builder{Data: map[string][]byte{"other": []byte("value")}}.Build()}.Build(), nil)
-		t := &task{r: &function{logger: logger, secretsClient: secretsClient},
-			computeInstance: privatev1.ComputeInstance_builder{Spec: privatev1.ComputeInstanceSpec_builder{
-				UserDataSource: privatev1.UserDataSource_builder{Secret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build()}.Build(),
-			}.Build()}.Build(), userDataSecretName: ciID + userDataSecretSuffix}
-		Expect(t.ensureUserDataSecret(ctx, owner)).To(MatchError(ContainSubstring("missing non-empty data")))
+		for range 2 {
+			spec, err := t.buildSpec(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(spec.UserDataFulfillmentSecretRef).To(Equal(&osacv1alpha1.FulfillmentSecretReference{ID: "source-secret-id"}))
+			Expect(spec.UserDataSecretRef).To(BeNil())
+			// The nil hub client also catches an attempted read or write.
+			Expect(t.ensureUserDataSecret(ctx, owner)).To(Succeed())
+		}
 	})
 
 	It("should preserve user data when Secret already exists", func() {
@@ -2589,9 +2576,8 @@ var _ = Describe("ensureUserDataSecret", func() {
 					UserDataSource: privatev1.UserDataSource_builder{Inline: new("some-data")}.Build(),
 				}.Build(),
 			}.Build(),
-			hubNamespace:       hubNamespace,
-			hubClient:          fakeClient,
-			userDataSecretName: ciID + userDataSecretSuffix,
+			hubNamespace: hubNamespace,
+			hubClient:    fakeClient,
 		}
 
 		err := t.ensureUserDataSecret(ctx, owner)
@@ -2622,9 +2608,8 @@ var _ = Describe("ensureUserDataSecret", func() {
 					UserDataSource: privatev1.UserDataSource_builder{Inline: new("some-data")}.Build(),
 				}.Build(),
 			}.Build(),
-			hubNamespace:       hubNamespace,
-			hubClient:          fakeClient,
-			userDataSecretName: ciID + userDataSecretSuffix,
+			hubNamespace: hubNamespace,
+			hubClient:    fakeClient,
 		}
 
 		err := t.ensureUserDataSecret(ctx, owner)
@@ -2632,7 +2617,7 @@ var _ = Describe("ensureUserDataSecret", func() {
 		Expect(err.Error()).To(ContainSubstring("create failed"))
 	})
 
-	It("should not create a Secret when userDataSecretName is empty", func() {
+	It("should not create a Secret when user data is absent", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 		Expect(corev1.AddToScheme(scheme)).To(Succeed())

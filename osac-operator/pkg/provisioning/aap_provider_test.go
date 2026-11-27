@@ -114,13 +114,14 @@ var _ = Describe("AAPProvider", func() {
 				}
 			})
 
-			It("preserves disk IDs after a failed launch and retry", func() {
+			It("preserves projected disk and user data references after a failed launch and retry", func() {
 				instance := &v1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "test-resource",
 						Namespace: "default",
 					},
 					Spec: v1alpha1.ComputeInstanceSpec{
+						UserDataFulfillmentSecretRef: &v1alpha1.FulfillmentSecretReference{ID: "user-data-id"},
 						DiskVolumeIDs: map[string]string{
 							"boot":   "volume-boot",
 							"disk-1": "volume-data-1",
@@ -136,6 +137,9 @@ var _ = Describe("AAPProvider", func() {
 						"boot":   "volume-boot",
 						"disk-1": "volume-data-1",
 					}))
+					Expect(spec["userDataFulfillmentSecretRef"]).To(Equal(map[string]any{"id": "user-data-id"}))
+					Expect(spec).NotTo(HaveKey("userDataSecretRef"))
+					Expect(req.CredentialIDs).To(BeEmpty())
 					if launches == 1 {
 						return nil, errors.New("temporary AAP API error")
 					}

@@ -179,6 +179,17 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ inputs.commit || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Check out osac-test-infra
+        if: inputs.kind == 'it-caas'
+        # Best effort: only the prepull step uses this checkout, and it warns
+        # on a miss so the CaaS prepare can fall back to the source registry.
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: osac-project/osac-test-infra
+          ref: main
+          path: osac-test-infra
+          persist-credentials: false
       - uses: ./.github/actions/setup-go
         if: inputs.kind == 'it-caas'
         with:
@@ -193,6 +204,22 @@ jobs:
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
+      # Docker resolves the retagged source names from local storage, so the
+      # prepare step's image builds skip the anonymous token request that
+      # intermittently fails. Best effort: on a miss they fall back.
+      - name: Preload UBI base images from the CI mirror
+        if: inputs.kind == 'it-caas'
+        env:
+          UBI_RUNTIME: docker
+        run: |
+          osac-test-infra/.github/scripts/ubi-mirror.sh prepull \
+            tests/integration/caas/Containerfile \
+            osac-aap/Containerfile \
+            fulfillment-service/Containerfile \
+            osac-operator/Containerfile \
+            osac-metering/metering-service/Containerfile \
+            bare-metal-fulfillment-operator/Containerfile \
+            || echo "::warning title=ubi-prepull::prepull failed; builds will pull from registry.access.redhat.com"
       - name: Prepare CaaS integration environment
         if: inputs.kind == 'it-caas'
         env:
@@ -632,6 +659,20 @@ jobs:
         env:
           CONTAINER_TOOL: docker
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+
+      # Docker resolves the retagged source names from local storage, so the
+      # builds below skip the anonymous token request that intermittently
+      # fails. Best effort: on a miss they fall back to the source registry.
+      - name: Preload UBI base images from the CI mirror
+        if: inputs.kind == 'it-osac-installer'
+        env:
+          UBI_RUNTIME: docker
+        run: |
+          osac-test-infra/.github/scripts/ubi-mirror.sh prepull \
+            fulfillment-service/Containerfile \
+            osac-operator/Containerfile \
+            osac-metering/metering-service/Containerfile \
+            || echo "::warning title=ubi-prepull::prepull failed; builds will pull from registry.access.redhat.com"
 
       - name: Build fulfillment-service image from PR
         if: inputs.kind == 'it-osac-installer'

@@ -107,3 +107,23 @@ updates:
       versions: [">= 2"]
   commit-message:
     prefix: "NO-ISSUE"
+
+- package-ecosystem: "docker"
+  directory: "/tests/integration/caas"
+  schedule:
+    # Check for updates to container base images every week
+    interval: "weekly"
+    day: "friday"
+    time: "22:00"
+    timezone: "America/Los_Angeles"
+  groups:
+    caas-integration-container-images:
+      patterns:
+        - "*"
+  ignore:
+    # go-toolset tags use the Go version (1.x); UBI-versioned tags (10.x)
+    # ship older Go and break go.mod compatibility (see OSAC-3550)
+    - dependency-name: "ubi10/go-toolset"
+      versions: [">= 2"]
+  commit-message:
+    prefix: "NO-ISSUE"

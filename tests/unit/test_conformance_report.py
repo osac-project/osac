@@ -90,6 +90,24 @@ def test_report_has_the_exact_top_level_keys(tmp_path: Path) -> None:
     assert data["selectors"][0] == {"id": "generic", "type": "marker", "markers": ["conformance_generic"]}
 
 
+def test_report_records_a_non_blocking_classification(tmp_path: Path) -> None:
+    report = _report()
+    identity = TestIdentity(
+        id="TC-2",
+        name="TC-2: test",
+        nodeid="tests/e2e/test_tc2.py::test_tc2",
+        labels=frozenset({"conformance_netris", "conformance_non_blocking"}),
+        profiles=(),
+        classification=Classification.NON_BLOCKING,
+    )
+    outcome = TestOutcome(identity, Result.FAIL, 1.0, "", Path())
+    report = Report(**{**report.__dict__, "tests": (*report.tests, outcome)})
+
+    data = yaml.safe_load(write_report(report, tmp_path, Redactor()).read_text())
+
+    assert [test["classification"] for test in data["tests"]] == ["blocking", "non_blocking"]
+
+
 def test_report_redacts_messages(tmp_path: Path) -> None:
     path = write_report(_report(f"{_REDACTION_MARKER} leaked"), tmp_path, Redactor(secrets=(_REDACTION_MARKER,)))
 

@@ -345,9 +345,13 @@ func validateClusterVersionCreateRequest(request *privatev1.ClusterVersionsCreat
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.image' exceeds maximum length of %d characters", maxImageLength)
 	}
+	if len(spec.GetVersion()) > maxSemVerLength {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.version' exceeds maximum length of %d characters", maxSemVerLength)
+	}
 
 	// Validate semver format:
-	if err := validateSemVer(spec.GetVersion()); err != nil {
+	if _, err := parseSemVer(spec.GetVersion()); err != nil {
 		return nil, err
 	}
 
@@ -550,18 +554,18 @@ func validateClusterVersionImmutability(existing *privatev1.ClusterVersion,
 	return nil
 }
 
-// validateSemVer validates that the version string is a valid Semantic Version 2.0.0 string.
-func validateSemVer(version string) error {
+// parseSemVer parses a strict Semantic Version 2.0.0 string.
+func parseSemVer(version string) (*semver.Version, error) {
 	if len(version) > maxSemVerLength {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.version' exceeds maximum length of %d characters", maxSemVerLength)
 	}
-	_, err := semver.StrictNewVersion(version)
+	parsed, err := semver.StrictNewVersion(version)
 	if err != nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.version' is not a valid SemVer 2.0.0 string: %v", err)
 	}
-	return nil
+	return parsed, nil
 }
 
 // generateNameFromVersion converts a semver string to a DNS-1123 compliant name.

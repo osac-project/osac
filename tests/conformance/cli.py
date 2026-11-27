@@ -94,21 +94,10 @@ def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
     target = document.get("target")
     if not isinstance(target, Mapping):
         return redactor
-    token_files: list[str] = []
     token_file = target.get("tokenFile")
     if isinstance(token_file, str):
-        token_files.append(token_file)
-    aap = target.get("aap")
-    if isinstance(aap, Mapping):
-        aap_token_file = aap.get("tokenFile")
-        if isinstance(aap_token_file, str):
-            token_files.append(aap_token_file)
-        aap_host = _hostname(aap.get("url"))
-        if aap_host:
-            redactor.add_host(aap_host)
-    for value in token_files:
         with contextlib.suppress(OSError):
-            redactor.add_secret(Path(value).read_text().strip())
+            redactor.add_secret(Path(token_file).read_text().strip())
     hub: object = None
     kubeconfig = target.get("kubeconfig")
     if isinstance(kubeconfig, str):
@@ -144,8 +133,6 @@ def redactor_for_config(config: Config) -> Redactor:
         "apiURL": config.target_api_url,
         "tokenFile": str(config.target_token_file),
     }
-    if config.target_aap is not None:
-        target["aap"] = {"url": config.target_aap.url, "tokenFile": str(config.target_aap.token_file)}
     return _redactor_from_document({"target": target})
 
 

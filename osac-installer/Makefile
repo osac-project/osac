@@ -1479,7 +1479,7 @@ fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport
 	python3 scripts/test-fulfillment-trust-render.py
 
 .PHONY: service-account-idp-render-test
-service-account-idp-render-test: helm-infra-deps ## Check service-account management credentials and realm permissions
+service-account-idp-render-test: helm-infra-deps helm-osac-deps ## Check service-account management credentials and realm permissions
 	python3 scripts/test-service-account-idp-render.py
 
 .PHONY: metering-auth-render-test

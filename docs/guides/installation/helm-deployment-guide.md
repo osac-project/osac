@@ -322,6 +322,11 @@ CaaS prerequisite because hosted control planes use the hub's default
 Set `topolvm.enabled: true` only for the Kind `dev-full` local CSI setup; its
 TopoLVM storage class is not the cluster default.
 
+Here, `lvms.enabled` controls infrastructure installation and configuration.
+The separate Phase 2 `osac` chart value registers the local backend and tier;
+the AAP opt-in for OSAC CSI StorageClasses on SNO VMaaS is described in
+[Local LVMS CSI StorageClasses](../../../osac-aap/README.md#local-lvms-csi-storageclasses).
+
 ### Phase 1a: install prerequisite Operators
 
 Before upgrading an existing release, inspect its effective values:

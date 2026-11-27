@@ -4,6 +4,7 @@ import contextlib
 import os
 import subprocess
 import time
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import pytest
 
 from tests.e2e.core import failure_report, failure_snapshot, telemetry
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
-from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, QUOTA_DEFAULT_VALUE, GRPCClient, _retry_transport
 from tests.e2e.core.helpers import (
     assert_no_default_external_access,
     read_installed_networking_mode,
@@ -143,8 +144,135 @@ def _apply_manifest(manifest: str) -> None:
     subprocess.run(["oc", "apply", "-f", "-"], input=manifest, text=True, capture_output=True, check=True, timeout=120)
 
 
+def _set_quota_default(grpc: GRPCClient, dimension: str, *, value: int = QUOTA_DEFAULT_VALUE) -> str:
+    """Set one dimension's default, retrying transient transport failures.
+
+    The seeding is the session's first private-API call, and the route may not
+    have converged yet after `helm --wait`, so it retries the way ensure_tenant
+    does. Returns the default's id.
+    """
+    return _retry_transport(
+        lambda: grpc.set_quota_default(dimension=dimension, value=value), f"set quota default for '{dimension}'"
+    )
+
+
+def _quota_default_dimensions(default_storage_tier: str) -> tuple[str, ...]:
+    """The dimensions the session seeds, including this installation's storage tier."""
+    return (
+        # The fixed dimensions every suite's creates add to.
+        "compute.vcpus",
+        "compute.memory_gib",
+        "storage.volumes",
+        "network.external_ips",
+        "network.nat_gateways",
+        "network.virtual_networks",
+        "images.count",
+        "caas.control_planes",
+        # The bare-metal worker types the CaaS and storage suites create.
+        "bare_metal.instances.ci-worker-bm",
+        "bare_metal.instances.ci-worker-bm-gpu",
+        # The installer-provided storage tier the VM suites place volumes on.
+        f"storage.{default_storage_tier}.gib",
+        # The GPU resource the VMaaS GPU tests attach to their VMs.
+        "compute.gpu.nvidia.com/gpu",
+    )
+
+
 @pytest.fixture(scope="session", autouse=True)
-def cluster_tenants(namespace: str, k8s_hub_client: K8sClient) -> None:
+def quota_defaults(private_grpc: GRPCClient, default_storage_tier: str) -> None:
+    """Set generous default quota limits before the suite creates anything.
+
+    Quota is enforced in the request path: a dimension with no default has
+    limit 0, so every create would be refused, and a fresh tenant could not
+    even provision its default networking. The defaults are generous on
+    purpose; journeys that prove refusals set their own tighter limits. Types,
+    tiers and GPU resources created with random names set their dimension's
+    default where they are created (the GRPCClient creation helpers,
+    bmi_instance_type_for_tests, the networking suite's bmi_instance_type).
+
+    The defaults are installation configuration on a lab the run shares, not
+    resources a test owns, so the run puts the lab back the way it found it:
+    the controller's session hooks delete every default this fixture creates
+    and restore every value it changes (see _restore_quota_defaults). A
+    fixture teardown cannot do that, because pytest-xdist finalizes a worker's
+    fixtures when that worker runs its last test, while other workers may
+    still create resources that need the defaults.
+    """
+    for dimension in _quota_default_dimensions(default_storage_tier):
+        _set_quota_default(private_grpc, dimension)
+
+
+# The seeded dimensions' defaults as the controller found them, keyed by dimension: (id, value).
+# None means the snapshot failed, in which case the run leaves the lab alone rather than guess
+# which defaults it added.
+_quota_defaults_before: dict[str, tuple[str, int]] | None = None
+
+
+def _private_grpc_for_hooks() -> GRPCClient:
+    """A private-API client for the session hooks, which run outside the fixture graph."""
+    namespace = env("OSAC_NAMESPACE", "osac-devel")
+    service_account = env("OSAC_SERVICE_ACCOUNT", "admin")
+    cluster_domain = run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
+    address = env("OSAC_FULFILLMENT_PRIVATE_ADDRESS", f"fulfillment-internal-api-{namespace}.{cluster_domain}:443")
+    token = run("oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin")
+    return GRPCClient(address=address, token=token)
+
+
+def _quota_default_values(grpc: GRPCClient) -> dict[str, tuple[str, int]]:
+    """The id and value of every seeded dimension's default that exists."""
+    values: dict[str, tuple[str, int]] = {}
+    for dimension in _quota_default_dimensions(env("OSAC_STORAGE_TIER", "local")):
+        existing = grpc.get_quota_default(dimension=dimension)
+        if existing is not None:
+            values[dimension] = (str(existing["id"]), int((existing.get("spec") or {}).get("value") or 0))
+    return values
+
+
+def _restore_quota_defaults(grpc: GRPCClient, before: dict[str, tuple[str, int]]) -> None:
+    """Delete the defaults the run created and put back the values it changed."""
+    for dimension in _quota_default_dimensions(env("OSAC_STORAGE_TIER", "local")):
+        current = grpc.get_quota_default(dimension=dimension)
+        if dimension in before:
+            value = before[dimension][1]
+            if current is None or int((current.get("spec") or {}).get("value") or 0) != value:
+                _set_quota_default(grpc, dimension, value=value)
+        elif current is not None:
+            grpc.delete_quota_default(default_id=str(current["id"]))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Remember the lab's quota defaults before any worker seeds them.
+
+    Only the controller can restore the lab: the workers run the seeding
+    fixtures and xdist finalizes each worker's fixtures as soon as it runs its
+    last test, while other workers may still be running. This hook runs before
+    xdist starts the workers, so the snapshot is the state the run found.
+    """
+    global _quota_defaults_before
+    if hasattr(session.config, "workerinput") or session.config.getoption("collectonly", False):
+        return
+    try:
+        _quota_defaults_before = _quota_default_values(_private_grpc_for_hooks())
+    except Exception as exc:
+        warnings.warn(f"cannot read the lab's quota defaults; leaving them as this run finds them: {exc}", stacklevel=2)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Restore the seeded quota defaults after the last worker exits."""
+    if hasattr(session.config, "workerinput") or session.config.getoption("collectonly", False):
+        return
+    if _quota_defaults_before is None:
+        return
+    try:
+        _restore_quota_defaults(_private_grpc_for_hooks(), _quota_defaults_before)
+    except Exception as exc:
+        warnings.warn(f"failed to restore the lab's quota defaults: {exc}", stacklevel=2)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cluster_tenants(quota_defaults: None, namespace: str, k8s_hub_client: K8sClient) -> None:
     """Apply the install namespace's Tenant and the shared Tenant before tests.
 
     The E2E workflows apply these two CRs between install and test; doing it
@@ -271,7 +399,7 @@ def caas_disk_image_version(private_grpc: GRPCClient) -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ensure_tenants(private_grpc: GRPCClient) -> None:
+def ensure_tenants(quota_defaults: None, private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
 

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -201,13 +202,44 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendUpdate(ctx context.
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.csp_managed' is immutable and cannot be changed")
 	}
-	return s.validateStorageBackendCredentials(ctx, candidate.GetSpec())
+	spec := candidate.GetSpec()
+	if err := s.validateStorageBackendCredentials(ctx, spec); err != nil {
+		return err
+	}
+	if spec.GetProvider() == "vast" && !spec.GetCspManaged() &&
+		spec.HasCredentials() != current.GetSpec().HasCredentials() {
+		return s.checkVastBackendUnused(ctx, current.GetId())
+	}
+	return nil
+}
+
+func (s *PrivateStorageBackendsServer) checkVastBackendUnused(ctx context.Context, id string) error {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return grpcstatus.Error(grpccodes.Internal, "failed to check storage tier references")
+	}
+	var inUse bool
+	err = tx.QueryRow(ctx, `
+		select exists (
+			select 1 from storage_tier_backends b
+			join storage_tiers t on t.id = b.storage_tier_id
+			where b.backend_id = $1 and t.deletion_timestamp = 'epoch'
+		)`, id).Scan(&inUse)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to check storage tier references", slog.Any("error", err))
+		return grpcstatus.Error(grpccodes.Internal, "failed to check storage tier references")
+	}
+	if inUse {
+		return grpcstatus.Error(grpccodes.FailedPrecondition,
+			"cannot add or remove backend credentials while a storage tier references this VAST backend")
+	}
+	return nil
 }
 
 func (s *PrivateStorageBackendsServer) validateStorageBackendCredentials(ctx context.Context,
 	spec *privatev1.StorageBackendSpec) error {
 	creds := spec.GetCredentials()
-	if !spec.GetCspManaged() || creds != nil {
+	if creds != nil || (!spec.GetCspManaged() && spec.GetProvider() != "vast") {
 		if err := s.validatePasswordExactlyOne(creds); err != nil {
 			return err
 		}

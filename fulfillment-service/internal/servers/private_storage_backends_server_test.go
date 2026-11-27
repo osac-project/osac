@@ -209,7 +209,7 @@ var _ = Describe("Storage backend ownership", func() {
 		Entry("OSAC-managed no-op", false, []string{}),
 	)
 
-	DescribeTable("allows connection details to be removed only for CSP-managed backends",
+	DescribeTable("validates cleared VAST connection details according to ownership",
 		func(cspManaged bool, paths []string, allowed bool) {
 			object := backend(cspManaged)
 			object.GetSpec().SetEndpoint("https://storage.example.com")
@@ -227,15 +227,126 @@ var _ = Describe("Storage backend ownership", func() {
 				return
 			}
 			Expect(err).NotTo(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetCspManaged()).To(BeTrue())
+			Expect(response.GetObject().GetSpec().GetCspManaged()).To(Equal(cspManaged))
 			Expect(response.GetObject().GetSpec().GetCredentials()).To(BeNil())
-			Expect(response.GetObject().GetSpec().GetEndpoint()).To(BeEmpty())
+			if cspManaged {
+				Expect(response.GetObject().GetSpec().GetEndpoint()).To(BeEmpty())
+			} else {
+				Expect(response.GetObject().GetSpec().GetEndpoint()).To(Equal(object.GetSpec().GetEndpoint()))
+			}
 		},
 		Entry("CSP-managed whole credentials and endpoint", true, []string{"spec.credentials", "spec.endpoint"}, true),
-		Entry("OSAC-managed credentials remain required", false, []string{"spec.credentials"}, false),
+		Entry("unused OSAC-managed VAST backend can drop credentials", false, []string{"spec.credentials"}, true),
 		Entry("OSAC-managed endpoint remains required", false, []string{"spec.endpoint"}, false),
 		Entry("CSP-managed remaining credentials must be valid", true, []string{"spec.credentials.password"}, false),
 	)
+
+	Describe("VAST backend credential mode", func() {
+		var tiers *PrivateStorageTiersServer
+		BeforeEach(func() {
+			var err error
+			tiers, err = NewPrivateStorageTiersServer().SetLogger(logger).SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).SetStorageBackendsDAO(server.generic.dao).Build()
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		setCredentials := func(ctx context.Context, id string, credentials *privatev1.StorageBackendCredentials) error {
+			_, err := server.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Id: id, Spec: privatev1.StorageBackendSpec_builder{Credentials: credentials}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.credentials"}},
+			}.Build())
+			return err
+		}
+		createTier := func(ctx context.Context, name, id string, protocol privatev1.StorageProtocol) error {
+			_, err := tiers.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Protocol: protocol,
+						Backends: []*privatev1.BackendAssociation{privatev1.BackendAssociation_builder{BackendId: id}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			return err
+		}
+
+		It("allows a CSP-managed VAST backend without credentials on a block tier", func() {
+			id := create(true).GetId()
+			Expect(createTier(ctx, "csp-block", id, privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK)).To(Succeed())
+		})
+
+		DescribeTable("preserves the credential mode of a backend referenced by an NFS tier", func(withLogin bool) {
+			object := backend(false)
+			credentials := object.GetSpec().GetCredentials()
+			if !withLogin {
+				object.GetSpec().SetCredentials(nil)
+			}
+			created, err := server.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{Object: object}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			id := created.GetObject().GetId()
+			Expect(createTier(ctx, "nfs-tier", id, privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS)).To(Succeed())
+			updated, err := server.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Id: id, Spec: privatev1.StorageBackendSpec_builder{Description: "Updated"}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updated.GetObject().GetSpec().GetDescription()).To(Equal("Updated"))
+			Expect(updated.GetObject().GetSpec().GetEndpoint()).To(Equal(object.GetSpec().GetEndpoint()))
+			Expect(updated.GetObject().GetSpec().HasCredentials()).To(Equal(withLogin))
+			unrelated := create(false)
+			Expect(setCredentials(ctx, unrelated.GetId(), nil)).To(Succeed())
+
+			next := credentials
+			if withLogin {
+				rotated := privatev1.StorageBackendCredentials_builder{Username: "rotated", Password: testNewPassword}.Build()
+				Expect(setCredentials(ctx, id, rotated)).To(Succeed())
+				next = nil
+			}
+			err = setCredentials(ctx, id, next)
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			got, err := server.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.GetObject().GetSpec().HasCredentials()).To(Equal(withLogin))
+			if withLogin {
+				Expect(got.GetObject().GetSpec().GetCredentials().GetUsername()).To(Equal("rotated"))
+			}
+			_, err = tiers.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{Id: "nfs-tier"}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(setCredentials(ctx, id, next)).To(Succeed())
+		}, Entry("adding the first login", false), Entry("removing the last login", true))
+
+		DescribeTable("serializes block tier creation and credential removal", func(specCtx SpecContext, tierFirst bool) {
+			id := create(false).GetId()
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+			addTier := func(ctx context.Context) error {
+				return createTier(ctx, "block-tier", id, privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK)
+			}
+			removeLogin := func(ctx context.Context) error { return setCredentials(ctx, id, nil) }
+			if tierFirst {
+				Expect(status.Code(runRequestsWithLockContention(specCtx, addTier, removeLogin))).To(Equal(codes.FailedPrecondition))
+			} else {
+				Expect(status.Code(runRequestsWithLockContention(specCtx, removeLogin, addTier))).To(Equal(codes.InvalidArgument))
+			}
+
+			Expect(tm.Run(specCtx, func(ctx context.Context) error {
+				got, err := server.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: id}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got.GetObject().GetSpec().HasCredentials()).To(Equal(tierFirst))
+				_, err = tiers.Get(ctx, privatev1.StorageTiersGetRequest_builder{Id: "block-tier"}.Build())
+				if tierFirst {
+					Expect(err).NotTo(HaveOccurred())
+				} else {
+					Expect(status.Code(err)).To(Equal(codes.NotFound))
+				}
+				return nil
+			})).To(Succeed())
+		}, Entry("tier commits first", true), Entry("credential removal commits first", false))
+	})
 
 	It("does not allow CSP-managed registration with a dangling Secret reference", func() {
 		object := backend(true)
@@ -822,6 +933,33 @@ var _ = Describe("Password secret reference", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("there is no secret"))
+	})
+
+	It("rejects a non-VALUE Secret when adding the first VAST backend login", func() {
+		created, err := createBackend(nil)
+		Expect(err).NotTo(HaveOccurred())
+		id := created.GetObject().GetId()
+		_, err = server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Id:       "opaque-secret",
+			Metadata: privatev1.Metadata_builder{Name: "opaque-secret", Tenant: auth.SharedTenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+		}.Build()).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		credentials := privatev1.StorageBackendCredentials_builder{
+			Username:       "admin",
+			PasswordSecret: privatev1.SecretLocalReference_builder{Id: "opaque-secret"}.Build(),
+		}.Build()
+		_, err = server.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
+			Object: privatev1.StorageBackend_builder{
+				Id: id, Spec: privatev1.StorageBackendSpec_builder{Credentials: credentials}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.credentials"}},
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(status.Convert(err).Message()).To(ContainSubstring("VALUE"))
+		got, err := server.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.GetObject().GetSpec().HasCredentials()).To(BeFalse())
 	})
 
 	It("Rejects an empty password_secret reference", func() {

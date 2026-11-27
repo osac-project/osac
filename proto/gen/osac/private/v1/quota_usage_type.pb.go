@@ -41,8 +41,8 @@ type QuotaUsageDimension struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// The quota dimension, such as `compute.vcpus`.
 	Dimension string `protobuf:"bytes,1,opt,name=dimension,proto3" json:"dimension,omitempty"`
-	// The limit that applies at this scope: the scope's own limit, else the nearest ancestor
-	// project's, else the tenant's override, else the default, else 0.
+	// The limit that applies at this scope: the tightest of the tenant's limit and the own
+	// limit of the scope and each of its ancestors.
 	Limit int64 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
 	// The usage at this scope.
 	Usage         int64 `protobuf:"varint,3,opt,name=usage,proto3" json:"usage,omitempty"`
@@ -113,8 +113,8 @@ type QuotaUsageDimension_builder struct {
 
 	// The quota dimension, such as `compute.vcpus`.
 	Dimension string
-	// The limit that applies at this scope: the scope's own limit, else the nearest ancestor
-	// project's, else the tenant's override, else the default, else 0.
+	// The limit that applies at this scope: the tightest of the tenant's limit and the own
+	// limit of the scope and each of its ancestors.
 	Limit int64
 	// The usage at this scope.
 	Usage int64
@@ -212,8 +212,8 @@ func (b0 QuotaUsageProject_builder) Build() *QuotaUsageProject {
 //
 // The tenant's entries cover every dimension that has a default, an override, or usage in the
 // tenant. Each project's entries cover every dimension that has a project limit or usage in the
-// project; a dimension with no project limit shows the limit the project inherits from the tenant.
-// A dimension with no default has limit 0.
+// project; a dimension with no project limit shows the limit the project inherits, the tightest of
+// the tenant's and its ancestors' limits. A dimension with no default has limit 0.
 type QuotaUsageReport struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// The tenant the report covers. The built-in `shared` and `system` tenants hold no quota state

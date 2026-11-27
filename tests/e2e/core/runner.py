@@ -6,7 +6,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, TypeVar
+from typing import IO, TYPE_CHECKING, TypeVar
 
 try:
     # Only the E2E test image provides OpenTelemetry (pytest-opentelemetry
@@ -31,6 +31,27 @@ logger = logging.getLogger(__name__)
 # to ~60 minutes for a bare-metal cluster to become Ready) would otherwise
 # print nothing until they finish or time out.
 _PROGRESS_LOG_INTERVAL_S = 30
+
+
+@contextmanager
+def managed_process(
+    *args: str, stdout: int | IO[str] | None = None, stderr: int | IO[str] | None = None, terminate_timeout: float = 10
+) -> Iterator[subprocess.Popen[str]]:
+    """Run a subprocess and always terminate it before leaving the context."""
+    process = subprocess.Popen(args, stdout=stdout, stderr=stderr, text=True)
+    try:
+        yield process
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=terminate_timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=terminate_timeout)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
 
 
 _OUTPUT_TAIL = 2000

@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -224,6 +223,23 @@ var _ = Describe("Usage counter", func() {
 		}))
 	})
 
+	It("reads one parent row's reserved-but-uncreated room", func(ctx context.Context) {
+		// The cluster asks for three hosts and has two, and asks for two addresses and has
+		// one, so its excess is one of each, plus the control plane nothing converts:
+		excess, err := counter.ParentExcess(db.ctx, "acme", "Cluster", "prod")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(excess).To(Equal(map[string]int64{
+			"caas.control_planes":            1,
+			"bare_metal.instances.metal-1tb": 1,
+			"network.external_ips":           1,
+		}))
+
+		// A parent that doesn't exist has no room:
+		missing, err := counter.ParentExcess(db.ctx, "acme", "Cluster", "no-such-cluster")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(missing).To(BeEmpty())
+	})
+
 	It("counts resources until they are archived, not until they are deleted", func(ctx context.Context) {
 		db.exec(`update volumes set deletion_timestamp = now() where id = 'data-vol'`)
 		usage, err := counter.Count(db.ctx, "acme")
@@ -278,6 +294,30 @@ var _ = Describe("Type resolution", func() {
 		Expect(usage[""]["compute.vcpus"]).To(Equal(int64(2)))
 	})
 
+	It("counts an id-only reference, the shape migration 90 leaves", func(ctx context.Context) {
+		// Migration 90 backfilled the reference with an id and no name, so the counter
+		// must resolve it by id, the way the enforcement check does:
+		db.exec(`insert into instance_types (id, name, tenant, project, creator, labels, data)
+			values ('it-legacy', 'it-renamed', 'shared', ''::ltree, 'system', '{}'::jsonb, $1::jsonb)`,
+			`{"spec": {"vcpus": 4, "memory_gib": 16}}`)
+		db.insertObject("compute_instances", "vm-1", "acme", "", "user", "{}", `{
+			"spec": {"instance_type": {"id": "it-legacy"}}
+		}`)
+		usage, err := counter.Count(db.ctx, "acme")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(usage[""]["compute.vcpus"]).To(Equal(int64(4)))
+		Expect(usage[""]["compute.memory_gib"]).To(Equal(int64(16)))
+	})
+
+	It("fails loudly when an id-only reference resolves to no row", func(ctx context.Context) {
+		db.insertObject("compute_instances", "vm-1", "acme", "", "user", "{}", `{
+			"spec": {"instance_type": {"id": "type-absent"}}
+		}`)
+		_, err := counter.Count(db.ctx, "acme")
+		Expect(err).To(MatchError(ContainSubstring(
+			"a stored row references type 'type-absent', which no longer exists")))
+	})
+
 	It("fails loudly when an asked type resolves to no row", func(ctx context.Context) {
 		db.insertObject("compute_instances", "vm-1", "acme", "", "user", "{}", `{
 			"spec": {"instance_type": {"name": "it-absent"}}
@@ -323,137 +363,6 @@ var _ = Describe("Type resolution", func() {
 	})
 })
 
-var _ = Describe("Counting rules", func() {
-	var db *usageDatabase
-
-	// insertHost inserts one host of the shared metal-1tb type with the given status.state.
-	insertHost := func(id, state string) {
-		data := `{"spec": {"instance_type": {"name": "metal-1tb"}}}`
-		if state != "" {
-			data = fmt.Sprintf(`{"spec": {"instance_type": {"name": "metal-1tb"}},
-				"status": {"state": "%s"}}`, state)
-		}
-		db.insertObject("bare_metal_instances", id, "acme", "", "system", "{}", data)
-	}
-
-	// hostsCounted counts the bare_metal.instances.metal-1tb dimension of the default project.
-	hostsCounted := func(counter *Counter) int64 {
-		usage, err := counter.Count(db.ctx, "acme")
-		Expect(err).ToNot(HaveOccurred())
-		return usage[""]["bare_metal.instances.metal-1tb"]
-	}
-
-	BeforeEach(func() {
-		db = newUsageDatabase(context.Background())
-		db.insertObject("bare_metal_instance_types", "metal-1tb", "shared", "", "system", "{}", `{}`)
-		insertHost("host-failed", "BARE_METAL_INSTANCE_STATE_FAILED")
-		insertHost("host-running", "BARE_METAL_INSTANCE_STATE_RUNNING")
-		insertHost("host-no-state", "")
-	})
-
-	It("stops counting rows in the mapped states", func() {
-		released, err := NewCounter().
-			SetLogger(logger).
-			SetCountingRules(map[string][]string{
-				"BareMetalInstance": {"BARE_METAL_INSTANCE_STATE_FAILED"},
-			}).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		// The failed host releases; the running one and the stateless one keep counting:
-		Expect(hostsCounted(released)).To(Equal(int64(2)))
-	})
-
-	It("changes nothing by default", func() {
-		// No injected rules and no OSAC_QUOTA_COUNTING_RULES: the shipped default is empty.
-		counter, err := NewCounter().SetLogger(logger).Build()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(hostsCounted(counter)).To(Equal(int64(3)))
-	})
-
-	It("loads the rules from the file the environment variable names", func() {
-		file, err := os.CreateTemp("", "quota-counting-rules-*.yaml")
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			Expect(file.Close()).To(Succeed())
-			Expect(os.Remove(file.Name())).To(Succeed())
-		})
-		_, err = file.WriteString(`
-counting:
-  BareMetalInstance:
-    stops_counting_in: [BARE_METAL_INSTANCE_STATE_FAILED]
-`)
-		Expect(err).ToNot(HaveOccurred())
-
-		Expect(os.Setenv(countingRulesEnvVar, file.Name())).To(Succeed())
-		DeferCleanup(func() {
-			Expect(os.Unsetenv(countingRulesEnvVar)).To(Succeed())
-		})
-		counter, err := NewCounter().SetLogger(logger).Build()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(hostsCounted(counter)).To(Equal(int64(2)))
-	})
-
-	It("means no rules when the variable names a missing file", func() {
-		Expect(os.Setenv(countingRulesEnvVar, "/tmp/opencode/no-such-quota-counting-rules.yaml")).To(Succeed())
-		DeferCleanup(func() {
-			Expect(os.Unsetenv(countingRulesEnvVar)).To(Succeed())
-		})
-		counter, err := NewCounter().SetLogger(logger).Build()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(hostsCounted(counter)).To(Equal(int64(3)))
-	})
-
-	DescribeTable("reads the counting rules file the variable names",
-		func(content, expectedError string) {
-			file, err := os.CreateTemp("", "quota-counting-rules-*.yaml")
-			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(func() {
-				Expect(file.Close()).To(Succeed())
-				Expect(os.Remove(file.Name())).To(Succeed())
-			})
-			_, err = file.WriteString(content)
-			Expect(err).ToNot(HaveOccurred())
-
-			Expect(os.Setenv(countingRulesEnvVar, file.Name())).To(Succeed())
-			DeferCleanup(func() {
-				Expect(os.Unsetenv(countingRulesEnvVar)).To(Succeed())
-			})
-			counter, err := NewCounter().SetLogger(logger).Build()
-			if expectedError == "" {
-				// An empty file loads as no rules, so every host keeps counting:
-				Expect(err).ToNot(HaveOccurred())
-				Expect(hostsCounted(counter)).To(Equal(int64(3)))
-				return
-			}
-			Expect(err).To(MatchError(ContainSubstring(expectedError)))
-		},
-		Entry("fails on a file that does not parse", "counting: [", "invalid counting rules file"),
-		Entry("fails on an unknown key", "counting:\n  BareMetalInstance:\n    bogus: []",
-			"field bogus not found"),
-		Entry("loads an empty file as no rules", "", ""),
-	)
-
-	DescribeTable("refuses rules the counter can't apply",
-		func(rules map[string][]string, message string) {
-			_, err := NewCounter().
-				SetLogger(logger).
-				SetCountingRules(rules).
-				Build()
-			Expect(err).To(MatchError(ContainSubstring(message)))
-		},
-		Entry("an unknown kind", map[string][]string{
-			"Subnet": {"SUBNET_STATE_FAILED"},
-		}, "kind 'Subnet', which carries no quota annotations"),
-		Entry("a kind whose status has no state enum", map[string][]string{
-			"DiskImage": {"DISK_IMAGE_LIFECYCLE_DEPRECATED"},
-		}, "whose status.state is not an enum"),
-		Entry("a state the enum has no value of", map[string][]string{
-			"BareMetalInstance": {"BARE_METAL_INSTANCE_STATE_BOGUS"},
-		}, "which its status.state enum has no value of"),
-	)
-})
-
 var _ = Describe("Parent counting", func() {
 	var db *usageDatabase
 
@@ -496,10 +405,9 @@ var _ = Describe("Parent counting", func() {
 	})
 
 	DescribeTable("counts the larger of the parent's ask and its countable children",
-		func(ask int, states []string, rules map[string][]string, expectedTotal, expectedRoom int64) {
+		func(ask int, states []string, expectedTotal, expectedRoom int64) {
 			counter, err := NewCounter().
 				SetLogger(logger).
-				SetCountingRules(rules).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -515,13 +423,12 @@ var _ = Describe("Parent counting", func() {
 			db.exec(`update clusters set data = data #- '{spec,node_sets}' where id = 'prod'`)
 			Expect(total - hostsCounted(counter)).To(Equal(expectedRoom))
 		},
-		Entry("no children yet", 3, nil, nil, int64(3), int64(3)),
-		Entry("partial children", 3, []string{"", ""}, nil, int64(3), int64(1)),
-		Entry("children beyond the ask", 1, []string{"", ""}, nil, int64(2), int64(0)),
-		Entry("children stopped by counting rules", 3,
+		Entry("no children yet", 3, nil, int64(3), int64(3)),
+		Entry("partial children", 3, []string{"", ""}, int64(3), int64(1)),
+		Entry("children beyond the ask", 1, []string{"", ""}, int64(2), int64(0)),
+		Entry("children in failed states still count", 3,
 			[]string{"BARE_METAL_INSTANCE_STATE_RUNNING", "BARE_METAL_INSTANCE_STATE_FAILED"},
-			map[string][]string{"BareMetalInstance": {"BARE_METAL_INSTANCE_STATE_FAILED"}},
-			int64(3), int64(2)),
-		Entry("a node set removed while the host rows remain", 0, []string{"", ""}, nil, int64(2), int64(0)),
+			int64(3), int64(1)),
+		Entry("a node set removed while the host rows remain", 0, []string{"", ""}, int64(2), int64(0)),
 	)
 })

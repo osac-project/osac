@@ -13,6 +13,13 @@ if TYPE_CHECKING:
     from tests.conformance.redact import Redactor
 
 
+# Pytest markers that the core reads by name. Selection markers come from the
+# catalog; these two spell the family prefix and the one classification marker
+# a test can carry (a failure is reported but never fails a check).
+MARKER_PREFIX = "conformance_"
+NON_BLOCKING_MARKER = f"{MARKER_PREFIX}non_blocking"
+
+
 class Result(StrEnum):
     PASS = "pass"
     FAIL = "fail"
@@ -31,7 +38,7 @@ class CheckResult(StrEnum):
 
 class Classification(StrEnum):
     BLOCKING = "blocking"
-    INFORMING = "informing"
+    NON_BLOCKING = "non_blocking"
 
 
 @dataclass(frozen=True)

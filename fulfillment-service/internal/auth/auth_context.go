@@ -31,6 +31,8 @@ const (
 	authenticationMethodContextKey
 )
 
+const aapSecretReaderClientID = "osac-aap-secret-reader"
+
 // ContextWithSubject creates a new context containing the given subject.
 func ContextWithSubject(parent context.Context, subject *Subject) context.Context {
 	return context.WithValue(parent, subjectContextKey, subject)
@@ -70,6 +72,22 @@ func IsControllerServiceAccount(ctx context.Context) bool {
 	subject, ok := ctx.Value(subjectContextKey).(*Subject)
 	return ok && (subject.User == "service-account-osac-controller" ||
 		strings.HasSuffix(subject.User, ":service-account-osac-controller"))
+}
+
+// IsAAPSecretReader reports whether the authorized caller is the dedicated AAP Secret reader.
+func IsAAPSecretReader(ctx context.Context) bool {
+	subject, ok := ctx.Value(subjectContextKey).(*Subject)
+	method, _ := ctx.Value(authenticationMethodContextKey).(string)
+	if !ok || subject == nil || subject.User != "service-account-"+aapSecretReaderClientID || method != "jwt" {
+		return false
+	}
+	token := TokenFromContext(ctx)
+	if token == nil {
+		return false
+	}
+	// The policy admits this authorized party only through the issuer-bound reader grant.
+	claims, _ := token.Claims.(jwt.MapClaims)
+	return claims["azp"] == aapSecretReaderClientID
 }
 
 // IsTenantAdmin reports whether the authenticated JWT grants the tenant-admin realm role.

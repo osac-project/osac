@@ -14,19 +14,22 @@ specific language governing permissions and limitations under the License.
 // Package quotausage counts each tenant's quota usage from the database.
 //
 // The counter is driven by the quota registry (proto/quota): it walks each annotated kind's
-// annotations, maps the kind's proto message to its table, and generates one SQL statement per
-// counted kind that returns (project, dimension, amount) rows for the tenant. No kind is named in
-// the counting logic; the tables map below is data, like the metering tables map.
+// annotations, derives the kind's table from its proto message the same way the generic DAO
+// does (dao.TableNameFor), and generates one SQL statement per counted kind that returns
+// (project, dimension, amount) rows for the tenant. No kind is named in the counting logic.
 //
 // Each statement prices every row of the kind the way the design's counting rule says: the row's
 // own dimensions, what its types use (the larger of the asked and the running type), plus what the
 // row asks for beyond what OSAC has already created for it. Created resources count in their own
 // kind's statement, so a parent only adds the excess: greatest(asked - linked, 0). A resource
 // counts until it is archived, so the statements read the main tables without filtering on the
-// deletion timestamp. A kind's counting rules (see counting_rules.go) can release earlier: the
-// states they map stop counting while the record still exists, because they provably hold
-// nothing physical. The release applies both to the kind's own rows and to the linked rows a
-// parent nets its ask against, so a released child never eats the parent's room.
+// deletion timestamp: every state a record can hold while it exists still counts, the failed
+// states included, because the record provably holds physical resources until it is gone.
+//
+// A kind that carries a created_for link should consider a database index for the link's
+// predicate, the way migrations 155 and 156 indexed the volume name pattern and the bare-metal
+// instance cluster link: the exists side of each parent's statement runs that predicate
+// against the rows of the created kind.
 package quotausage
 
 import (
@@ -40,36 +43,29 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	quota "github.com/osac-project/osac/proto/quota"
 )
 
-// tables maps the proto message of each quota-annotated kind to the table that stores it. Extend
-// together with the quota annotations when a new counted resource or type gets annotations;
-// Build fails a kind that has annotations but no table, and fails a mapped kind that carries none.
-var tables = map[protoreflect.FullName]string{
-	"osac.private.v1.BareMetalInstance":     "bare_metal_instances",
-	"osac.private.v1.BareMetalInstanceType": "bare_metal_instance_types",
-	"osac.private.v1.Cluster":               "clusters",
-	"osac.private.v1.ComputeInstance":       "compute_instances",
-	"osac.private.v1.DiskImage":             "disk_images",
-	"osac.private.v1.ExternalIP":            "external_ips",
-	"osac.private.v1.InstanceType":          "instance_types",
-	"osac.private.v1.NATGateway":            "nat_gateways",
-	"osac.private.v1.VirtualNetwork":        "virtual_networks",
-	"osac.private.v1.Volume":                "volumes",
-}
-
 // Counter counts a tenant's usage, one SQL statement per counted kind. Create it with NewCounter.
 type Counter struct {
-	logger          *slog.Logger
-	kinds           map[string]*quota.Kind
-	stopsCountingIn map[string][]string
+	logger        *slog.Logger
+	kinds         map[string]*quota.Kind
+	statements    map[string]string
+	rowStatements map[string]string
+	// linkedStatements count one parent row's linked children per dimension, the exists side
+	// of the row statement without the ask it is netted against. Empty for a kind that prices
+	// no creates.
+	linkedStatements map[string]string
+	// uncreated names the kinds the installation never creates, so a parent's stored ask for
+	// them counts nothing: no rows of the kind ever arrive to net it.
+	uncreated map[string]bool
 }
 
 // CounterBuilder contains the data and logic needed to create a counter.
 type CounterBuilder struct {
-	logger        *slog.Logger
-	countingRules map[string][]string
+	logger         *slog.Logger
+	uncreatedKinds []string
 }
 
 // NewCounter creates a builder for a usage counter.
@@ -83,18 +79,19 @@ func (b *CounterBuilder) SetLogger(value *slog.Logger) *CounterBuilder {
 	return b
 }
 
-// SetCountingRules sets the counting rules directly, for tests. Without it the counter loads the
-// rules from the file named by OSAC_QUOTA_COUNTING_RULES; an unset variable or a missing file
-// means no rules.
-func (b *CounterBuilder) SetCountingRules(value map[string][]string) *CounterBuilder {
-	b.countingRules = value
+// SetUncreatedQuotaKinds names the kinds the installation never creates for a request, such as
+// the automatic addresses an installation with provider networking disabled never creates. The
+// counter adds no ask for them to a parent's statement, agreeing with the enforcement check,
+// which prices no planned creates of them (quota.WithoutCreatesOf): no rows of the kind ever
+// arrive to net the ask, so counting it would hold room nothing uses.
+func (b *CounterBuilder) SetUncreatedQuotaKinds(values ...string) *CounterBuilder {
+	b.uncreatedKinds = values
 	return b
 }
 
-// Build creates the counter. It fails loudly when the registry and the tables map disagree, so a
-// new annotated kind without a table is a startup failure, not a silently uncounted resource.
-// The counting rules come from the builder or, when the builder sets none, from the file named by
-// OSAC_QUOTA_COUNTING_RULES; rules the counter can't apply fail the build the same way.
+// Build creates the counter. It fails loudly when an annotation is invalid or a named uncreated
+// kind has none. A counted kind whose derived table does not exist fails at query time and in the
+// golden statement tests instead.
 func (b *CounterBuilder) Build() (result *Counter, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -104,37 +101,56 @@ func (b *CounterBuilder) Build() (result *Counter, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load the quota registry: %w", err)
 	}
-	rules := b.countingRules
-	if rules == nil {
-		if rules, err = loadCountingRules(); err != nil {
-			return nil, err
-		}
+	result = &Counter{
+		logger: b.logger, kinds: map[string]*quota.Kind{}, uncreated: map[string]bool{},
 	}
-	result = &Counter{logger: b.logger, kinds: map[string]*quota.Kind{}, stopsCountingIn: rules}
+	for _, kind := range b.uncreatedKinds {
+		result.uncreated[kind] = true
+	}
 	for i := range kinds {
 		kind := &kinds[i]
 		result.kinds[kind.Name] = kind
-		if _, ok := tables[kind.Message]; !ok {
-			return nil, fmt.Errorf("no table mapped for the quota-annotated kind '%s'", kind.Message)
-		}
 	}
-	for message := range tables {
-		found := false
-		for _, kind := range result.kinds {
-			if kind.Message == message {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, fmt.Errorf("a table is mapped for quota usage but kind '%s' has no annotations", message)
+	// The uncreated kinds come from one derivation in the servers, but a name that matches no
+	// annotated kind is a typo, and counting the ask it meant to skip would be silent:
+	for _, name := range b.uncreatedKinds {
+		if _, ok := result.kinds[name]; !ok {
+			return nil, fmt.Errorf(
+				"kind '%s' is named as uncreated but has no quota annotations", name,
+			)
 		}
 	}
 	if err := checkKinds(result.kinds); err != nil {
 		return nil, err
 	}
-	if err := checkCountingRules(result.kinds, rules); err != nil {
-		return nil, err
+	result.statements = map[string]string{}
+	result.rowStatements = map[string]string{}
+	result.linkedStatements = map[string]string{}
+	for _, kind := range result.kinds {
+		if result.isType(kind.Name) {
+			continue
+		}
+		statement, err := result.kindStatement(kind, "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+		}
+		result.statements[kind.Name] = statement
+		// The same statement filtered to one row reads that row's excess, so the quota
+		// check can read a single parent's reserved room:
+		rowStatement, err := result.kindStatement(kind, "and r.id = $2")
+		if err != nil {
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+		}
+		result.rowStatements[kind.Name] = rowStatement
+		// One parent row's linked children, so an update can net the ask it grows against
+		// the children it already has:
+		linkedStatement, err := result.kindLinkedStatement(kind, "and r.id = $2")
+		if err != nil {
+			return nil, fmt.Errorf("failed to count the children of '%s': %w", kind.Name, err)
+		}
+		if linkedStatement != "" {
+			result.linkedStatements[kind.Name] = linkedStatement
+		}
 	}
 	return result, nil
 }
@@ -183,15 +199,16 @@ func checkKinds(kinds map[string]*quota.Kind) error {
 // the annotations, which never contain a colon followed by this text.
 const missingTypeDimension = "quota.type.missing:"
 
-// missingTypeAsk adds a sentinel row to the asks when the reference names a type but the join
-// resolved no row, so the count fails loudly instead of pricing the resource at zero. A missing
+// missingTypeAsk adds a sentinel row to the asks when the reference carries an id or a name but
+// the join resolved no row, so the count fails loudly instead of pricing the resource at zero.
+// The gate is the reference's key, so an id-only reference fails the count too. A missing
 // running type is legitimate, because the status that holds it appears only once the resource
 // runs, so sentinels are added for asked types only. The from clause is the one the reference's
 // aliases live in: the row for a stored reference, the item for a planned one.
-func missingTypeAsk(nameExpr, alias, from string) string {
+func missingTypeAsk(keyExpr, alias, from string) string {
 	return fmt.Sprintf(
 		"select '%s' || %s as dimension, 1 as amount %s where %s is not null and %s.name is null",
-		missingTypeDimension, nameExpr, from, nameExpr, alias,
+		missingTypeDimension, keyExpr, from, keyExpr, alias,
 	)
 }
 
@@ -205,30 +222,26 @@ func (c *Counter) Count(ctx context.Context, tenant string) (map[string]map[stri
 	}
 	result := map[string]map[string]int64{}
 	for _, name := range quota.SortedKeys(c.kinds) {
-		kind := c.kinds[name]
-		if c.isType(name) {
+		statement, ok := c.statements[name]
+		if !ok {
 			continue
-		}
-		statement, err := c.kindStatement(kind)
-		if err != nil {
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
 		}
 		rows, err := tx.Query(ctx, statement, tenant)
 		if err != nil {
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 		}
 		for rows.Next() {
 			var project, dimension string
 			var amount int64
 			if err := rows.Scan(&project, &dimension, &amount); err != nil {
 				rows.Close()
-				return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+				return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 			}
 			if missingType, ok := strings.CutPrefix(dimension, missingTypeDimension); ok {
 				rows.Close()
 				return nil, fmt.Errorf(
 					"failed to count the usage of '%s': a stored row references type '%s', which no longer exists",
-					kind.Name, missingType)
+					name, missingType)
 			}
 			if result[project] == nil {
 				result[project] = map[string]int64{}
@@ -237,7 +250,7 @@ func (c *Counter) Count(ctx context.Context, tenant string) (map[string]map[stri
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 		}
 		rows.Close()
 	}
@@ -257,22 +270,144 @@ func (c *Counter) isType(name string) bool {
 	return false
 }
 
+// ParentExcess returns one parent row's reserved-but-uncreated room per dimension: the row's
+// excess, greatest(asked - linked, 0), computed by the same generated statement that counts the
+// tenant, filtered to that one row. A parent that doesn't exist has no room. The room counts
+// only the children the system created and linked back to the parent, the way the tenant-wide
+// statement does.
+//
+// The room and the tenant's usage are two statements at READ COMMITTED, so each sees its own
+// snapshot. The check holds the tenant's row lock, which serializes every checked writer, so
+// only a system writer that bypasses the check can commit between them; the window it leaves is
+// accepted, because closing it would mean one statement for every parent kind.
+func (c *Counter) ParentExcess(
+	ctx context.Context, tenant, parentKind, parentID string,
+) (map[string]int64, error) {
+	statement, ok := c.rowStatements[parentKind]
+	if !ok {
+		return nil, fmt.Errorf("no counted kind '%s'", parentKind)
+	}
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, statement, tenant, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count the usage of '%s': %w", parentKind, err)
+	}
+	defer rows.Close()
+	result := map[string]int64{}
+	for rows.Next() {
+		var project, dimension string
+		var amount int64
+		if err := rows.Scan(&project, &dimension, &amount); err != nil {
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", parentKind, err)
+		}
+		if missingType, ok := strings.CutPrefix(dimension, missingTypeDimension); ok {
+			return nil, fmt.Errorf(
+				"failed to count the usage of '%s': a stored row references type '%s', which no longer exists",
+				parentKind, missingType)
+		}
+		result[dimension] += amount
+	}
+	return result, rows.Err()
+}
+
+// kindLinkedStatement generates the statement that counts one parent row's linked children per
+// dimension: the exists side of the row statement, without the ask it is netted against. It
+// returns an empty string when the kind prices no creates, so it has no linked children.
+func (c *Counter) kindLinkedStatement(kind *quota.Kind, rowFilter string) (string, error) {
+	g := &statementGenerator{
+		counter:     c,
+		kind:        kind,
+		table:       dao.TableNameFor(string(kind.Message.Name())),
+		existsKinds: map[string]bool{},
+		rowFilter:   rowFilter,
+	}
+	for i := range kind.Fields {
+		if kind.Fields[i].Creates == nil {
+			continue
+		}
+		if err := g.addCreates(kind.Fields[i]); err != nil {
+			return "", err
+		}
+	}
+	if len(g.exists) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf(`
+		select e.dimension as dimension, e.amount::bigint as amount
+		from (
+			select r.id as id, r.tenant as tenant, r.project::text as project
+			from %s r
+			where r.tenant = $1
+				%s
+		) p
+		left join lateral (
+			select ex.dimension as dimension, sum(ex.amount)::bigint as amount
+			from (
+				%s
+			) ex
+			group by ex.dimension
+		) e on true
+		where e.dimension is not null
+		`,
+		g.table, g.rowFilter, union(g.exists),
+	), nil
+}
+
+// ParentLinked returns the amounts one parent row's linked children hold per dimension: the
+// children the system created and linked back to the parent, the exists side the row statement
+// nets the parent's ask against. An update nets the ask it grows against these, so a grow while
+// the parent still holds surplus children adds only what runs beyond them. A parent that doesn't
+// exist, or whose kind prices no creates, has no linked children.
+func (c *Counter) ParentLinked(
+	ctx context.Context, tenant, parentKind, parentID string,
+) (map[string]int64, error) {
+	statement, ok := c.linkedStatements[parentKind]
+	if !ok {
+		return map[string]int64{}, nil
+	}
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, statement, tenant, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count the children of '%s': %w", parentKind, err)
+	}
+	defer rows.Close()
+	result := map[string]int64{}
+	for rows.Next() {
+		var dimension string
+		var amount int64
+		if err := rows.Scan(&dimension, &amount); err != nil {
+			return nil, fmt.Errorf("failed to count the children of '%s': %w", parentKind, err)
+		}
+		result[dimension] += amount
+	}
+	return result, rows.Err()
+}
+
 // pricePair is one dimension and its amount, as SQL text evaluated per row.
 type pricePair struct {
 	dimension string
 	amount    string
 }
 
-// kindStatement generates the statement of one counted kind.
-func (c *Counter) kindStatement(kind *quota.Kind) (string, error) {
+// kindStatement generates the statement of one counted kind. The row filter, when not empty,
+// is appended to the where clause and takes the row's identifier as $2, so the same statement
+// can count the whole tenant or one row of it.
+func (c *Counter) kindStatement(kind *quota.Kind, rowFilter string) (string, error) {
 	g := &statementGenerator{
 		counter:     c,
 		kind:        kind,
-		table:       tables[kind.Message],
+		table:       dao.TableNameFor(string(kind.Message.Name())),
 		asks:        []string{},
 		rowJoins:    []string{},
 		exists:      []string{},
 		existsKinds: map[string]bool{},
+		rowFilter:   rowFilter,
 	}
 	return g.generate()
 }
@@ -289,31 +424,15 @@ type statementGenerator struct {
 	exists   []string
 	// existsKinds remembers the created kinds the exists side already scans.
 	existsKinds map[string]bool
-	item        string
-	aliases     int
+	// rowFilter narrows the statement to one row, identified by $2. Empty counts the tenant.
+	rowFilter string
+	item      string
+	aliases   int
 }
 
 func (g *statementGenerator) nextAlias(prefix string) string {
 	g.aliases++
 	return fmt.Sprintf("%s%d", prefix, g.aliases)
-}
-
-// stopsCountingIn builds the SQL filter that stops counting the rows of the named kind whose
-// status.state is one of the mapped states: the release map of the quota state standard. Empty
-// when no state of the kind is mapped, so the default changes nothing.
-func (g *statementGenerator) stopsCountingIn(kind, row string) string {
-	states := g.counter.stopsCountingIn[kind]
-	if len(states) == 0 {
-		return ""
-	}
-	quoted := make([]string, len(states))
-	for i, state := range states {
-		quoted[i] = sqlString(state)
-	}
-	return fmt.Sprintf(
-		"and coalesce(%s.data #>> '{status,state}', '') not in (%s)",
-		row, strings.Join(quoted, ", "),
-	)
 }
 
 func (g *statementGenerator) generate() (string, error) {
@@ -357,7 +476,7 @@ func (g *statementGenerator) generate() (string, error) {
 				%s
 			group by r.project, u.dimension
 			`,
-			g.table, strings.Join(g.rowJoins, "\n"), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"),
+			g.table, strings.Join(g.rowJoins, "\n"), union(g.asks), g.rowFilter,
 		), nil
 	}
 	return fmt.Sprintf(`
@@ -393,7 +512,8 @@ func (g *statementGenerator) generate() (string, error) {
 			group by ex.dimension
 		) e on e.dimension = p.dimension
 		`,
-		g.table, strings.Join(g.rowJoins, "\n"), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"), union(g.exists),
+		g.table, strings.Join(g.rowJoins, "\n"), union(g.asks), g.rowFilter,
+		union(g.exists),
 	), nil
 }
 
@@ -401,26 +521,26 @@ func (g *statementGenerator) generate() (string, error) {
 // larger amount per dimension when the annotation names a second, running reference.
 func (g *statementGenerator) addThrough(field quota.Field) error {
 	typeKind := g.counter.kinds[field.Through]
-	name, tenant, project := referenceExprs("r", field.Path)
+	key, tenant, project := referenceExprs("r", field.Path)
 	asked := g.nextAlias("t")
-	g.rowJoins = append(g.rowJoins, g.typeJoin(field.Through, name, tenant, project, "r", asked))
+	g.rowJoins = append(g.rowJoins, g.typeJoin(field.Through, key, tenant, project, "r", asked))
 	askedPrice := rowPrice(typeKind, asked)
 	// A stored row whose asked type resolves to nothing is priced at zero by the join, so a
 	// sentinel row makes the count fail loudly instead of undercounting the tenant:
-	g.asks = append(g.asks, missingTypeAsk(name, asked, ""))
+	g.asks = append(g.asks, missingTypeAsk(key, asked, ""))
 	runningPrice := []pricePair{}
 	if field.LargerOf != "" {
-		runningName, runningTenant, runningProject := referenceExprs("r", field.LargerOf)
+		runningKey, runningTenant, runningProject := referenceExprs("r", field.LargerOf)
 		running := g.nextAlias("t")
 		g.rowJoins = append(g.rowJoins, g.typeJoin(
-			field.Through, runningName, runningTenant, runningProject, "r", running,
+			field.Through, runningKey, runningTenant, runningProject, "r", running,
 		))
 		// A running reference that names a type resolving to nothing means the resource
 		// runs a type the counter cannot price, so the sentinel fails the count instead
 		// of letting the larger-of rule quietly read zero. An absent running reference
 		// stays legitimate, because the status that holds it appears only once the
 		// resource runs.
-		g.asks = append(g.asks, missingTypeAsk(runningName, running, ""))
+		g.asks = append(g.asks, missingTypeAsk(runningKey, running, ""))
 		runningPrice = rowPrice(typeKind, running)
 	}
 	for i, price := range askedPrice {
@@ -433,18 +553,20 @@ func (g *statementGenerator) addThrough(field quota.Field) error {
 	return nil
 }
 
-// typeJoin joins the one row of the type's table that the reference selects. A reference that
+// typeJoin joins the one row of the type's table that the reference selects. The reference
+// matches by id or by name: references are id-or-name with id winning, the way the enforcement
+// check reads them, and rows backfilled by migration 90 carry only an id. A reference that
 // carries its type's tenant selects that row exactly, by tenant and project, so a same-name type
 // of another scope can't replace it. A name-only reference falls back to a type of the resource's
 // own tenant, or the shared tenant. The join picks at most one row, so a name that exists in both
 // scopes can't double the price.
-func (g *statementGenerator) typeJoin(typeKind, nameExpr, tenantExpr, projectExpr, row, alias string) string {
-	table := tables[g.counter.kinds[typeKind].Message]
+func (g *statementGenerator) typeJoin(typeKind, keyExpr, tenantExpr, projectExpr, row, alias string) string {
+	table := dao.TableNameFor(string(g.counter.kinds[typeKind].Message.Name()))
 	return fmt.Sprintf(`
 		left join lateral (
 			select t.name as name, t.data as data
 			from %s t
-			where t.name = %s
+			where (t.name = %s or t.id = %s)
 				and case
 					when %s is not null and %s <> '' then t.tenant = %s and t.project::text = coalesce(%s, '')
 					else t.tenant = %s.tenant or t.tenant = 'shared'
@@ -453,18 +575,26 @@ func (g *statementGenerator) typeJoin(typeKind, nameExpr, tenantExpr, projectExp
 			limit 1
 		) %s on true
 		`,
-		table, nameExpr, tenantExpr, tenantExpr, tenantExpr, projectExpr, row, row, alias,
+		table, keyExpr, keyExpr, tenantExpr, tenantExpr, tenantExpr, projectExpr, row, row, alias,
 	)
 }
 
-// referenceExprs reads a stored reference's name, tenant and project from a table row.
-func referenceExprs(row, path string) (name, tenant, project string) {
-	return rowPath(row, path+".name"), rowPath(row, path+".tenant"), rowPath(row, path+".project")
+// referenceKeyExpr builds the expression that matches a reference to its type row: the
+// reference's id when it carries one, else its name.
+func referenceKeyExpr(id, name string) string {
+	return fmt.Sprintf("coalesce(nullif(%s, ''), nullif(%s, ''))", id, name)
 }
 
-// itemReferenceExprs reads a stored reference's name, tenant and project from a jsonb item.
-func itemReferenceExprs(item, path string) (name, tenant, project string) {
-	return itemPath(item, path+".name"), itemPath(item, path+".tenant"), itemPath(item, path+".project")
+// referenceExprs reads a stored reference's key, tenant and project from a table row.
+func referenceExprs(row, path string) (key, tenant, project string) {
+	return referenceKeyExpr(rowPath(row, path+".id"), rowPath(row, path+".name")),
+		rowPath(row, path+".tenant"), rowPath(row, path+".project")
+}
+
+// itemReferenceExprs reads a stored reference's key, tenant and project from a jsonb item.
+func itemReferenceExprs(item, path string) (key, tenant, project string) {
+	return referenceKeyExpr(itemPath(item, path+".id"), itemPath(item, path+".name")),
+		itemPath(item, path+".tenant"), itemPath(item, path+".project")
 }
 
 // rowPrice prices one stored row of a kind at the given alias: its message dimension and its field
@@ -490,6 +620,13 @@ func rowPrice(kind *quota.Kind, alias string) (result []pricePair) {
 // linked rows of the created kind that the parent's excess is measured against.
 func (g *statementGenerator) addCreates(field quota.Field) error {
 	creates := field.Creates
+	// A kind the installation never creates contributes no ask to the parent's statement and
+	// no linked rows to the exists side, the way its writer creates nothing for it and the
+	// enforcement check prices no planned creates of it: provider networking disabled means
+	// no automatic addresses, so a parent that asks for them holds no room.
+	if g.counter.uncreated[creates.Kind] {
+		return nil
+	}
 	created := g.counter.kinds[creates.Kind]
 	createdFor, linkField, err := created.LinkTo(g.kind.Name)
 	if err != nil {
@@ -533,12 +670,12 @@ func (g *statementGenerator) addCreates(field quota.Field) error {
 					g.kind.Name, creates.Kind, createdField.Path, createdField.Path,
 				)
 			}
-			name, tenant, project := itemReferenceExprs(g.item, source)
+			key, tenant, project := itemReferenceExprs(g.item, source)
 			alias := g.nextAlias("t")
-			from += g.typeJoin(createdField.Through, name, tenant, project, "r", alias)
+			from += g.typeJoin(createdField.Through, key, tenant, project, "r", alias)
 			// A planned child whose type resolves to nothing would ask for zero of its
 			// dimensions, so the sentinel makes the count fail loudly instead:
-			g.asks = append(g.asks, missingTypeAsk(name, alias, from))
+			g.asks = append(g.asks, missingTypeAsk(key, alias, from))
 			for _, price := range rowPrice(g.counter.kinds[createdField.Through], alias) {
 				g.asks = append(g.asks, selectFrom(
 					price.dimension, fmt.Sprintf("%s * %s", count, price.amount), from,
@@ -553,16 +690,14 @@ func (g *statementGenerator) addCreates(field quota.Field) error {
 	}
 
 	// The exists side: the created rows linked to the parent, priced like any stored row of their
-	// kind. A link is trusted only for rows the system created, and the rows stop counting in the
-	// states their kind's rules map, so a released child no longer nets against its parent's ask.
-	// Several creates fields can name the same kind; the linked rows are scanned once per kind,
-	// not once per field.
+	// kind. A link is trusted only for rows the system created. Several creates fields can name
+	// the same kind; the linked rows are scanned once per kind, not once per field.
 	if g.existsKinds[creates.Kind] {
 		return nil
 	}
 	g.existsKinds[creates.Kind] = true
 	row := g.nextAlias("v")
-	from := fmt.Sprintf("%s %s", tables[created.Message], row)
+	from := fmt.Sprintf("%s %s", dao.TableNameFor(string(created.Message.Name())), row)
 	var prices []string
 	for _, price := range rowPrice(created, row) {
 		prices = append(prices, selectPrice(price.dimension, price.amount))
@@ -571,9 +706,9 @@ func (g *statementGenerator) addCreates(field quota.Field) error {
 		if createdField.Through == "" {
 			continue
 		}
-		name, tenant, project := referenceExprs(row, createdField.Path)
+		key, tenant, project := referenceExprs(row, createdField.Path)
 		alias := g.nextAlias("t")
-		from += g.typeJoin(createdField.Through, name, tenant, project, row, alias)
+		from += g.typeJoin(createdField.Through, key, tenant, project, row, alias)
 		for _, price := range rowPrice(g.counter.kinds[createdField.Through], alias) {
 			prices = append(prices, selectPrice(price.dimension, price.amount))
 		}
@@ -591,9 +726,8 @@ func (g *statementGenerator) addCreates(field quota.Field) error {
 		where %s.tenant = p.tenant
 			and %s.creator = 'system'
 			and %s
-			%s
 		`,
-		from, union(prices), row, row, link, g.stopsCountingIn(creates.Kind, row),
+		from, union(prices), row, row, link,
 	))
 	return nil
 }

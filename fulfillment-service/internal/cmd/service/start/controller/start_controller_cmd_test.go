@@ -120,4 +120,46 @@ var _ = Describe("Controller event filters", func() {
 			Expect(value).To(Equal(types.Bool(event.HasServiceAccount())))
 		}
 	})
+
+	It("matches user events for project membership reconciliation", func() {
+		env, err := cel.NewEnv(
+			cel.Types(&privatev1.Event{}),
+			cel.Variable("event", cel.ObjectType("osac.private.v1.Event")),
+		)
+		Expect(err).To(Succeed())
+		ast, issues := env.Compile("has(event.project_membership) || has(event.user)")
+		if issues != nil {
+			Expect(issues.Err()).To(Succeed())
+		}
+		program, err := env.Program(ast)
+		Expect(err).To(Succeed())
+
+		for _, tc := range []struct {
+			name  string
+			event *privatev1.Event
+			want  bool
+		}{
+			{
+				name:  "project membership event",
+				event: privatev1.Event_builder{ProjectMembership: privatev1.ProjectMembership_builder{}.Build()}.Build(),
+				want:  true,
+			},
+			{
+				name:  "user event",
+				event: privatev1.Event_builder{User: privatev1.User_builder{}.Build()}.Build(),
+				want:  true,
+			},
+			{
+				name:  "unrelated project event",
+				event: privatev1.Event_builder{Project: privatev1.Project_builder{}.Build()}.Build(),
+			},
+		} {
+			By(tc.name)
+			value, _, evalErr := program.Eval(map[string]any{"event": tc.event})
+			Expect(evalErr).To(Succeed())
+			got, ok := value.(types.Bool)
+			Expect(ok).To(BeTrue())
+			Expect(bool(got)).To(Equal(tc.want))
+		}
+	})
 })

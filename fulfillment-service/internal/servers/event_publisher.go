@@ -1174,11 +1174,6 @@ func (p *EventPublisher) redactEvent(event *privatev1.Event) {
 		if spec != nil {
 			spec.ClearCredentials()
 		}
-	case event.HasTenant():
-		status := event.GetTenant().GetStatus()
-		if status != nil {
-			status.ClearBreakGlassCredentials()
-		}
 	}
 }
 

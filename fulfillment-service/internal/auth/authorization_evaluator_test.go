@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
@@ -87,6 +88,138 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
 			Expect(evaluator).To(BeNil())
 		})
+	})
+
+	Describe("AAP Secret reader", func() {
+		const clientID = "osac-aap-secret-reader"
+		const getSecret = "/osac.private.v1.Secrets/Get"
+		const issuer = "https://keycloak.example/realms/osac"
+		const otherIssuer = "https://another-keycloak.example/realms/osac"
+
+		var evaluator *OPAAuthorizationEvaluator
+		var claims jwt.MapClaims
+		var identity *AuthContext
+
+		BeforeEach(func() {
+			readerIssuer, err := ResolveAAPSecretReaderIssuer([]string{issuer}, "")
+			Expect(err).NotTo(HaveOccurred())
+			evaluator, err = NewEvaluator().SetAAPSecretReaderIssuer(readerIssuer).Build()
+			Expect(err).NotTo(HaveOccurred())
+			claims = jwt.MapClaims{
+				"iss":                issuer,
+				"azp":                clientID,
+				"client_id":          clientID,
+				"preferred_username": "service-account-" + clientID,
+				"aud":                Audience,
+			}
+			identity, err = ExtractAuthContext(&jwt.Token{Claims: claims})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		DescribeTable("selects the grant issuer from configured OIDC issuers",
+			func(trusted []string, configured, expected string) {
+				selected, err := ResolveAAPSecretReaderIssuer(trusted, configured)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(selected).To(Equal(expected))
+			},
+			Entry("no OIDC issuers", nil, "", ""),
+			Entry("one trusted issuer", []string{issuer}, "", issuer),
+			Entry("duplicate entries", []string{issuer, " " + issuer + " "}, "", issuer),
+			Entry("several issuers without a selection", []string{issuer, otherIssuer}, "", ""),
+			Entry("explicit selection among several issuers", []string{issuer, otherIssuer}, otherIssuer, otherIssuer),
+		)
+
+		It("rejects an explicit selection outside the trusted issuers", func() {
+			_, err := ResolveAAPSecretReaderIssuer([]string{issuer}, otherIssuer)
+			Expect(err).To(MatchError("AAP Secret reader issuer must be one of the trusted token issuers"))
+		})
+
+		It("denies the reader when no issuer is configured", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().Build()
+			Expect(err).NotTo(HaveOccurred())
+			identity.Issuer = ""
+			decision, err := evaluator.Evaluate(ctx, identity, getSecret)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(decision.Allowed).To(BeFalse())
+		})
+
+		It("allows private Get with visibility across the deployment", func(ctx context.Context) {
+			identity.Groups = []any{"admins"}
+			identity.Organization = []any{"tenant-a"}
+			identity.RealmAccess = map[string]any{"roles": []any{"osac-csi-driver"}}
+			decision, err := evaluator.Evaluate(ctx, identity, getSecret)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(decision).To(Equal(&AuthzDecision{
+				Allowed:        true,
+				SubjectUser:    identity.Username,
+				SubjectTenant:  SystemTenant,
+				SubjectTenants: []string{"*"},
+			}))
+		})
+
+		DescribeTable("requires the Fulfillment audience for private Get and wildcard tenant access",
+			func(ctx context.Context, audience any, allowed bool, tenants []string) {
+				delete(claims, "aud")
+				if audience != nil {
+					claims["aud"] = audience
+				}
+				claims["groups"] = []any{"admins"}
+				identity, err := ExtractAuthContext(&jwt.Token{Claims: claims})
+				Expect(err).NotTo(HaveOccurred())
+				decision, err := evaluator.Evaluate(ctx, identity, getSecret)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(allowed))
+				Expect(decision.SubjectTenants).To(Equal(tenants))
+			},
+			Entry("single audience", Audience, true, []string{"*"}),
+			Entry("matching audience in an array", []any{"other-service", Audience}, true, []string{"*"}),
+			Entry("missing audience", nil, false, []string(nil)),
+			Entry("different audience", "other-service", false, []string(nil)),
+			Entry("malformed audience array", []any{Audience, 42}, false, []string(nil)),
+		)
+
+		DescribeTable("denies other methods even when the token contains an admin group",
+			func(ctx context.Context, method string) {
+				identity.Groups = []any{"admins"}
+				decision, err := evaluator.Evaluate(ctx, identity, method)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
+			},
+			Entry("public Get", "/osac.public.v1.Secrets/Get"),
+			Entry("private List", "/osac.private.v1.Secrets/List"),
+			Entry("private Create", "/osac.private.v1.Secrets/Create"),
+			Entry("private Update", "/osac.private.v1.Secrets/Update"),
+			Entry("private Delete", "/osac.private.v1.Secrets/Delete"),
+			Entry("unrelated read", "/osac.private.v1.ComputeInstances/Get"),
+		)
+
+		DescribeTable("requires the dedicated client credentials claims on a JWT identity",
+			func(ctx context.Context, mutate func(*AuthContext)) {
+				mutate(identity)
+				decision, err := evaluator.Evaluate(ctx, identity, getSecret)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
+			},
+			Entry("Kubernetes service account", func(i *AuthContext) { i.AuthMethod = "serviceaccount" }),
+			Entry("wrong authorized party", func(i *AuthContext) { i.AuthorizedParty = "another-client" }),
+			Entry("different service-account client", func(i *AuthContext) {
+				i.AuthorizedParty = "another-client"
+				i.ClientID = "another-client"
+				i.Username = "service-account-another-client"
+			}),
+			Entry("missing client credentials claim", func(i *AuthContext) { i.ClientID = "" }),
+			Entry("missing issuer claim", func(i *AuthContext) { i.Issuer = "" }),
+			Entry("different issuer even with an admin group", func(i *AuthContext) {
+				i.Issuer = otherIssuer
+				i.Groups = []any{"admins"}
+			}),
+			Entry("wrong username", func(i *AuthContext) { i.Username = "ordinary-user" }),
+			Entry("managed service account", func(i *AuthContext) { i.ManagedServiceAccountCandidate = true }),
+			Entry("admin group without client credentials claim", func(i *AuthContext) {
+				i.ClientID = ""
+				i.Groups = []any{"admins"}
+			}),
+		)
 	})
 
 	Describe("Evaluate", func() {

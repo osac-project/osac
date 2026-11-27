@@ -417,7 +417,27 @@ var _ = Describe("MCP server", func() {
 		Expect(connection.Server.Version).ToNot(BeEmpty())
 		Expect(connection.Caller.Subject).ToNot(BeEmpty())
 		Expect(connection.Caller.Tenants).To(ContainElement(usersGroup))
-		Expect(connection.ResourceFamilies).To(HaveLen(15))
+		Expect(connection.ResourceFamilies).To(ConsistOf(
+			mcpserver.ResourceTypeComputeInstanceCatalogItem,
+			mcpserver.ResourceTypeClusterCatalogItem,
+			mcpserver.ResourceTypeBareMetalInstanceCatalogItem,
+			mcpserver.ResourceTypeComputeInstanceTemplate,
+			mcpserver.ResourceTypeClusterTemplate,
+			mcpserver.ResourceTypeBareMetalInstanceTemplate,
+			mcpserver.ResourceTypeInstanceType,
+			mcpserver.ResourceTypeDiskImage,
+			mcpserver.ResourceTypeStorageTier,
+			mcpserver.ResourceTypeProject,
+			mcpserver.ResourceTypeVirtualNetwork,
+			mcpserver.ResourceTypeSubnet,
+			mcpserver.ResourceTypeSecurityGroup,
+			mcpserver.ResourceTypeExternalIP,
+			mcpserver.ResourceTypeExternalIPPool,
+			mcpserver.ResourceTypeExternalIPAttachment,
+			mcpserver.ResourceTypeNATGateway,
+			mcpserver.ResourceTypeComputeInstance,
+			mcpserver.ResourceTypeSecretReference,
+		))
 		Expect(connection.Tools).To(ConsistOf(expectedMCPServerToolNames))
 		Expect(connection.Permissions).To(ConsistOf(
 			mcpserver.CheckConnectionPermission{

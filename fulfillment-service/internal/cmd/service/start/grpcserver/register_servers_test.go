@@ -171,7 +171,11 @@ var _ = BeforeSuite(func() {
 
 	// Create the private users server, exactly as production does in start_grpc_server_cmd.go's run(). It's
 	// constructed outside RegisterResourceServers there because the JIT provisioning interceptor needs it before
-	// the interceptor chain is built — see ResourceServerDeps.PrivateUsersServer's doc comment.
+	// the interceptor chain is built — see ResourceServerDeps.PrivateUsersServer's doc comment. Production publishes
+	// the installation's networking settings before this first build; the tests publish the defaults here so the
+	// shared quota parts derive them, and so networking servers built below don't silently get networking disabled.
+	networkingSettings := servers.DefaultNetworkingSettings()
+	servers.SetInstallationNetworkingSettings(&networkingSettings)
 	privateUsersServer, err := servers.NewPrivateUsersServer().
 		SetLogger(logger).
 		SetAttributionLogic(attribution).
@@ -201,6 +205,7 @@ var _ = BeforeSuite(func() {
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                &services.Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: true},
+		NetworkingSettings:      servers.DefaultNetworkingSettings(),
 	})
 	Expect(err).ToNot(HaveOccurred())
 	server.Start()
@@ -464,6 +469,7 @@ func registerWithFlags(svcFlags *services.Flags) (map[string]grpc.ServiceInfo, *
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      nil,
 		Services:                svcFlags,
+		NetworkingSettings:      servers.DefaultNetworkingSettings(),
 	})
 	if err != nil {
 		return nil, nil, err

@@ -44,6 +44,13 @@ in `osac-aap/Makefile`.
   Trident operator, ONTAP cluster, FC/iSCSI data plane or osac-operator payload
   is run ([OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
   [OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845)).
+- `storage_provider_csi_namespace_defaults` runs without Kubernetes access and
+  verifies that `NETAPP_CSI_OPERATOR_NAMESPACE` selects the Trident operand
+  namespace while `VAST_CSI_OPERATOR_NAMESPACE` selects the VAST operator
+  namespace. The default values are `trident` and `vast-csi-system`.
+- The local integration harness sets `OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES`
+  to substitute test installers for external OLM operations. The playbooks
+  default this gate to false, so extra vars alone cannot select roles.
 - `network_task_playbook`, `netris_fabric`, `cudn_evpn` (also in `make test`):
   Netris is a stateful in-process fake; CUDN/VTEP CRDs are minimal schemas
   with fixture-supplied readiness — no OVN, real CRD validation, data plane or

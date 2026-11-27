@@ -286,6 +286,7 @@ to the existing name.
 | Update attempts to change name on an update-capable service | `InvalidArgument` | `field 'metadata.name' is immutable` |
 | Update attempt on a public networking service without update support | `Unimplemented` | The public service has no `Update` method |
 | Singleton or single-default invariant (for example a second non-deleted `NetworkClass`) | `FailedPrecondition` | `only one NetworkClass per deployment is allowed (existing NetworkClass id '...')` |
+| Request would take a scope over a quota limit | `FailedPrecondition` | `quota exceeded: project team, storage.volumes: limit 1, usage 1, adding 1`, with an `ErrorInfo` whose reason is `QUOTA_EXCEEDED` and a `QuotaFailure` detail |
 
 Not every unique-index violation is `AlreadyExists`. Ordinary per-object name uniqueness stays
 `AlreadyExists`. Unique partial indexes that enforce a singleton or "single default" invariant
@@ -293,6 +294,18 @@ Not every unique-index violation is `AlreadyExists`. Ordinary per-object name un
 `FailedPrecondition`: the slot is occupied, and a retry may succeed once the conflicting object
 is gone. Consumers must match on the gRPC status code rather than assuming every uniqueness
 conflict is `AlreadyExists`.
+
+A quota refusal is also `FailedPrecondition`, with an `ErrorInfo` whose reason is
+`QUOTA_EXCEEDED` and a `QuotaFailure` detail that names the limit, the usage and what the request
+adds, as the [Quota Foundation design](https://redhat.atlassian.net/browse/OSAC-4500) describes.
+`FailedPrecondition` tells clients the request can pass only after a delete, a higher limit,
+or a shrink that frees the room it needs.
+The reason is not `RESOURCE_EXHAUSTED`, which maps to HTTP 429 and tells clients to retry soon,
+when only a delete, a higher limit or a shrink can help.
+
+A create that quota refuses reports `AlreadyExists` instead when a live object still holds the
+request's name in the tenant and project. The first create landed, and the retry sees the
+conflict it left, so a client that retries a lost response recovers.
 
 <a id="administrator-only-metadata"></a>
 ### Labels and annotations
@@ -415,6 +428,8 @@ appropriate gRPC errors with descriptive messages:
 - `AlreadyExists` for ordinary per-object uniqueness (the same name already exists in scope)
 - `FailedPrecondition` for singleton or "single default" invariants (another object already
   occupies the unique slot; a retry may succeed once that object is gone)
+- `FailedPrecondition` with an `ErrorInfo` reason `QUOTA_EXCEEDED` for a request that would take
+  a scope over a quota limit (see the [Quota Foundation design](https://redhat.atlassian.net/browse/OSAC-4500))
 - `InvalidArgument` for other constraint failures
 
 Match on the gRPC status code, not on message text. Do not assume every uniqueness violation is

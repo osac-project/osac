@@ -301,6 +301,8 @@ func (s *PrivateNATGatewaysServer) Update(ctx context.Context,
 		nil); err != nil {
 		return
 	}
+	// The lifecycle lock runs before the generic row lock, so Update and Delete take the
+	// ExternalIP and NAT gateway rows in the same order and can't deadlock:
 	if _, _, err = s.lifecycle.lockNATGateway(ctx, id); err != nil {
 		err = translateLifecycleError(err)
 		return

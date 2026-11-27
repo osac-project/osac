@@ -22,7 +22,6 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -164,22 +163,33 @@ func (s *PrivateStorageTiersServer) Update(ctx context.Context,
 		return
 	}
 
-	getRequest := &privatev1.StorageTiersGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.StorageTiersGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
+	requested := request.GetObject()
+	// An indexed mask can discard extra associations before candidate validation.
+	if err := validateTierBackendLimit(len(requested.GetSpec().GetBackends())); err != nil {
+		return nil, err
 	}
-
-	existingST := getResponse.GetObject()
-
-	err = s.validateStorageTierUpdate(ctx, request.GetObject(), existingST, request.GetUpdateMask())
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, func(ctx context.Context, candidate, current *privatev1.StorageTier) error {
+		name := requested.GetMetadata().GetName()
+		if name != "" && name != current.GetMetadata().GetName() {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is immutable and cannot be changed from '%s' to '%s'",
+				current.GetMetadata().GetName(), name)
+		}
+		if mask := request.GetUpdateMask(); mask != nil {
+			hasPaths := len(mask.GetPaths()) > 0
+			writesBackends := hasPaths && updateIncludesField(mask, "spec.backends")
+			if !writesBackends && len(requested.GetSpec().GetBackends()) > 0 {
+				// Supplied references are checked even when the mask preserves the stored association.
+				if _, err := s.lookupTierBackend(ctx, requested.GetSpec().GetBackends(), false); err != nil {
+					return err
+				}
+			}
+			writesProtocol := hasPaths && updateIncludesField(mask, "spec.protocol")
+			if !writesBackends && !writesProtocol {
+				return nil
+			}
+		}
+		return s.validateBackends(ctx, candidate.GetSpec())
+	})
 	return
 }
 
@@ -204,63 +214,49 @@ func (s *PrivateStorageTiersServer) validateStorageTierCreate(ctx context.Contex
 	if st.GetMetadata() == nil || st.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
 	}
-	backends := st.GetSpec().GetBackends()
+	return s.validateBackends(ctx, st.GetSpec())
+}
+
+func (s *PrivateStorageTiersServer) validateBackends(ctx context.Context, spec *privatev1.StorageTierSpec) error {
+	// Keep the backend's credential mode stable until the tier association is committed.
+	b, err := s.lookupTierBackend(ctx, spec.GetBackends(), true)
+	if err != nil {
+		return err
+	}
+	if b.GetProvider() == "vast" && !b.GetCspManaged() && !b.HasCredentials() &&
+		spec.GetProtocol() != privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"an OSAC-managed VAST backend without backend credentials supports only NFS tiers")
+	}
+	return nil
+}
+
+func validateTierBackendLimit(count int) error {
+	if count > 1 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"only one backend association is supported in v0.1, but %d were provided", count)
+	}
+	return nil
+}
+
+func (s *PrivateStorageTiersServer) lookupTierBackend(ctx context.Context, backends []*privatev1.BackendAssociation, lock bool) (*privatev1.StorageBackendSpec, error) {
 	if len(backends) == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.backends' is required and must not be empty")
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.backends' is required and must not be empty")
 	}
-	return s.validateBackends(ctx, backends)
-}
-
-func (s *PrivateStorageTiersServer) validateStorageTierUpdate(ctx context.Context,
-	newST *privatev1.StorageTier, existingST *privatev1.StorageTier,
-	updateMask *fieldmaskpb.FieldMask) error {
-
-	if newST.GetMetadata() != nil && newST.GetMetadata().GetName() != "" &&
-		newST.GetMetadata().GetName() != existingST.GetMetadata().GetName() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'metadata.name' is immutable and cannot be changed from '%s' to '%s'",
-			existingST.GetMetadata().GetName(), newST.GetMetadata().GetName())
+	if err := validateTierBackendLimit(len(backends)); err != nil {
+		return nil, err
 	}
-	backends := newST.GetSpec().GetBackends()
-	if updateMask != nil {
-		for _, path := range updateMask.GetPaths() {
-			if path == "spec.backends" && len(backends) == 0 {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"field 'spec.backends' is required and must not be empty")
-			}
+	id := backends[0].GetBackendId()
+	if id == "" {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'backends[].backend_id' is required")
+	}
+	backend, err := s.storageBackendsDAO.Get().SetId(id).SetShareLock(lock).Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return nil, grpcstatus.Errorf(grpccodes.NotFound, "storage backend with identifier '%s' not found", id)
 		}
-	} else if len(backends) == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.backends' is required and must not be empty")
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to validate storage backend '%s'", id)
 	}
-	if len(backends) > 0 {
-		if err := s.validateBackends(ctx, backends); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *PrivateStorageTiersServer) validateBackends(ctx context.Context,
-	backends []*privatev1.BackendAssociation) error {
-	if len(backends) > 1 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"only one backend association is supported in v0.1, but %d were provided", len(backends))
-	}
-	for _, ba := range backends {
-		if ba.GetBackendId() == "" {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'backends[].backend_id' is required")
-		}
-		_, err := s.storageBackendsDAO.Get().SetId(ba.GetBackendId()).Do(ctx)
-		if err != nil {
-			var notFoundErr *dao.ErrNotFound
-			if errors.As(err, &notFoundErr) {
-				return grpcstatus.Errorf(grpccodes.NotFound,
-					"storage backend with identifier '%s' not found", ba.GetBackendId())
-			}
-			return grpcstatus.Errorf(grpccodes.Internal,
-				"failed to validate storage backend '%s'", ba.GetBackendId())
-		}
-	}
-	return nil
+	return backend.GetObject().GetSpec(), nil
 }

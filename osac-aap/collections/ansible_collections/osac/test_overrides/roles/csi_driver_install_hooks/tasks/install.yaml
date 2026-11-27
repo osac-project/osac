@@ -1,12 +1,8 @@
 ---
-# Overrides osac.service.csi_driver_install's include_role in the calling
-# playbooks (via csi_driver_install_override) so playbook-level wiring tests
-# can verify the when: gate fired and the vars: mapping resolved correctly,
-# without a real Helm install against the csi-driver chart. The role-level
-# non-sensitive identifier (providers) -- never a payload that could carry secrets.
-# Matches vm_create_hooks/tasks/resources.yml's log-and-skip pattern, which
-# likewise logs only a non-sensitive identifier.
-- name: Log CSI driver install step execution with non-sensitive identifiers
+# Provides test stubs for OSAC CSI and provider-native CSI installer calls. Logs only
+# provider and driver identifiers, never backend payloads or credentials.
+- name: Log OSAC CSI driver install step execution with non-sensitive identifiers
+  when: csi_driver_install_tiers is defined
   ansible.builtin.lineinfile:
     path: /tmp/osac_test_overrides.log
     line: >-
@@ -18,5 +14,125 @@
     mode: "0600"
 
 - name: Skip actual Helm install (test mode)
+  when: csi_driver_install_tiers is defined
   ansible.builtin.debug:
     msg: "Test mode - skipping actual OSAC CSI driver Helm install"
+
+- name: Log native CSI driver install step execution with non-sensitive identifiers
+  when: native_csi_driver_install_tiers is defined
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: >-
+      {{ ansible_date_time.iso8601 }} | native_csi_driver_install |
+      drivers={{ native_csi_driver_names | to_json }} |
+      package={{ native_csi_driver_package }} |
+      channel={{ native_csi_driver_channel }} |
+      install-plan-approval={{ native_csi_driver_install_plan_approval | default('unspecified') }} |
+      providers={{ native_csi_driver_install_tiers | map(attribute='provider') | sort | list | to_json }}
+    create: true
+    mode: "0600"
+
+- name: Create Trident CSI registration fixture
+  when: native_csi_driver_install_tiers is defined
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: CSIDriver
+      metadata:
+        name: "{{ item }}"
+      spec:
+        attachRequired: false
+  loop: "{{ native_csi_driver_names }}"
+
+- name: Create TridentBackendConfig CRD fixture
+  when:
+    - native_csi_driver_install_tiers is defined
+    - "'csi.trident.netapp.io' in native_csi_driver_names"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apiextensions.k8s.io/v1
+      kind: CustomResourceDefinition
+      metadata:
+        name: tridentbackendconfigs.trident.netapp.io
+      spec:
+        group: trident.netapp.io
+        names:
+          kind: TridentBackendConfig
+          listKind: TridentBackendConfigList
+          plural: tridentbackendconfigs
+          singular: tridentbackendconfig
+        scope: Namespaced
+        versions:
+          - name: v1
+            served: true
+            storage: true
+            schema:
+              openAPIV3Schema:
+                type: object
+                properties:
+                  spec:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+
+- name: Create ready Trident controller Deployment fixture
+  when:
+    - native_csi_driver_install_tiers is defined
+    - "'csi.trident.netapp.io' in native_csi_driver_names"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: trident-controller
+        namespace: trident
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: osac-test-trident-controller
+        template:
+          metadata:
+            labels:
+              app: osac-test-trident-controller
+          spec:
+            tolerations:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+                effect: NoSchedule
+            containers:
+              - name: pause
+                image: registry.k8s.io/pause:3.10
+                imagePullPolicy: IfNotPresent
+
+- name: Create ready Trident node DaemonSet fixture
+  when:
+    - native_csi_driver_install_tiers is defined
+    - "'csi.trident.netapp.io' in native_csi_driver_names"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: trident-node-linux
+        namespace: trident
+      spec:
+        selector:
+          matchLabels:
+            app: osac-test-trident-node
+        template:
+          metadata:
+            labels:
+              app: osac-test-trident-node
+          spec:
+            tolerations:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+                effect: NoSchedule
+            containers:
+              - name: pause
+                image: registry.k8s.io/pause:3.10
+                imagePullPolicy: IfNotPresent

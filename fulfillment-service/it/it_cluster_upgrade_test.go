@@ -18,8 +18,11 @@ import (
 	"fmt"
 	"time"
 
+	semver "github.com/Masterminds/semver/v3"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -399,6 +402,80 @@ var _ = Describe("Cluster upgrade", func() {
 		for _, name := range []string{"compute", "gpu"} {
 			Expect(stored.GetStatus().GetNodeSets()[name].GetVersion().GetName()).To(Equal(defaultVersionName), name)
 		}
+	})
+
+	It("rejects exact repeat and over-skew targets without mutating intent or projection", func() {
+		cluster := createCluster(twoNodeSets())
+		order := waitForClusterOrder(cluster)
+		seedObservedVersions(cluster)
+		before := getPrivateCluster(cluster)
+
+		rejectTarget := func(name, message string) {
+			_, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Id: cluster.GetId(),
+					Spec: publicv1.ClusterSpec_builder{
+						Version: publicv1.ClusterVersionReference_builder{Name: name}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring(message))
+		}
+
+		rejectTarget(defaultVersionName, "already selected")
+
+		parsedDefault, err := semver.StrictNewVersion(defaultVersionSemver)
+		Expect(err).NotTo(HaveOccurred())
+		skewSemver := fmt.Sprintf("%d.%d.%d",
+			parsedDefault.Major(), parsedDefault.Minor()+4, cvVersionCounter.Add(1))
+		skewVersionName := fmt.Sprintf("skew-cv-%s", uuid.New()[24:32])
+		skewImage := fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", skewSemver)
+		skewDiskImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		skewVersion, err := clusterVersions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+			Object: privatev1.ClusterVersion_builder{
+				Metadata: privatev1.Metadata_builder{Name: skewVersionName}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Version:   skewSemver,
+					Image:     skewImage,
+					DiskImage: privatev1.DiskImageReference_builder{Id: skewDiskImage.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := clusterVersions.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{
+				Id: skewVersion.GetObject().GetId(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		rejectTarget(skewVersionName, "more than 3 minor versions newer")
+
+		after := getPrivateCluster(cluster)
+		Expect(proto.Equal(after.GetSpec(), before.GetSpec())).To(BeTrue())
+		Expect(after.GetStatus().GetUpgradeAttemptId()).To(Equal(before.GetStatus().GetUpgradeAttemptId()))
+		Expect(proto.Equal(after.GetStatus().GetActiveUpgradeAttempt(),
+			before.GetStatus().GetActiveUpgradeAttempt())).To(BeTrue())
+		Expect(after.GetStatus().GetUpgradeHistory()).To(HaveLen(len(before.GetStatus().GetUpgradeHistory())))
+		for i, entry := range before.GetStatus().GetUpgradeHistory() {
+			Expect(proto.Equal(after.GetStatus().GetUpgradeHistory()[i], entry)).To(BeTrue())
+		}
+
+		kubeClient := tool.KubeClient()
+		Consistently(func(g Gomega) {
+			pollCtx, cancel := context.WithTimeout(ctx, pollRequestTimeout)
+			defer cancel()
+			updated := &osacv1alpha1.ClusterOrder{}
+			g.Expect(kubeClient.Get(pollCtx, crclient.ObjectKeyFromObject(order), updated)).To(Succeed())
+			g.Expect(updated.Spec.ReleaseImage).To(Equal(defaultImage))
+			g.Expect(nodeRequestImage(updated, "compute")).To(Equal(defaultImage))
+			g.Expect(nodeRequestImage(updated, "gpu")).To(Equal(defaultImage))
+		}, 5*time.Second, time.Second).Should(Succeed())
 	})
 
 	It("keeps timeout feedback active and recoverable through the aggregate history", func() {

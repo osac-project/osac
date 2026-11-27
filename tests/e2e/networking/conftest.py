@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient, host_quota_dimension
 from tests.e2e.core.helpers import registered_ssh_key_secret
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
@@ -102,13 +102,20 @@ def bmi_instance_type(private_grpc: GRPCClient) -> str:
     """Send spec.instance_type only when that BareMetalInstanceType exists.
 
     Labs often export OSAC_BMI_INSTANCE_TYPE=default even when no types are cataloged.
+
+    A resolved type also gets its dimension's quota default: a BMI of the type
+    counts against bare_metal.instances.<name>, and quota is enforced in the
+    request path, so the tenant's first BMI of the type is refused without it.
     """
     requested = os.environ.get("OSAC_BMI_INSTANCE_TYPE", "").strip() or os.environ.get("OSAC_BM_HOST_TYPE", "").strip()
     if not requested:
         return ""
     items = private_grpc.call(service="osac.private.v1.BareMetalInstanceTypes/List").get("items") or []
     names = {str((item.get("metadata") or {}).get("name") or "") for item in items}
-    return requested if requested in names else ""
+    if requested not in names:
+        return ""
+    private_grpc.set_quota_default(dimension=host_quota_dimension(requested))
+    return requested
 
 
 @pytest.fixture(scope="session")

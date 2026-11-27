@@ -22,7 +22,8 @@ import "osac/private/v1/metadata_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
-// The scope a quota object covers: the whole tenant or one project.
+// The scope a quota object covers: the whole tenant or one project. A refused request also names
+// the scope that refused it, which can be a project's ancestor.
 //
 // The scope is explicit in the spec and agrees with the metadata: a tenant scope keeps the empty
 // project name, and a project scope names its project. The empty project name is the tenant's
@@ -37,6 +38,11 @@ enum QuotaScope {
 
   // The scope covers the project the metadata names.
   QUOTA_SCOPE_PROJECT = 2;
+
+  // A project above the request's project refused it. Only a `QuotaFailure` reports this
+  // scope: a limit or threshold always caps a concrete project or the tenant, because an
+  // ancestor's limit is that project's own limit.
+  QUOTA_SCOPE_ANCESTOR_PROJECT = 3;
 }
 
 // Represents the limit of one quota dimension at one scope.

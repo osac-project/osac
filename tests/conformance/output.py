@@ -12,7 +12,7 @@ from typing import TextIO
 
 import yaml
 
-from tests.conformance.model import Plan, TestIdentity
+from tests.conformance.model import MARKER_PREFIX, NON_BLOCKING_MARKER, Plan, TestIdentity
 from tests.conformance.redact import Redactor
 
 _RUN_ID_ALPHABET = string.ascii_lowercase + string.digits
@@ -80,18 +80,16 @@ class OutputSink:
 
 
 def _test_markers(test: TestIdentity) -> list[str]:
-    markers: list[str] = []
-    for label in sorted(test.labels):
-        if (
-            label.startswith("conformance/") and not label.startswith(("conformance/blocking", "conformance/informing"))
-        ) or (
-            label.startswith("conformance_") and not label.startswith(("conformance_blocking", "conformance_informing"))
-        ):
-            markers.append(label)
-    return markers
+    return [label for label in sorted(test.labels) if label.startswith(MARKER_PREFIX) and label != NON_BLOCKING_MARKER]
 
 
-def plan_document(plan: Plan, redactor: Redactor) -> dict[str, object]:
+def plan_document(plan: Plan) -> dict[str, object]:
+    """The plan as collected, before redaction.
+
+    Every string here can carry environment data (test IDs, names, profiles,
+    selectors and markers), so ``write_plan`` redacts the completed document
+    rather than each field. A field added later is then covered by default.
+    """
     return {
         "profiles": list(plan.profiles),
         "selectors": [
@@ -99,9 +97,9 @@ def plan_document(plan: Plan, redactor: Redactor) -> dict[str, object]:
         ],
         "tests": [
             {
-                "id": redactor.text(test.id),
+                "id": test.id,
                 "key": plan_key(test.id),
-                "name": redactor.text(test.name),
+                "name": test.name,
                 "profiles": list(test.profiles),
                 "markers": _test_markers(test),
             }
@@ -114,5 +112,6 @@ def plan_document(plan: Plan, redactor: Redactor) -> dict[str, object]:
 def write_plan(plan: Plan, results_dir: Path, redactor: Redactor) -> Path:
     results_dir.mkdir(parents=True, exist_ok=True)
     path = results_dir / "conformance-plan.yaml"
-    path.write_text(yaml.safe_dump(plan_document(plan, redactor), sort_keys=False), encoding="utf-8")
+    document = redactor.obj(plan_document(plan))
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     return path

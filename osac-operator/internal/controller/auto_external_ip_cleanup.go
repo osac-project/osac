@@ -23,7 +23,6 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
@@ -120,38 +119,15 @@ func reconcileAutoExternalIPCleanup(
 		return true, ctrl.Result{}, nil
 	}
 
-	log := ctrllog.FromContext(ctx)
-	attachments, err := listAutoExternalIPAttachments(ctx, c, networkingNamespace, owner)
+	// Automatic ExternalIP resources project Fulfillment-owned records. The
+	// Fulfillment service deletes attachments, then ExternalIPs, before it
+	// deletes the workload CR. Deleting these hub CRs directly makes the
+	// Fulfillment reconciler recreate them and can hold this finalizer forever.
+	remains, err := automaticExternalAccessRemains(ctx, c, networkingNamespace, owner)
 	if err != nil {
 		return false, ctrl.Result{}, err
 	}
-	for i := range attachments {
-		attachment := &attachments[i]
-		if attachment.DeletionTimestamp.IsZero() {
-			log.Info("deleting automatically created ExternalIPAttachment", "name", attachment.Name)
-			if err := client.IgnoreNotFound(c.Delete(ctx, attachment)); err != nil {
-				return false, ctrl.Result{}, fmt.Errorf("delete ExternalIPAttachment %q: %w", attachment.Name, err)
-			}
-		}
-	}
-	if len(attachments) > 0 {
-		return false, ctrl.Result{RequeueAfter: pollInterval}, nil
-	}
-
-	externalIPs, err := listAutoExternalIPs(ctx, c, networkingNamespace, owner)
-	if err != nil {
-		return false, ctrl.Result{}, err
-	}
-	for i := range externalIPs {
-		externalIP := &externalIPs[i]
-		if externalIP.DeletionTimestamp.IsZero() {
-			log.Info("deleting automatically created ExternalIP", "name", externalIP.Name)
-			if err := client.IgnoreNotFound(c.Delete(ctx, externalIP)); err != nil {
-				return false, ctrl.Result{}, fmt.Errorf("delete ExternalIP %q: %w", externalIP.Name, err)
-			}
-		}
-	}
-	if len(externalIPs) > 0 {
+	if remains {
 		return false, ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
 
@@ -204,7 +180,10 @@ func listAutoExternalIPAttachments(
 	for i := range list.Items {
 		attachment := &list.Items[i]
 		if !owner.matchesAttachment(attachment) ||
-			(attachment.Labels[autoCreatedLabel] != labelValueTrue && attachment.Labels[autoProvisionedLabel] != labelValueTrue) {
+			(attachment.Labels[autoCreatedLabel] != labelValueTrue ||
+				attachment.Labels[autoCreatedForLabel] != owner.id) &&
+				(attachment.Labels[autoProvisionedLabel] != labelValueTrue ||
+					attachment.Labels[autoProvisionedForLabel] != owner.id) {
 			continue
 		}
 		attachments = append(attachments, *attachment.DeepCopy())

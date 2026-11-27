@@ -1,9 +1,9 @@
 ---
-- name: Require the reserved ingress address and HostedControlPlane namespace
+- name: Require the Fulfillment-allocated ingress address and HostedControlPlane namespace
   ansible.builtin.assert:
     that:
       - ingress_allocated_address is defined
-      - ingress_allocated_address | ansible.utils.ipaddr('ipv4')
+      - ingress_allocated_address is ansible.utils.ipv4
       - hosted_control_plane_namespace is defined
       - hosted_control_plane_namespace | length > 0
 
@@ -23,14 +23,31 @@
     fail_msg: >-
       Secret service-network-admin-kubeconfig was not found.
 
-- name: Decode the service-network admin kubeconfig
+- name: Extract the service-network admin kubeconfig and API port
   ansible.builtin.set_fact:
-    _cluster_endpoint_admin_kubeconfig: >-
-      {{ _cluster_endpoint_kubeconfig_secret.resources[0].data.kubeconfig
-         | b64decode | from_yaml }}
+    _cluster_endpoint_admin_kubeconfig_raw: >-
+      {{ _cluster_endpoint_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}
+    _cluster_endpoint_api_port: >-
+      {{ (_cluster_endpoint_kubeconfig_secret.resources[0].data.kubeconfig
+          | b64decode
+          | regex_findall('https://kube-apiserver:([0-9]+)')
+          | first
+          | default('6443', true)) }}
   no_log: true
 
-- name: Configure guest ingress with the reserved address
+- name: Decode the service-network admin kubeconfig with the published API URL
+  ansible.builtin.set_fact:
+    _cluster_endpoint_admin_kubeconfig: >-
+      {{ _cluster_endpoint_admin_kubeconfig_raw
+         | regex_replace(
+             'https://kube-apiserver(?::[0-9]+)?',
+             hosted_cluster_api_url
+             if hosted_cluster_api_url | default('') | length > 0
+             else 'https://kube-apiserver.' ~ hosted_control_plane_namespace ~ '.svc:' ~ _cluster_endpoint_api_port)
+         | from_yaml }}
+  no_log: true
+
+- name: Configure guest ingress with the allocated address
   ansible.builtin.include_role:
     name: osac.service.metallb_ingress
     tasks_from: configure_metallb_ingress.yml
@@ -38,7 +55,7 @@
     metallb_ingress_admin_kubeconfig: "{{ _cluster_endpoint_admin_kubeconfig }}"
     metallb_ingress_ip: "{{ ingress_allocated_address }}"
 
-- name: Wait for the guest ingress Service to report the reserved address
+- name: Wait for the guest ingress Service to report the allocated address
   kubernetes.core.k8s_info:
     kubeconfig: "{{ _cluster_endpoint_admin_kubeconfig }}"
     api_version: v1

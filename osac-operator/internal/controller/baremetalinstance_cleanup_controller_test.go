@@ -157,24 +157,69 @@ func TestBareMetalInstanceCleanupFinalizerProtectsChildrenCreatedAfterFirstRecon
 			}
 
 			if result := reconcileCleanup(t, r); result.RequeueAfter <= 0 {
-				t.Fatal("expected requeue while the late attachment's provider finalizer blocks deletion")
+				t.Fatal("expected requeue while the Fulfillment-owned attachment remains")
 			}
 			currentEIA := &v1alpha1.ExternalIPAttachment{}
 			if err := c.Get(ctx, client.ObjectKeyFromObject(eia), currentEIA); err != nil {
 				t.Fatal(err)
 			}
-			if currentEIA.DeletionTimestamp.IsZero() {
-				t.Fatal("expected the late attachment to be deleting")
+			if !currentEIA.DeletionTimestamp.IsZero() {
+				t.Fatal("cleanup must not delete Fulfillment-owned attachments")
 			}
 			currentEIP := &v1alpha1.ExternalIP{}
 			if err := c.Get(ctx, client.ObjectKeyFromObject(eip), currentEIP); err != nil {
 				t.Fatal(err)
 			}
 			if !currentEIP.DeletionTimestamp.IsZero() {
-				t.Fatal("ExternalIP deletion must wait for the late attachment")
+				t.Fatal("cleanup must not delete Fulfillment-owned ExternalIPs")
 			}
 			assertCleanupFinalizer(t, c, true)
 			assertCleanupObjectExists(t, c, currentEIP)
+
+			// Fulfillment requests child deletion in dependency order; the operator
+			// waits for both provider finalizers before releasing the BMI finalizer.
+			if err := c.Delete(ctx, currentEIA); err != nil {
+				t.Fatal(err)
+			}
+			if result := reconcileCleanup(t, r); result.RequeueAfter <= 0 {
+				t.Fatal("expected requeue while the attachment is deleting")
+			}
+			currentEIA = &v1alpha1.ExternalIPAttachment{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(eia), currentEIA); err != nil {
+				t.Fatal(err)
+			}
+			currentEIA.Finalizers = nil
+			if err := c.Update(ctx, currentEIA); err != nil {
+				t.Fatal(err)
+			}
+			if result := reconcileCleanup(t, r); result.RequeueAfter <= 0 {
+				t.Fatal("expected requeue while the ExternalIP remains")
+			}
+			currentEIP = &v1alpha1.ExternalIP{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(eip), currentEIP); err != nil {
+				t.Fatal(err)
+			}
+			if !currentEIP.DeletionTimestamp.IsZero() {
+				t.Fatal("the operator must wait for Fulfillment to delete the ExternalIP")
+			}
+			if err := c.Delete(ctx, currentEIP); err != nil {
+				t.Fatal(err)
+			}
+			if result := reconcileCleanup(t, r); result.RequeueAfter <= 0 {
+				t.Fatal("expected requeue while the ExternalIP is deleting")
+			}
+			currentEIP = &v1alpha1.ExternalIP{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(eip), currentEIP); err != nil {
+				t.Fatal(err)
+			}
+			currentEIP.Finalizers = nil
+			if err := c.Update(ctx, currentEIP); err != nil {
+				t.Fatal(err)
+			}
+			reconcileCleanup(t, r)
+			if err := c.Get(ctx, client.ObjectKeyFromObject(bmi), &bmfov1alpha1.BareMetalInstance{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("BareMetalInstance after Fulfillment child cleanup = %v, want not found", err)
+			}
 		})
 	}
 }
@@ -258,13 +303,17 @@ func TestBareMetalInstanceCleanupWaitsForProviderFinalizersAndPreservesOtherReso
 			manual.Labels = nil
 			c := cleanupTestClient(t, bmi, eia, eip, foreign, manual)
 			ctx := context.Background()
+			if err := c.Delete(ctx, eia); err != nil {
+				t.Fatal(err)
+			}
 			if err := c.Delete(ctx, bmi); err != nil {
 				t.Fatal(err)
 			}
 			r := NewBareMetalInstanceCleanupReconciler(c, cleanupBMNamespace, cleanupNetNamespace)
 			if result := reconcileCleanup(t, r); result.RequeueAfter <= 0 {
-				t.Fatal("expected requeue while attachment is deleting")
+				t.Fatal("expected requeue while Fulfillment-owned attachment is deleting")
 			}
+			assertCleanupObjectExists(t, c, eia)
 			assertCleanupObjectExists(t, c, eip)
 			assertCleanupFinalizer(t, c, true)
 
@@ -277,10 +326,22 @@ func TestBareMetalInstanceCleanupWaitsForProviderFinalizersAndPreservesOtherReso
 				t.Fatal(err)
 			}
 			if result := reconcileCleanup(t, r); result.RequeueAfter <= 0 {
-				t.Fatal("expected requeue while ExternalIP is deleting")
+				t.Fatal("expected requeue while Fulfillment-owned ExternalIP remains")
 			}
 			assertCleanupFinalizer(t, c, true)
 			currentEIP := &v1alpha1.ExternalIP{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(eip), currentEIP); err != nil {
+				t.Fatal(err)
+			}
+			if !currentEIP.DeletionTimestamp.IsZero() {
+				t.Fatal("cleanup must not delete Fulfillment-owned ExternalIPs")
+			}
+			if err := c.Delete(ctx, currentEIP); err != nil {
+				t.Fatal(err)
+			}
+			if result := reconcileCleanup(t, r); result.RequeueAfter <= 0 {
+				t.Fatal("expected requeue while ExternalIP provider cleanup is pending")
+			}
 			if err := c.Get(ctx, client.ObjectKeyFromObject(eip), currentEIP); err != nil {
 				t.Fatal(err)
 			}
@@ -323,7 +384,8 @@ func (c *failCleanupListClient) List(ctx context.Context, list client.ObjectList
 func TestBareMetalInstanceCleanupPropagatesListErrorForRetry(t *testing.T) {
 	bmi := cleanupTestBMI(cleanupBMID)
 	bmi.Finalizers = []string{cleanupFinalizer}
-	c := cleanupTestClient(t, bmi, cleanupTestEIP("owned-ip", autoCreatedLabel, cleanupBMID))
+	ip := cleanupTestEIP("owned-ip", autoCreatedLabel, cleanupBMID)
+	c := cleanupTestClient(t, bmi, ip)
 	if err := c.Delete(context.Background(), bmi); err != nil {
 		t.Fatal(err)
 	}
@@ -336,9 +398,12 @@ func TestBareMetalInstanceCleanupPropagatesListErrorForRetry(t *testing.T) {
 	assertCleanupFinalizer(t, c, true)
 	restarted := NewBareMetalInstanceCleanupReconciler(c, cleanupBMNamespace, cleanupNetNamespace)
 	if result := reconcileCleanup(t, restarted); result.RequeueAfter <= 0 {
-		t.Fatal("expected requeue after deleting ExternalIP")
+		t.Fatal("expected requeue while the Fulfillment-owned ExternalIP remains")
 	}
 	assertCleanupFinalizer(t, c, true)
+	if err := c.Delete(context.Background(), ip); err != nil {
+		t.Fatal(err)
+	}
 	reconcileCleanup(t, restarted)
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bmi), &bmfov1alpha1.BareMetalInstance{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("BareMetalInstance after retry = %v, want not found", err)

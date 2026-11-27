@@ -118,9 +118,9 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		}.Build())
 		fc.AddBareMetalInstanceType(newInstanceType("bm-standard", "data-0"))
 
-		// A ClusterOrder with a 2-node bare-metal node set. Its NetworkAttachment names a Subnet and
-		// SecurityGroup that are NEVER resolved against a real network — that unresolved reference is
-		// precisely the OSAC-1436 seam; the reconciler passes the names through onto each BMI.
+		// A ClusterOrder with a 2-node bare-metal node set. Its NetworkAttachment
+		// supplies API IDs; envtest does not provision a real network, but the
+		// reconciler must preserve those IDs on each BMI.
 		co := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        coName,
@@ -137,8 +137,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 					BareMetal:       &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -210,15 +210,15 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 			Expect(w.BareMetalInstance.ID).ToNot(BeEmpty())
 		}
 
-		// Two tenant-owned worker BMIs were created and carry the
-		// unresolved network attachment names — provisioning has genuinely started.
+		// Two tenant-owned worker BMIs were created with the supplied network
+		// attachment IDs; provisioning has genuinely started.
 		calls := fc.CreateCalls()
 		Expect(calls).To(HaveLen(2))
 		for _, bmi := range calls {
 			Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
 			na := bmi.GetSpec().GetNetworkAttachments()
 			Expect(na).To(HaveLen(1))
-			Expect(na[0].GetSubnet().GetName()).To(Equal("my-subnet"))
+			Expect(na[0].GetSubnet().GetId()).To(Equal("subnet-id"))
 		}
 
 		// --- Phase B: an agent registers and binds ---
@@ -331,8 +331,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}

@@ -15,8 +15,12 @@
       - app=konnectivity-agent
   register: _konnectivity_check
   until:
-    - _konnectivity_check.resources | length > 0
-    - _konnectivity_check.resources[0].status.phase == "Running"
+    - >-
+      (_konnectivity_check | default({})).get('resources', [])
+      | rejectattr('metadata.deletionTimestamp', 'defined')
+      | selectattr('status.phase', 'equalto', 'Running')
+      | selectattr('status.conditions', 'contains', {'type': 'Ready', 'status': 'True'})
+      | list | length > 0
   retries: 60
   delay: 10
   no_log: true

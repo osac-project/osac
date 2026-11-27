@@ -23,6 +23,14 @@ def main() -> None:
     params = module.params
     kind = params["kind"]
 
+    def validate_api_server() -> None:
+        expected_server = os.environ.get("OSAC_TEST_EXPECTED_SERVER")
+        kubeconfig = params.get("kubeconfig") or {}
+        clusters = kubeconfig.get("clusters", []) if isinstance(kubeconfig, dict) else []
+        server = clusters[0].get("cluster", {}).get("server") if clusters else None
+        if expected_server and server != expected_server:
+            module.fail_json(msg="service-network kubeconfig did not use the expected API Service FQDN")
+
     if kind == "Secret":
         expected_namespace = os.environ["OSAC_TEST_HCP_NAMESPACE"]
         if params["namespace"] != expected_namespace:
@@ -34,7 +42,7 @@ def main() -> None:
             {
                 "apiVersion": "v1",
                 "kind": "Config",
-                "clusters": [{"name": "test", "cluster": {"server": "https://127.0.0.1"}}],
+                "clusters": [{"name": "test", "cluster": {"server": "https://kube-apiserver:6443"}}],
                 "contexts": [{"name": "test", "context": {"cluster": "test", "user": "test"}}],
                 "current-context": "test",
                 "users": [{"name": "fixture", "user": {"token": fixture_token}}],
@@ -42,8 +50,16 @@ def main() -> None:
         ).encode()
         resources = [{"data": {"kubeconfig": base64.b64encode(kubeconfig).decode()}}]
     elif kind == "Pod":
-        resources = [{"status": {"phase": "Running"}}]
+        validate_api_server()
+        resources = [{
+            "metadata": {},
+            "status": {
+                "phase": "Running",
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        }]
     elif kind == "Service":
+        validate_api_server()
         address = os.environ["OSAC_TEST_INGRESS_ADDRESS"]
         resources = [{"status": {"loadBalancer": {"ingress": [{"ip": address}]}}}]
     else:

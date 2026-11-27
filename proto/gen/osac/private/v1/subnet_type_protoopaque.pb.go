@@ -419,6 +419,7 @@ type SubnetStatus struct {
 	xxx_hidden_ComputeInstanceSupported         bool                   `protobuf:"varint,4,opt,name=compute_instance_supported,json=computeInstanceSupported,proto3,oneof"`
 	xxx_hidden_ComputeInstanceUnsupportedReason string                 `protobuf:"bytes,5,opt,name=compute_instance_unsupported_reason,json=computeInstanceUnsupportedReason,proto3"`
 	xxx_hidden_Hub                              string                 `protobuf:"bytes,3,opt,name=hub,proto3"`
+	xxx_hidden_Ipam                             *SubnetIPAM            `protobuf:"bytes,6,opt,name=ipam,proto3"`
 	XXX_raceDetectHookData                      protoimpl.RaceDetectHookData
 	XXX_presence                                [1]uint32
 	unknownFields                               protoimpl.UnknownFields
@@ -488,18 +489,25 @@ func (x *SubnetStatus) GetHub() string {
 	return ""
 }
 
+func (x *SubnetStatus) GetIpam() *SubnetIPAM {
+	if x != nil {
+		return x.xxx_hidden_Ipam
+	}
+	return nil
+}
+
 func (x *SubnetStatus) SetState(v SubnetState) {
 	x.xxx_hidden_State = v
 }
 
 func (x *SubnetStatus) SetMessage(v string) {
 	x.xxx_hidden_Message = &v
-	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 1, 5)
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 1, 6)
 }
 
 func (x *SubnetStatus) SetComputeInstanceSupported(v bool) {
 	x.xxx_hidden_ComputeInstanceSupported = v
-	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 2, 5)
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 2, 6)
 }
 
 func (x *SubnetStatus) SetComputeInstanceUnsupportedReason(v string) {
@@ -508,6 +516,10 @@ func (x *SubnetStatus) SetComputeInstanceUnsupportedReason(v string) {
 
 func (x *SubnetStatus) SetHub(v string) {
 	x.xxx_hidden_Hub = v
+}
+
+func (x *SubnetStatus) SetIpam(v *SubnetIPAM) {
+	x.xxx_hidden_Ipam = v
 }
 
 func (x *SubnetStatus) HasMessage() bool {
@@ -524,6 +536,13 @@ func (x *SubnetStatus) HasComputeInstanceSupported() bool {
 	return protoimpl.X.Present(&(x.XXX_presence[0]), 2)
 }
 
+func (x *SubnetStatus) HasIpam() bool {
+	if x == nil {
+		return false
+	}
+	return x.xxx_hidden_Ipam != nil
+}
+
 func (x *SubnetStatus) ClearMessage() {
 	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 1)
 	x.xxx_hidden_Message = nil
@@ -532,6 +551,10 @@ func (x *SubnetStatus) ClearMessage() {
 func (x *SubnetStatus) ClearComputeInstanceSupported() {
 	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 2)
 	x.xxx_hidden_ComputeInstanceSupported = false
+}
+
+func (x *SubnetStatus) ClearIpam() {
+	x.xxx_hidden_Ipam = nil
 }
 
 type SubnetStatus_builder struct {
@@ -563,6 +586,10 @@ type SubnetStatus_builder struct {
 	// The fulfillment-service controller randomly selects a hub from available hubs and stores the hub ID here.
 	// This tracks which hub cluster the Subnet CR is deployed to for reconciliation and cleanup.
 	Hub string
+	// Address layout recorded by the networking controller. Private so
+	// Fulfillment can allocate CaaS guest ingress from the committed LB VIP
+	// ranges without recomputing the Subnet plan.
+	Ipam *SubnetIPAM
 }
 
 func (b0 SubnetStatus_builder) Build() *SubnetStatus {
@@ -571,15 +598,117 @@ func (b0 SubnetStatus_builder) Build() *SubnetStatus {
 	_, _ = b, x
 	x.xxx_hidden_State = b.State
 	if b.Message != nil {
-		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 1, 5)
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 1, 6)
 		x.xxx_hidden_Message = b.Message
 	}
 	if b.ComputeInstanceSupported != nil {
-		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 2, 5)
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 2, 6)
 		x.xxx_hidden_ComputeInstanceSupported = *b.ComputeInstanceSupported
 	}
 	x.xxx_hidden_ComputeInstanceUnsupportedReason = b.ComputeInstanceUnsupportedReason
 	x.xxx_hidden_Hub = b.Hub
+	x.xxx_hidden_Ipam = b.Ipam
+	return m0
+}
+
+// The immutable address layout computed for a Subnet by the networking
+// controller. It is shared internally with Fulfillment for CaaS allocation.
+type SubnetIPAM struct {
+	state                        protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_GatewayIpv4       string                 `protobuf:"bytes,1,opt,name=gateway_ipv4,json=gatewayIpv4,proto3"`
+	xxx_hidden_OverlayIpv4Cidrs  []string               `protobuf:"bytes,2,rep,name=overlay_ipv4_cidrs,json=overlayIpv4Cidrs,proto3"`
+	xxx_hidden_PhysicalIpv4Cidrs []string               `protobuf:"bytes,3,rep,name=physical_ipv4_cidrs,json=physicalIpv4Cidrs,proto3"`
+	xxx_hidden_LbVipIpv4Cidrs    []string               `protobuf:"bytes,4,rep,name=lb_vip_ipv4_cidrs,json=lbVipIpv4Cidrs,proto3"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
+}
+
+func (x *SubnetIPAM) Reset() {
+	*x = SubnetIPAM{}
+	mi := &file_osac_private_v1_subnet_type_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubnetIPAM) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubnetIPAM) ProtoMessage() {}
+
+func (x *SubnetIPAM) ProtoReflect() protoreflect.Message {
+	mi := &file_osac_private_v1_subnet_type_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *SubnetIPAM) GetGatewayIpv4() string {
+	if x != nil {
+		return x.xxx_hidden_GatewayIpv4
+	}
+	return ""
+}
+
+func (x *SubnetIPAM) GetOverlayIpv4Cidrs() []string {
+	if x != nil {
+		return x.xxx_hidden_OverlayIpv4Cidrs
+	}
+	return nil
+}
+
+func (x *SubnetIPAM) GetPhysicalIpv4Cidrs() []string {
+	if x != nil {
+		return x.xxx_hidden_PhysicalIpv4Cidrs
+	}
+	return nil
+}
+
+func (x *SubnetIPAM) GetLbVipIpv4Cidrs() []string {
+	if x != nil {
+		return x.xxx_hidden_LbVipIpv4Cidrs
+	}
+	return nil
+}
+
+func (x *SubnetIPAM) SetGatewayIpv4(v string) {
+	x.xxx_hidden_GatewayIpv4 = v
+}
+
+func (x *SubnetIPAM) SetOverlayIpv4Cidrs(v []string) {
+	x.xxx_hidden_OverlayIpv4Cidrs = v
+}
+
+func (x *SubnetIPAM) SetPhysicalIpv4Cidrs(v []string) {
+	x.xxx_hidden_PhysicalIpv4Cidrs = v
+}
+
+func (x *SubnetIPAM) SetLbVipIpv4Cidrs(v []string) {
+	x.xxx_hidden_LbVipIpv4Cidrs = v
+}
+
+type SubnetIPAM_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	GatewayIpv4       string
+	OverlayIpv4Cidrs  []string
+	PhysicalIpv4Cidrs []string
+	LbVipIpv4Cidrs    []string
+}
+
+func (b0 SubnetIPAM_builder) Build() *SubnetIPAM {
+	m0 := &SubnetIPAM{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.xxx_hidden_GatewayIpv4 = b.GatewayIpv4
+	x.xxx_hidden_OverlayIpv4Cidrs = b.OverlayIpv4Cidrs
+	x.xxx_hidden_PhysicalIpv4Cidrs = b.PhysicalIpv4Cidrs
+	x.xxx_hidden_LbVipIpv4Cidrs = b.LbVipIpv4Cidrs
 	return m0
 }
 
@@ -594,7 +723,7 @@ type SubnetLocalReference struct {
 
 func (x *SubnetLocalReference) Reset() {
 	*x = SubnetLocalReference{}
-	mi := &file_osac_private_v1_subnet_type_proto_msgTypes[3]
+	mi := &file_osac_private_v1_subnet_type_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -606,7 +735,7 @@ func (x *SubnetLocalReference) String() string {
 func (*SubnetLocalReference) ProtoMessage() {}
 
 func (x *SubnetLocalReference) ProtoReflect() protoreflect.Message {
-	mi := &file_osac_private_v1_subnet_type_proto_msgTypes[3]
+	mi := &file_osac_private_v1_subnet_type_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -700,7 +829,7 @@ var file_osac_private_v1_subnet_type_proto_rawDesc = string([]byte{
 	0x34, 0x2c, 0x20, 0x74, 0x72, 0x75, 0x65, 0x29, 0xc8, 0x01, 0x01, 0x72, 0x02, 0x10, 0x01, 0x48,
 	0x00, 0x52, 0x08, 0x69, 0x70, 0x76, 0x34, 0x43, 0x69, 0x64, 0x72, 0x88, 0x01, 0x01, 0x42, 0x0c,
 	0x0a, 0x0a, 0x5f, 0x69, 0x70, 0x76, 0x34, 0x5f, 0x63, 0x69, 0x64, 0x72, 0x4a, 0x04, 0x08, 0x03,
-	0x10, 0x04, 0x52, 0x09, 0x69, 0x70, 0x76, 0x36, 0x5f, 0x63, 0x69, 0x64, 0x72, 0x22, 0xc4, 0x02,
+	0x10, 0x04, 0x52, 0x09, 0x69, 0x70, 0x76, 0x36, 0x5f, 0x63, 0x69, 0x64, 0x72, 0x22, 0x81, 0x03,
 	0x0a, 0x0c, 0x53, 0x75, 0x62, 0x6e, 0x65, 0x74, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x32,
 	0x0a, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x1c, 0x2e,
 	0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x72, 0x69, 0x76, 0x61, 0x74, 0x65, 0x2e, 0x76, 0x31, 0x2e,
@@ -718,10 +847,26 @@ var file_osac_private_v1_subnet_type_proto_rawDesc = string([]byte{
 	0x6f, 0x6d, 0x70, 0x75, 0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x55, 0x6e,
 	0x73, 0x75, 0x70, 0x70, 0x6f, 0x72, 0x74, 0x65, 0x64, 0x52, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x12,
 	0x18, 0x0a, 0x03, 0x68, 0x75, 0x62, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x42, 0x06, 0x8a, 0xb5,
-	0x18, 0x02, 0x08, 0x01, 0x52, 0x03, 0x68, 0x75, 0x62, 0x42, 0x0a, 0x0a, 0x08, 0x5f, 0x6d, 0x65,
-	0x73, 0x73, 0x61, 0x67, 0x65, 0x42, 0x1d, 0x0a, 0x1b, 0x5f, 0x63, 0x6f, 0x6d, 0x70, 0x75, 0x74,
-	0x65, 0x5f, 0x69, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x5f, 0x73, 0x75, 0x70, 0x70, 0x6f,
-	0x72, 0x74, 0x65, 0x64, 0x22, 0x3a, 0x0a, 0x14, 0x53, 0x75, 0x62, 0x6e, 0x65, 0x74, 0x4c, 0x6f,
+	0x18, 0x02, 0x08, 0x01, 0x52, 0x03, 0x68, 0x75, 0x62, 0x12, 0x3b, 0x0a, 0x04, 0x69, 0x70, 0x61,
+	0x6d, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1b, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70,
+	0x72, 0x69, 0x76, 0x61, 0x74, 0x65, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x75, 0x62, 0x6e, 0x65, 0x74,
+	0x49, 0x50, 0x41, 0x4d, 0x42, 0x0a, 0xe2, 0x41, 0x01, 0x03, 0x8a, 0xb5, 0x18, 0x02, 0x08, 0x01,
+	0x52, 0x04, 0x69, 0x70, 0x61, 0x6d, 0x42, 0x0a, 0x0a, 0x08, 0x5f, 0x6d, 0x65, 0x73, 0x73, 0x61,
+	0x67, 0x65, 0x42, 0x1d, 0x0a, 0x1b, 0x5f, 0x63, 0x6f, 0x6d, 0x70, 0x75, 0x74, 0x65, 0x5f, 0x69,
+	0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x5f, 0x73, 0x75, 0x70, 0x70, 0x6f, 0x72, 0x74, 0x65,
+	0x64, 0x22, 0xc0, 0x01, 0x0a, 0x0a, 0x53, 0x75, 0x62, 0x6e, 0x65, 0x74, 0x49, 0x50, 0x41, 0x4d,
+	0x12, 0x21, 0x0a, 0x0c, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x5f, 0x69, 0x70, 0x76, 0x34,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x49,
+	0x70, 0x76, 0x34, 0x12, 0x2c, 0x0a, 0x12, 0x6f, 0x76, 0x65, 0x72, 0x6c, 0x61, 0x79, 0x5f, 0x69,
+	0x70, 0x76, 0x34, 0x5f, 0x63, 0x69, 0x64, 0x72, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x09, 0x52,
+	0x10, 0x6f, 0x76, 0x65, 0x72, 0x6c, 0x61, 0x79, 0x49, 0x70, 0x76, 0x34, 0x43, 0x69, 0x64, 0x72,
+	0x73, 0x12, 0x2e, 0x0a, 0x13, 0x70, 0x68, 0x79, 0x73, 0x69, 0x63, 0x61, 0x6c, 0x5f, 0x69, 0x70,
+	0x76, 0x34, 0x5f, 0x63, 0x69, 0x64, 0x72, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x09, 0x52, 0x11,
+	0x70, 0x68, 0x79, 0x73, 0x69, 0x63, 0x61, 0x6c, 0x49, 0x70, 0x76, 0x34, 0x43, 0x69, 0x64, 0x72,
+	0x73, 0x12, 0x29, 0x0a, 0x11, 0x6c, 0x62, 0x5f, 0x76, 0x69, 0x70, 0x5f, 0x69, 0x70, 0x76, 0x34,
+	0x5f, 0x63, 0x69, 0x64, 0x72, 0x73, 0x18, 0x04, 0x20, 0x03, 0x28, 0x09, 0x52, 0x0e, 0x6c, 0x62,
+	0x56, 0x69, 0x70, 0x49, 0x70, 0x76, 0x34, 0x43, 0x69, 0x64, 0x72, 0x73, 0x3a, 0x06, 0x8a, 0xb5,
+	0x18, 0x02, 0x08, 0x01, 0x22, 0x3a, 0x0a, 0x14, 0x53, 0x75, 0x62, 0x6e, 0x65, 0x74, 0x4c, 0x6f,
 	0x63, 0x61, 0x6c, 0x52, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x12, 0x0e, 0x0a, 0x02,
 	0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x02, 0x69, 0x64, 0x12, 0x12, 0x0a, 0x04,
 	0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65,
@@ -754,27 +899,29 @@ var file_osac_private_v1_subnet_type_proto_rawDesc = string([]byte{
 })
 
 var file_osac_private_v1_subnet_type_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_osac_private_v1_subnet_type_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_osac_private_v1_subnet_type_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_osac_private_v1_subnet_type_proto_goTypes = []any{
 	(SubnetState)(0),                     // 0: osac.private.v1.SubnetState
 	(*Subnet)(nil),                       // 1: osac.private.v1.Subnet
 	(*SubnetSpec)(nil),                   // 2: osac.private.v1.SubnetSpec
 	(*SubnetStatus)(nil),                 // 3: osac.private.v1.SubnetStatus
-	(*SubnetLocalReference)(nil),         // 4: osac.private.v1.SubnetLocalReference
-	(*Metadata)(nil),                     // 5: osac.private.v1.Metadata
-	(*VirtualNetworkLocalReference)(nil), // 6: osac.private.v1.VirtualNetworkLocalReference
+	(*SubnetIPAM)(nil),                   // 4: osac.private.v1.SubnetIPAM
+	(*SubnetLocalReference)(nil),         // 5: osac.private.v1.SubnetLocalReference
+	(*Metadata)(nil),                     // 6: osac.private.v1.Metadata
+	(*VirtualNetworkLocalReference)(nil), // 7: osac.private.v1.VirtualNetworkLocalReference
 }
 var file_osac_private_v1_subnet_type_proto_depIdxs = []int32{
-	5, // 0: osac.private.v1.Subnet.metadata:type_name -> osac.private.v1.Metadata
+	6, // 0: osac.private.v1.Subnet.metadata:type_name -> osac.private.v1.Metadata
 	2, // 1: osac.private.v1.Subnet.spec:type_name -> osac.private.v1.SubnetSpec
 	3, // 2: osac.private.v1.Subnet.status:type_name -> osac.private.v1.SubnetStatus
-	6, // 3: osac.private.v1.SubnetSpec.virtual_network:type_name -> osac.private.v1.VirtualNetworkLocalReference
+	7, // 3: osac.private.v1.SubnetSpec.virtual_network:type_name -> osac.private.v1.VirtualNetworkLocalReference
 	0, // 4: osac.private.v1.SubnetStatus.state:type_name -> osac.private.v1.SubnetState
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	4, // 5: osac.private.v1.SubnetStatus.ipam:type_name -> osac.private.v1.SubnetIPAM
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_osac_private_v1_subnet_type_proto_init() }
@@ -792,7 +939,7 @@ func file_osac_private_v1_subnet_type_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_osac_private_v1_subnet_type_proto_rawDesc), len(file_osac_private_v1_subnet_type_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

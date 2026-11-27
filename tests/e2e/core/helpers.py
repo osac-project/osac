@@ -1357,7 +1357,7 @@ def wait_for_cluster_guest_readiness(
 
 
 def wait_for_cluster_deletion_without_cleanup(
-    *, k8s: K8sClient, name: str, on_poll: Callable[[], None] | None = None
+    *, k8s: K8sClient, name: str, on_poll: Callable[[], None] | None = None, retries: int = 121, delay: int = 10
 ) -> None:
     """Observe natural ClusterOrder removal without changing lifecycle gates."""
 
@@ -1369,8 +1369,8 @@ def wait_for_cluster_deletion_without_cleanup(
     poll_until(
         fn=_check_deleted,
         until=lambda absent: absent is True,
-        retries=121,
-        delay=10,
+        retries=retries,
+        delay=delay,
         description="ClusterOrder natural deletion",
         retry_on_error=True,
         resource_kind=WaitResourceKind.CLUSTER_ORDER,

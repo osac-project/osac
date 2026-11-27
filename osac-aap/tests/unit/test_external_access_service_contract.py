@@ -171,6 +171,25 @@ def test_ocp_small_leaves_external_access_to_clusterorder_and_nico_override_is_p
         "tasks_from": "wait_for_cluster_operators.yaml",
     }
 
+    wait_nodes_step = next(
+        task for task in install if task.get("name") == "Step - Wait for nodes to be ready"
+    )
+    assert wait_nodes_step["vars"]["wait_for_nodes_retries"] == 120
+
+    wait_nodes = load_tasks(
+        COLLECTIONS
+        / "osac"
+        / "service"
+        / "roles"
+        / "wait_for"
+        / "tasks"
+        / "wait_for_nodes.yaml"
+    )
+    assert "rescue" in wait_nodes[0]
+    diagnostic_failure = wait_nodes[0]["rescue"][0]["ansible.builtin.fail"]["msg"]
+    assert "Ready Nodes after" in diagnostic_failure
+    assert "Ready Nodes out of" in diagnostic_failure
+
     install_access = next(
         task for task in install if task.get("name") == "Step - Configure external access"
     )

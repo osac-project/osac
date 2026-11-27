@@ -118,11 +118,12 @@ type trackKey struct {
 }
 
 type tracking struct {
-	attempt    int32
-	observedAt time.Time // launch or first observation of the attempt's job
-	emptySince time.Time // first time the attempt was seen Running without jobID
-	failures   int       // consecutive failures since the last success or new input
-	retryAt    time.Time
+	attempt      int32
+	observedAt   time.Time // launch or first observation of the attempt's job
+	emptySince   time.Time // first time the attempt was seen Running without jobID
+	failures     int       // consecutive failures since the last success or new input
+	retryAt      time.Time
+	inputAddress string
 }
 
 // New creates an Engine. c writes status (resourceVersion-conditional
@@ -311,6 +312,7 @@ func (e *Engine) state(obj v1alpha1.NetworkTaskObject, task string, manager v1al
 		t.attempt = attempt
 		t.observedAt = time.Time{}
 		t.emptySince = time.Time{}
+		t.inputAddress = ""
 	}
 	return t
 }
@@ -351,6 +353,11 @@ func (e *Engine) launch(ctx context.Context, obj v1alpha1.NetworkTaskObject, req
 		if err := req.BeforeLaunch(); err != nil {
 			return Outcome{}, err
 		}
+		// BeforeLaunch may enrich the status entry with launch input that must
+		// survive the subsequent JobID write (for example, a DNS address).
+		if stored := FindJob(obj.GetNetworkJobs(), req.Task, req.Manager); stored != nil {
+			entry = *stored
+		}
 	}
 	// The status update is conditional on the resourceVersion the object was
 	// read at: a conflict, or a stale cached object, launches nothing.
@@ -365,12 +372,24 @@ func (e *Engine) launch(ctx context.Context, obj v1alpha1.NetworkTaskObject, req
 	now := e.clock.Now()
 	t.observedAt = now
 	log.Info("Launching network task", "task", req.Task, "manager", req.Manager, "attempt", attempt)
-	return e.launchJob(ctx, obj, req, entry, t)
+	return e.launchJob(ctx, obj, req, entry, t, false)
 }
 
 // launchJob calls AAP for an entry already recorded as Running and writes the jobID.
-func (e *Engine) launchJob(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Request, entry v1alpha1.NetworkJobStatus, t *tracking) (Outcome, error) {
+func (e *Engine) launchJob(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Request, entry v1alpha1.NetworkJobStatus, t *tracking, resubmission bool) (Outcome, error) {
 	log := ctrllog.FromContext(ctx)
+	previousInputAddress := entry.InputAddress
+	if resubmission && req.BeforeLaunch != nil {
+		if err := req.BeforeLaunch(); err != nil {
+			return Outcome{}, err
+		}
+		if stored := FindJob(obj.GetNetworkJobs(), req.Task, req.Manager); stored != nil {
+			entry = *stored
+		}
+		if err := e.client.Status().Update(ctx, obj); err != nil {
+			return Outcome{}, err
+		}
+	}
 	label := e.label(obj, req, entry.Attempt)
 	t.observedAt = e.clock.Now()
 	labelID, err := e.aap.EnsureLabel(ctx, e.cfg.Organization, label)
@@ -404,6 +423,10 @@ func (e *Engine) launchJob(ctx context.Context, obj v1alpha1.NetworkTaskObject, 
 		return Outcome{Entry: entry, RequeueAfter: e.cfg.PollInterval}, nil
 	}
 	entry.JobID = strconv.Itoa(resp.JobID)
+	t.inputAddress = entry.InputAddress
+	if resubmission && previousInputAddress != "" && t.inputAddress == "" {
+		t.inputAddress = previousInputAddress
+	}
 	return e.write(ctx, obj, entry, e.cfg.PollInterval)
 }
 
@@ -443,6 +466,9 @@ func (e *Engine) poll(ctx context.Context, obj v1alpha1.NetworkTaskObject, req R
 			return Outcome{Entry: entry, RequeueAfter: e.cfg.PollInterval}, nil
 		}
 		if found != "" {
+			if t.inputAddress != "" {
+				entry.InputAddress = t.inputAddress
+			}
 			entry.JobID = found
 			return e.write(ctx, obj, entry, time.Second)
 		}
@@ -462,7 +488,7 @@ func (e *Engine) poll(ctx context.Context, obj v1alpha1.NetworkTaskObject, req R
 			return e.write(ctx, obj, entry, e.cfg.PollInterval)
 		}
 		log.Info("Job of a Running entry not found by its label; launching it", "task", req.Task, "manager", req.Manager, "attempt", entry.Attempt)
-		return e.launchJob(ctx, obj, req, entry, t)
+		return e.launchJob(ctx, obj, req, entry, t, true)
 	}
 	job, err := e.aap.GetJob(ctx, entry.JobID)
 	if err != nil {

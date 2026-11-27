@@ -27,6 +27,12 @@
         install_step_wait_for_cluster_operators_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
+        # The baseline verifies step selection only; the real worker-network
+        # role is exercised by the deployed CaaS integration suite. Avoid
+        # requiring Assisted CRDs in this workflow-selection fixture.
+        install_step_worker_network_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
 
 - name: Import CaaS cluster create workflow (baseline)
   ansible.builtin.import_playbook: osac.workflows.cluster.create
@@ -63,6 +69,9 @@
           - install_step_cluster_infra_default is not defined
           - install_step_wait_for_agents_default is not defined
           - install_step_cluster_network_default is not defined
+          - install_step_worker_network_default is defined
+          - install_step_worker_network_default.name == "osac.service.worker_network"
+          - install_step_worker_network_default.tasks_from == "main"
           - install_step_external_access_default is defined
           - install_step_external_access_default.name == "ci.steps.external_access"
           - install_step_external_access_default.tasks_from == "create.yaml"

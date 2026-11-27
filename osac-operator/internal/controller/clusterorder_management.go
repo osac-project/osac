@@ -62,7 +62,7 @@ const (
 	ignitionServerRouteName       = "ignition-server"
 	hcpRootCASecretName           = "root-ca"
 	hcpIgnitionServerCASecretName = "ignition-server-ca-cert"
-	hcpKonnectivityServingCAName  = "konnectivity-cluster-serving-signer"
+	hcpKonnectivityServingCAName  = "konnectivity-signer"
 )
 
 // managementRouteIdentities lists the stable HyperShift Route names for the

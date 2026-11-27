@@ -156,6 +156,32 @@ Uses .Values.cliImage for the container image.
   value: /var/run/secrets/fulfillment-client-secret/client-secret
 {{- end -}}
 
+{{- define "osac.fulfillmentAuthEnvOptional" -}}
+{{- $clientID := include "osac.fulfillmentAuthCredential" (list . "client-id") | fromJson -}}
+- name: FULFILLMENT_ISSUER_URL
+  value: {{ tpl .Values.service.auth.issuerUrl . | quote }}
+- name: FULFILLMENT_CLIENT_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ $clientID.name | quote }}
+      key: {{ $clientID.key | quote }}
+      optional: true
+- name: FULFILLMENT_CLIENT_SECRET_FILE
+  value: /var/run/secrets/fulfillment-client-secret/client-secret
+{{- end -}}
+
+{{- define "osac.fulfillmentAuthVolumeOptional" -}}
+{{- $clientSecret := include "osac.fulfillmentAuthCredential" (list . "client-secret") | fromJson -}}
+- name: fulfillment-client-secret
+  secret:
+    secretName: {{ $clientSecret.name | quote }}
+    defaultMode: 0440
+    optional: true
+    items:
+    - key: {{ $clientSecret.key | quote }}
+      path: client-secret
+{{- end -}}
+
 {{- define "osac.fulfillmentAuthVolumeMount" -}}
 - name: fulfillment-client-secret
   mountPath: /var/run/secrets/fulfillment-client-secret

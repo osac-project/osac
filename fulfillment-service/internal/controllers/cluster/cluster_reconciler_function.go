@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -85,8 +86,13 @@ type function struct {
 	clustersClient        privatev1.ClustersClient
 	hubsClient            privatev1.HubsClient
 	clusterVersionsClient privatev1.ClusterVersionsClient
+	securityGroupsClient  securityGroupsLister
 	secretsClient         privatev1.SecretsClient
 	maskCalculator        *masks.Calculator
+}
+
+type securityGroupsLister interface {
+	List(context.Context, *privatev1.SecurityGroupsListRequest, ...grpc.CallOption) (*privatev1.SecurityGroupsListResponse, error)
 }
 
 type task struct {
@@ -143,6 +149,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		clustersClient:        privatev1.NewClustersClient(b.connection),
 		hubsClient:            privatev1.NewHubsClient(b.connection),
 		clusterVersionsClient: privatev1.NewClusterVersionsClient(b.connection),
+		securityGroupsClient:  privatev1.NewSecurityGroupsClient(b.connection),
 		secretsClient:         privatev1.NewSecretsClient(b.connection),
 		hubCache:              b.hubCache,
 		maskCalculator:        masks.NewCalculator().Build(),
@@ -330,7 +337,20 @@ func (t *task) update(ctx context.Context) error {
 			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachment on existing ClusterOrder",
 				slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
 		}
-		spec.NetworkAttachment = object.Spec.NetworkAttachment
+		if object.Spec.NetworkAttachment != nil {
+			spec.NetworkAttachment = object.Spec.NetworkAttachment.DeepCopy()
+		} else {
+			spec.NetworkAttachment = nil
+		}
+		if t.cluster.GetSpec().GetSupportsAutomaticCaasEndpoints() && spec.NetworkAttachment != nil {
+			autoGroup, groupErr := t.automaticClusterSecurityGroupID(ctx)
+			if groupErr != nil {
+				return fmt.Errorf("resolving automatic Cluster SecurityGroup for existing ClusterOrder: %w", groupErr)
+			}
+			if !slices.Contains(spec.NetworkAttachment.SecurityGroupRefs, autoGroup) {
+				spec.NetworkAttachment.SecurityGroupRefs = append(spec.NetworkAttachment.SecurityGroupRefs, autoGroup)
+			}
+		}
 		update := object.DeepCopy()
 		update.Spec = spec
 		if update.Annotations == nil {
@@ -425,6 +445,7 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, er
 		NodeRequests:                   t.prepareNodeRequests(),
 		AddOnOperators:                 operatorNames,
 		SupportsAutomaticCaaSEndpoints: t.cluster.GetSpec().GetSupportsAutomaticCaasEndpoints(),
+		IngressAllocatedAddress:        t.cluster.GetSpec().GetIngressAllocatedAddress(),
 	}
 
 	// Add explicit spec fields if present:
@@ -506,16 +527,50 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 		na := clusterSpec.GetNetworkAttachment()
 		cna := &osacv1alpha1.ClusterNetworkAttachment{}
 		if subnet := na.GetSubnet(); subnet != nil {
-			cna.SubnetRef = subnet.GetName()
+			cna.SubnetRef = controllers.RefKeyStr(subnet)
 		}
 		for _, sg := range na.GetSecurityGroups() {
-			cna.SecurityGroupRefs = append(cna.SecurityGroupRefs, sg.GetName())
+			cna.SecurityGroupRefs = append(cna.SecurityGroupRefs, controllers.RefKeyStr(sg))
 		}
 		if cna.SubnetRef != "" {
+			if clusterSpec.GetSupportsAutomaticCaasEndpoints() {
+				securityGroupID, err := t.automaticClusterSecurityGroupID(ctx)
+				if err != nil {
+					return fmt.Errorf("resolving automatic Cluster SecurityGroup: %w", err)
+				}
+				cna.SecurityGroupRefs = append(cna.SecurityGroupRefs, securityGroupID)
+			}
 			spec.NetworkAttachment = cna
 		}
 	}
 	return nil
+}
+
+func (t *task) automaticClusterSecurityGroupID(ctx context.Context) (string, error) {
+	if t.r.securityGroupsClient == nil {
+		return "", errors.New("SecurityGroups client is not configured")
+	}
+	name := "auto-sg-" + t.cluster.GetId()
+	filter := fmt.Sprintf("this.metadata.name == %q && this.metadata.tenant == %q", name,
+		t.cluster.GetMetadata().GetTenant())
+	response, err := t.r.securityGroupsClient.List(ctx, privatev1.SecurityGroupsListRequest_builder{
+		Filter: &filter,
+	}.Build())
+	if err != nil {
+		return "", err
+	}
+	if len(response.GetItems()) != 1 {
+		return "", fmt.Errorf("expected one automatic SecurityGroup named %q, found %d",
+			name, len(response.GetItems()))
+	}
+	group := response.GetItems()[0]
+	labels := group.GetMetadata().GetLabels()
+	if group.GetMetadata().GetCreator() != systemCreator || labels["osac.openshift.io/auto-created"] != "true" ||
+		labels["osac.openshift.io/auto-created-for"] != t.cluster.GetId() ||
+		labels["osac.openshift.io/auto-created-kind"] != "cluster" {
+		return "", fmt.Errorf("SecurityGroup %q does not have the expected Cluster ownership metadata", group.GetId())
+	}
+	return group.GetId(), nil
 }
 
 // resolvePullSecret fetches the referenced Secret via the private API and returns the
@@ -618,6 +673,18 @@ func (t *task) delete(ctx context.Context) (err error) {
 		}
 		// For transient errors (network, timeout, etc.), continue retrying
 		return
+	}
+
+	// Fulfillment owns automatic ExternalIPAttachment and ExternalIP records.
+	// Delete them before the ClusterOrder so its controller can remove DNS holds
+	// while the order still exists. The automatic Cluster SecurityGroup remains
+	// for the post-ClusterOrder cleanup below.
+	externalAccessComplete, cleanupErr := t.r.networkingCleanup.CleanupExternalAccess(ctx, t.cluster.GetId())
+	if cleanupErr != nil {
+		return controllers.RequeueAfter(cleanupErr, time.Second)
+	}
+	if !externalAccessComplete {
+		return controllers.RequeueAfterNetworkingCleanup()
 	}
 
 	// Delete the K8S object:

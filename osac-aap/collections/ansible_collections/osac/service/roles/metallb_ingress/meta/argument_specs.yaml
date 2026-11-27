@@ -3,9 +3,9 @@ argument_specs:
   configure_metallb_ingress:
     options:
       metallb_ingress_admin_kubeconfig:
-        type: str
+        type: raw
         required: true
-        description: Kubeconfig for hosted cluster (where MetalLB resources are created)
+        description: Kubeconfig path or parsed config for the hosted cluster
       metallb_ingress_ip:
         type: str
         required: true

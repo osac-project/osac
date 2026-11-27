@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -54,6 +55,10 @@ func (r *Reconciler) handleVerifiedClusterDeletion(ctx context.Context, co *v1al
 func (r *Reconciler) handleClusterDeletion(ctx context.Context, co *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(co, bmWorkerFinalizer) {
 		return ctrl.Result{}, nil
+	}
+	if co.Spec.SupportsAutomaticCaaSEndpoints && !apimeta.IsStatusConditionTrue(co.Status.Conditions,
+		string(v1alpha1.ClusterOrderConditionClusterTeardownReady)) {
+		return ctrl.Result{RequeueAfter: teardownRequeueInterval}, nil
 	}
 
 	log := ctrllog.FromContext(ctx)

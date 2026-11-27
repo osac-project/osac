@@ -81,8 +81,13 @@ default routes for outbound traffic.
 ## Logical Overlay
 
 The overlay runs on top of the physical fabric using VXLAN tunnels and VRFs
-on the leaf switches. Each hosted cluster gets its own VPC (isolated VRF).
-The SoftGate is the gateway between VPCs and the internet.
+on the leaf switches. A CaaS Cluster uses its tenant-selected VirtualNetwork
+and Subnet, shared with the tenant's other workloads when the tenant chooses.
+Sharing a Subnet with overlay VMs is unsupported until the Fabric Manager
+provider verifies DHCP isolation for that layout.
+The HostedCluster control plane remains in the management VPC. A NATGateway on
+the tenant VirtualNetwork provides worker SNAT; automatic ExternalIP
+attachments provide API and guest-ingress DNAT.
 
 ```mermaid
 %%{init: {'theme': 'dark', 'themeVariables': {'lineColor': '#ff9933'}, 'flowchart': {'defaultRenderer': 'elk'}}}%%
@@ -92,7 +97,7 @@ graph TB
     mgmt_snat[Mgmt SNAT]
     mgmt_api_dnat[Mgmt API DNAT :6443]
     hosted_api_dnat[Hosted Cluster API DNAT :6443]
-    cluster_snat[Cluster SNAT]
+    tenant_snat[Cluster SNAT]
     ingress_dnat[Hosted Cluster Ingress DNAT :80/:443]
 
     subgraph mgmt_vpc [Management VPC]
@@ -111,18 +116,19 @@ graph TB
         mgmt_apiserver_lb[Mgmt kube-apiserver]
     end
 
-    subgraph cluster_vpc [Cluster VPC - 192.168.101.0/24]
-        gw[Anycast Gateway 192.168.101.1]
-        metallb[MetalLB VIP 192.168.101.28]
-        node1[Worker 1 - 192.168.101.2]
-        node2[Worker 2 - 192.168.101.3]
-        node3[Worker 3 - 192.168.101.4]
+    subgraph tenant_vpc [Tenant VirtualNetwork]
+        gw[Anycast Gateway]
+        subnet[Cluster Subnet]
+        metallb[Fulfillment-allocated MetalLB VIP]
+        node1[Worker 1]
+        node2[Worker 2]
+        node3[Worker 3]
     end
 
     internet --- mgmt_snat
     internet --- mgmt_api_dnat
     internet --- hosted_api_dnat
-    internet --- cluster_snat
+    internet --- tenant_snat
     internet --- ingress_dnat
 
     mgmt_snat --- mgmt_gw
@@ -132,31 +138,36 @@ graph TB
     mgmt_gw --- mgmt_cluster
 
     ingress_dnat --- metallb
-    cluster_snat --- gw
+    tenant_snat --- gw
     gw --- node1
     gw --- node2
     gw --- node3
+    subnet --- gw
+    subnet --- metallb
     metallb --- node1
     metallb --- node2
     metallb --- node3
 ```
 
-The management VPC and each cluster VPC are separate VRFs on the same
-physical switches. The SoftGate bridges them to the internet:
+The management VPC and tenant VirtualNetworks are separate VRFs on the same
+physical switches. The Fabric Manager transports packets for each tenant
+VirtualNetwork; OSAC's recorded Subnet LB VIP range supplies the guest
+MetalLB address. The SoftGate bridges the networks to the internet:
 
-- **SNAT** on both VPCs gives their nodes outbound internet access
+- **SNAT** on the tenant VirtualNetwork's NATGateway gives its workers outbound
+  internet access
 - **API DNAT** on the management VPC routes `:6443` to the kube-apiserver LB
   on the hosting cluster (because HyperShift runs the apiserver there)
-- **Ingress DNAT** on the cluster VPC routes `:80/:443` to the MetalLB VIP
+- **Ingress DNAT** in the tenant VirtualNetwork routes `:80/:443` to the
+  Fulfillment-allocated guest MetalLB VIP
   on the worker nodes (because the ingress controller runs there)
 
-Note the anycast gateway and MetalLB VIP serve different roles in the
-cluster VPC. The **anycast gateway** (`192.168.101.1`) is the default route
-for egress — worker nodes send all outbound traffic through it, and the
-leaf switch forwards it to the SoftGate for SNAT. The **MetalLB VIP**
-(`192.168.101.28`) handles ingress — it is an L2 address advertised via ARP
-directly on a worker node's NIC, so DNAT'd packets from the SoftGate reach
-it without passing through the gateway.
+The anycast gateway and MetalLB VIP serve different roles in the tenant
+VirtualNetwork. The **anycast gateway** is the default route for egress;
+worker nodes send outbound traffic through it and the leaf switch forwards it
+to the SoftGate for NATGateway SNAT. The **MetalLB VIP** handles ingress. It is
+an L2 address from the Subnet's LB VIP range, advertised via ARP directly on a
+worker NIC, so DNAT'd packets reach it without passing through the gateway.
 
 ### How the components interact
 
@@ -180,31 +191,49 @@ the SoftGate — switches never rewrite packet headers.
 the controller goes down, devices continue forwarding with their last-known
 config — only new changes stop.
 
-## Overlay: VPCs and Per-Cluster Resources
+## Overlay: Tenant VirtualNetworks and Cluster Endpoints
 
-Each hosted cluster operates across two VPCs and a management network:
+Each hosted cluster operates across its tenant VirtualNetwork and the shared
+management VPC:
 
 | Plane | Purpose | Scope |
 |-------|---------|-------|
 | **Management VPC** | Hosts the hosting cluster control plane (MCE, HyperShift, kube-apiserver pods). Shared across all hosted clusters. | One per site |
-| **Per-cluster VPC** | Dedicated L3 network for each hosted cluster's worker nodes. Auto-created when a Netris server cluster is provisioned. Maps to a VRF + VNI on the switches. | One per hosted cluster |
+| **Tenant VirtualNetwork** | Tenant-selected L3 network for the Cluster's workers. Maps to a VRF + VNI on the switches and may be shared by multiple tenant workloads. | One per tenant network |
+| **Cluster Subnet** | Tenant-selected worker subnet. Fulfillment allocates guest ingress from its recorded LB VIP range. | One per Cluster |
 | **Management network** | Out-of-band access to bare-metal servers via their management NIC (DHCP). Used for SSH-based NMState configuration. Not managed by Netris. | Flat, site-wide |
 
-### Per-cluster resources created by Netris
+### Network resources and public endpoints
 
-| Resource | Name | Where it lives |
-|----------|------|----------------|
-| Server cluster | `<cluster-name>` | Controller config, pushed to switches |
-| VPC (VRF + VNI) | `<cluster-name>` (auto-created) | Switch VRF tables |
-| Anycast gateway | `192.168.101.1` on every leaf with cluster members | Switch SVIs |
-| SNAT rule | `<cluster-name>-snat` | SoftGate NAT table |
-| API DNAT rule | `<cluster-name>-api-dnat` | SoftGate NAT table |
-| Ingress HTTP DNAT | `<cluster-name>-ingress-http-dnat` | SoftGate NAT table |
-| Ingress HTTPS DNAT | `<cluster-name>-ingress-https-dnat` | SoftGate NAT table |
-| DNS A records | `api.`, `api-int.`, `*.apps.` | Route53 |
+| Resource | Owner | Fabric role |
+|----------|-------|-------------|
+| VirtualNetwork and Subnet | Fulfillment and the network managers | A tenant VPC/V-Net and its L2 segment |
+| NATGateway and its ExternalIP | Fulfillment and the Fabric Manager | SNAT for workers in the VirtualNetwork |
+| API and ingress ExternalIPs/ExternalIPAttachments | Fulfillment and the Fabric Manager | DNAT for each Cluster's public API and ingress endpoints |
+| Guest ingress address | Fulfillment | Unique address from the Subnet's recorded LB VIP ranges; announced by guest MetalLB in L2 mode |
+| Public DNS records | ClusterOrder endpoint lifecycle | `api.`, `api-int.`, and `*.apps.` names |
 
-Each cluster consumes **3 public IPs** from the Netris IPAM NAT pool: 1 for
-SNAT, 1 for the API DNAT, and 1 for the ingress DNAT.
+The API and ingress ExternalIPs are per Cluster. The SNAT ExternalIP belongs
+to the VirtualNetwork's NATGateway and may be shared by its workers and
+Clusters. The Fabric Manager does not reserve or release the guest ingress
+address; it carries the L2 traffic to its MetalLB announcement.
+
+### Bootstrap wildcard DNS exception
+
+The `*.apps.<cluster>` wildcard is published in two phases. After the API
+endpoint is ready, OSAC may publish a bootstrap record that points at the
+Fulfillment-assigned ingress ExternalIP before guest MetalLB has claimed the
+address. Assisted Service validates the wildcard during worker discovery and
+uses that validation to select the Day 2 worker; waiting for guest ingress
+readiness would therefore deadlock worker installation.
+
+This bootstrap record is not endpoint readiness. OSAC keeps the ingress
+ExternalIP reserved with a DNS-cleanup hold, retries publication failures, and
+only reports the endpoint lifecycle ready after guest ingress configuration,
+the reserved MetalLB address, and the final DNS publication all succeed. The
+same deletion path removes the bootstrap record before releasing the ExternalIP
+or its attachment. A failed or interrupted bootstrap must therefore be safe to
+retry and safe to clean up without a guest MetalLB resource.
 
 ### Bare-metal server NIC layout
 
@@ -221,6 +250,14 @@ The routing table on each node:
 |-------------|---------|-----------|--------|--------|
 | `0.0.0.0/0` (default) | VPC anycast gateway (`192.168.101.1`) | VPC NIC | 50 | All data traffic goes through leaf switch into VPC |
 | Management CIDR | Management gateway | Mgmt NIC | 100 | Bastion/controller traffic stays on mgmt network |
+
+The bootstrap network configuration is keyed by the selected tenant interface
+recorded on the worker request. It must not infer the tenant NIC from an IP
+prefix or change an unrelated active connection. NMState owns the interface's
+complete address, route, and MTU policy; the registry probe only raises the
+selected connection's route priority while the worker is joining. The CaaS
+EVPN profile uses the contract MTU of 1500, with the underlay sized for
+encapsulation overhead, so bootstrap code must not force a smaller MTU.
 
 ## Management Plane: NMState Configuration via SSH
 

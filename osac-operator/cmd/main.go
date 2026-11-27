@@ -269,14 +269,14 @@ func addSchemesForLocalControllers(
 func addSchemesForRemoteControllers(
 	localScheme *runtime.Scheme,
 	remoteScheme *runtime.Scheme,
-	enableComputeInstance, enableTenant, enableStorage, enableNetworking bool,
+	enableCluster, enableComputeInstance, enableTenant, enableStorage, enableNetworking, enableBareMetalInstance bool,
 ) {
 	utilruntime.Must(clientgoscheme.AddToScheme(localScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(localScheme))
 	if enableStorage {
 		utilruntime.Must(hypershiftv1beta1.AddToScheme(localScheme))
 	}
-	if enableNetworking {
+	if enableBareMetalInstance || enableNetworking || enableCluster {
 		utilruntime.Must(bmfov1alpha1.AddToScheme(localScheme))
 	}
 
@@ -522,6 +522,9 @@ func setupClusterControllers(
 		localMgr.GetEventRecorder("baremetalworker"),
 		os.Getenv(envClusterOrderNamespace),
 	)
+	baremetalworkerReconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
+	baremetalworkerReconciler.SetWorkerNetworkConfigGate(true)
+	baremetalworkerReconciler.SetNetworkingNamespace(os.Getenv(envNetworkingNamespace))
 	if grpcConn != nil {
 		baremetalworkerReconciler.SetSecretsClient(privatev1.NewSecretsClient(grpcConn))
 	}
@@ -1250,10 +1253,12 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 		}
 		remoteScheme = runtime.NewScheme()
 		addSchemesForRemoteControllers(localScheme, remoteScheme,
+			ctrlFlags.Cluster,
 			ctrlFlags.ComputeInstance,
 			ctrlFlags.Tenant,
 			ctrlFlags.Storage,
 			ctrlFlags.Networking,
+			ctrlFlags.BareMetalInstance,
 		)
 		remoteCluster, err = newClusterFromKubeconfig(remoteClusterKubeconfig, remoteScheme)
 		if err != nil {

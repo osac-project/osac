@@ -6,8 +6,11 @@ package baremetalworker
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,6 +31,14 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 		return false, err
 	}
 	if w.BareMetalInstance.ID == "" {
+		if co.Spec.SupportsAutomaticCaaSEndpoints && workerRegistryProbeMayExist(*w, r.NetworkingProvisioningEnabled) {
+			if err := r.cleanupFailedWorkerRegistryProbe(ctx, co, *w); err != nil {
+				return false, fmt.Errorf("cleaning reserved worker %s registry probe: %w", w.Name, err)
+			}
+			w.RegistryProbePrepared = false
+			w.RegistryProbeImage = ""
+			w.AttemptStartedAt = nil
+		}
 		if w.BMICreateState == v1alpha1.WorkerBMICreateStateReserved {
 			// Only the authoritative journal can prove no Create was authorized.
 			// The caller's optimistic removal competes with the Attempted write;
@@ -50,7 +61,44 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 		return false, err
 	}
 	if agent != nil {
+		if co.Spec.SupportsAutomaticCaaSEndpoints && w.Agent == nil {
+			uid := string(agent.GetUID())
+			if uid == "" {
+				return false, fmt.Errorf("cleanup Agent %s has no UID for durable association", agent.GetName())
+			}
+			w.Agent = &v1alpha1.WorkerAgentReference{Name: agent.GetName(), UID: uid}
+			// Persist the exact Agent identity before detach or delete side effects.
+			return false, nil
+		}
 		return false, r.requestCleanupAgent(ctx, co, w, agent)
+	}
+	if removeCaaSAgentCleanupFinalizer(state.bmi) {
+		updater, ok := r.fulfillment.(bareMetalInstanceFinalizerUpdater)
+		if !ok {
+			return false, fmt.Errorf("fulfillment client cannot update CaaS worker cleanup finalizer")
+		}
+		updated := proto.Clone(state.bmi).(*privatev1.BareMetalInstance)
+		updated.GetMetadata().SetFinalizers(slices.DeleteFunc(
+			updated.GetMetadata().GetFinalizers(), func(finalizer string) bool {
+				return finalizer == caasAgentCleanupFinalizer
+			},
+		))
+		annotations := updated.GetMetadata().GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+			updated.GetMetadata().SetAnnotations(annotations)
+		}
+		annotations[caasTeardownHandoffAnnotation] = co.Name + "/" + w.Name
+		_, err := updater.UpdateBareMetalInstance(ctx, updated, &fieldmaskpb.FieldMask{
+			Paths: []string{"metadata.finalizers", "metadata.annotations"},
+		})
+		if err != nil {
+			return false, fmt.Errorf("removing CaaS worker cleanup finalizer for BMI %s: %w",
+				w.BareMetalInstance.ID, err)
+		}
+		// The finalizer handoff is a durable boundary. Wait for Fulfillment/BMF
+		// to observe the removal before requesting ordinary BMaaS deletion.
+		return false, nil
 	}
 	if w.Phase == workerPhaseUnbinding {
 		w.Phase = workerPhaseDeleting
@@ -62,6 +110,13 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 		return false, nil
 	}
 	return false, r.fulfillment.DeleteBareMetalInstance(ctx, w.BareMetalInstance.ID)
+}
+
+func removeCaaSAgentCleanupFinalizer(bmi *privatev1.BareMetalInstance) bool {
+	if bmi == nil || bmi.GetMetadata() == nil {
+		return false
+	}
+	return slices.Contains(bmi.GetMetadata().GetFinalizers(), caasAgentCleanupFinalizer)
 }
 
 // ID-less reservations may hide an accepted Create with a lost response. Even
@@ -108,6 +163,34 @@ func (r *Reconciler) cleanupAgent(ctx context.Context, co *v1alpha1.ClusterOrder
 	var matched *unstructured.Unstructured
 	for i := range agents.Items {
 		agent := &agents.Items[i]
+		if w.Agent != nil {
+			if agent.GetName() == w.Agent.Name {
+				if string(agent.GetUID()) != w.Agent.UID {
+					return nil, fmt.Errorf("recorded Agent %s identity changed; cleanup is not authorized", w.Agent.Name)
+				}
+				if err := verifyAgentBinding(agent, co, &w); err != nil {
+					return nil, err
+				}
+				if tenant := agent.GetAnnotations()[tenantAnnotationKey]; tenant != "" && tenant != tenantOf(co) {
+					return nil, fmt.Errorf("agent %s belongs to another tenant", agent.GetName())
+				}
+				if matched != nil {
+					return nil, fmt.Errorf("ambiguous cleanup Agents for worker %s", w.Name)
+				}
+				matched = agent
+				continue
+			}
+			if cleanupAgentInScope(agent, co) {
+				if err := validateCleanupInventory(agent); err != nil {
+					return nil, err
+				}
+			}
+			if agent.GetLabels()[workerNameLabel] == w.Name || macsIntersect(extractAgentMACs(agent), nicMACs(bmi)) {
+				return nil, fmt.Errorf("a different Agent %s is associated with worker %s; cleanup is not authorized",
+					agent.GetName(), w.Name)
+			}
+			continue
+		}
 		associated := agent.GetLabels()[workerNameLabel] == w.Name
 		if !associated && cleanupAgentInScope(agent, co) {
 			if err := validateCleanupInventory(agent); err != nil {
@@ -154,7 +237,7 @@ func validateCleanupInventory(agent *unstructured.Unstructured) error {
 
 func cleanupAgentInScope(agent *unstructured.Unstructured, co *v1alpha1.ClusterOrder) bool {
 	labels := agent.GetLabels()
-	return labels[clusterOrderLabel] == co.Name || labels["osac.openshift.io/clusterorder"] == co.Name || labels[infraEnvAgentLabel] == co.Name+infraEnvNameSuffix
+	return labels[clusterOrderLabel] == co.Name || labels[legacyClusterOrderLabel] == co.Name || labels[infraEnvAgentLabel] == co.Name+infraEnvNameSuffix
 }
 
 func (r *Reconciler) requestCleanupAgent(ctx context.Context, co *v1alpha1.ClusterOrder, w *v1alpha1.WorkerStatus, agent *unstructured.Unstructured) error {

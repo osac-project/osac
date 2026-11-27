@@ -63,6 +63,12 @@ _WORKER_METRICS = ("osac_caas_worker_desired", "osac_caas_worker_ready", "osac_c
 _WORKER_LEVEL_METRICS = _WORKER_METRICS[:2]
 _WORKER_FAILURE_METRIC = _WORKER_METRICS[2]
 _WORKER_METRIC_LABELS = {"tenant", "worker_type", "instance_type"}
+# The AAP delete-hosted-cluster playbook can poll HostedCluster deletion for
+# 720 ten-second retries. Allow five more minutes for status propagation and
+# ClusterOrder finalizer removal after the job exits.
+_AAP_HOSTED_CLUSTER_DELETE_RETRIES = 720
+_AAP_HOSTED_CLUSTER_DELETE_DELAY_SECONDS = 10
+_NATURAL_CLUSTER_ORDER_DELETE_RETRIES = _AAP_HOSTED_CLUSTER_DELETE_RETRIES + 31
 logger = logging.getLogger(__name__)
 
 
@@ -111,7 +117,13 @@ def _wait_for_cluster_and_infraenv_deletion(
 ) -> None:
     """Observe parent removal before starting the dependent garbage-collection budget."""
     try:
-        wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name, on_poll=on_poll)
+        wait_for_cluster_deletion_without_cleanup(
+            k8s=k8s,
+            name=co_name,
+            on_poll=on_poll,
+            retries=_NATURAL_CLUSTER_ORDER_DELETE_RETRIES,
+            delay=_AAP_HOSTED_CLUSTER_DELETE_DELAY_SECONDS,
+        )
     except TimeoutError:
         on_timeout()
         raise TimeoutError("ClusterOrder natural teardown timed out") from None

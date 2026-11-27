@@ -50,13 +50,44 @@ func reconcileAgentStage(
 ) ([]v1alpha1.WorkerStatus, ctrl.Result, error) {
 	o := indexWorkerBMIs(nil)
 	o.agents = agents
-	projected, err := projectAgentWorkerPhases(co, workers, agents)
-	if err != nil {
-		return nil, ctrl.Result{}, err
+	current := workers
+	var result ctrl.Result
+	for pass := 0; pass < 2; pass++ {
+		previous := current
+		projected, err := projectAgentWorkerPhases(co, current, agents)
+		if err != nil {
+			return nil, ctrl.Result{}, err
+		}
+		projectReadySince(projected, time.Now())
+		r.observeAgentReadiness(context.Background(), co, current, projected)
+		current, result, err = r.reconcileObservedAgents(context.Background(), co, projected, o)
+		if err != nil {
+			return nil, ctrl.Result{}, err
+		}
+		if !workerAgentIdentityChanged(previous, current) {
+			break
+		}
 	}
-	projectReadySince(projected, time.Now())
-	r.observeAgentReadiness(context.Background(), co, workers, projected)
-	return r.reconcileObservedAgents(context.Background(), co, projected, o)
+	return current, result, nil
+}
+
+func workerAgentIdentityChanged(before, after []v1alpha1.WorkerStatus) bool {
+	for i := range after {
+		previous := workerByName(before, after[i].Name)
+		if previous == nil {
+			continue
+		}
+		if previous.Agent == nil || after[i].Agent == nil {
+			if previous.Agent != after[i].Agent {
+				return true
+			}
+			continue
+		}
+		if previous.Agent.Name != after[i].Agent.Name || previous.Agent.UID != after[i].Agent.UID {
+			return true
+		}
+	}
+	return false
 }
 
 func agentPhaseFixture(worker string, installed bool) *unstructured.Unstructured {
@@ -64,6 +95,7 @@ func agentPhaseFixture(worker string, installed bool) *unstructured.Unstructured
 	a.SetGroupVersionKind(agentGVK)
 	a.SetName("agent")
 	a.SetNamespace("osac")
+	a.SetUID("agent-uid")
 	a.SetLabels(map[string]string{workerNameLabel: worker, clusterOrderLabel: "order"})
 	state := "installing"
 	if installed {
@@ -96,6 +128,9 @@ var _ = Describe("Agent convergence", func() {
 			co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac", CreationTimestamp: metav1.Now()}}
 			readySince := metav1.NewTime(time.Unix(100, 0))
 			workers := []v1alpha1.WorkerStatus{{Name: "worker", Kind: tt.kind, Phase: tt.phase, BareMetalInstance: v1alpha1.BareMetalInstanceReference{Name: "bmi", ID: tt.id}, AttemptCount: 2, LastFailureReason: "previous", ReadySince: &readySince}}
+			if tt.agent {
+				workers[0].Agent = &v1alpha1.WorkerAgentReference{Name: "agent", UID: "agent-uid"}
+			}
 			before := workers[0]
 			s := runtime.NewScheme()
 			c := clientfake.NewClientBuilder().WithScheme(s)
@@ -141,7 +176,7 @@ var _ = Describe("Agent binding refuses existing assignments", func() {
 				} else {
 					namespace = "other-namespace"
 				}
-				_ = unstructured.SetNestedMap(a.Object, map[string]interface{}{"name": name, "namespace": namespace}, "spec", "clusterDeploymentName")
+				_ = unstructured.SetNestedMap(a.Object, map[string]interface{}{jsonNameField: name, "namespace": namespace}, "spec", "clusterDeploymentName")
 			}
 			c := clientfake.NewClientBuilder().WithObjects(a).Build()
 			r := &Reconciler{Client: c, apiReader: c}
@@ -236,7 +271,6 @@ var _ = It("restarts Agent reconciliation after an optimistic binding conflict",
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
 	w := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseWaitingForAgent)
 	observed := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*a}}
-
 	workers, result, err := reconcileAgentStage(r, co, []v1alpha1.WorkerStatus{w}, observed)
 	Expect(apierrors.IsConflict(err)).To(BeTrue(), "first invocation: workers=%+v result=%+v err=%v", workers, result, err)
 	Expect(result.IsZero()).To(BeTrue(), "first invocation: workers=%+v result=%+v err=%v", workers, result, err)
@@ -251,7 +285,8 @@ var _ = It("restarts Agent reconciliation after an optimistic binding conflict",
 	patchClient.succeed = true
 	workers, result, err = reconcileAgentStage(r, co, []v1alpha1.WorkerStatus{w}, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*current}})
 	Expect(err).NotTo(HaveOccurred(), "fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
-	Expect(result.IsZero()).To(BeTrue(), "fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
+	Expect(result.RequeueAfter).To(Equal(workerBoundaryRequeue().RequeueAfter),
+		"fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
 	Expect(workers).To(HaveLen(1), "fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
 	Expect(workers[0].Phase).To(Equal(workerPhaseBinding), "fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
 	Expect(patchClient.patches).To(Equal(2), "agent patches=%d after restart, want 2", patchClient.patches)
@@ -314,7 +349,7 @@ var _ = It("rejects ambiguous MAC associations in both directions", func() {
 			}
 			workers := append([]v1alpha1.WorkerStatus(nil), tc.workers...)
 
-			bound, err := r.matchAndBindAgents(ctx, co, observed, workers, r.macResolver)
+			bound, err := r.matchAndBindAgents(ctx, co, observed, workers, r.macResolver, nil)
 			Expect(err).ToNot(HaveOccurred(), "unexpected error: %v", err)
 			Expect(bound).To(BeZero(), "ambiguous MAC evidence bound %d workers, want none", bound)
 			for _, w := range workers {
@@ -348,7 +383,7 @@ var _ = It("recovers Agent binding after an interrupted status write", func() {
 	bound, res, err := reconcileAgentStage(r, co, co.Status.Workers, agents)
 	Expect(err).NotTo(HaveOccurred(), "binding: %+v %+v %v", bound, res, err)
 	Expect(bound[0].Phase).To(Equal(workerPhaseBinding), "binding: %+v %+v %v", bound, res, err)
-	Expect(res.IsZero()).To(BeTrue(), "binding: %+v %+v %v", bound, res, err)
+	Expect(res.RequeueAfter).To(Equal(workerBoundaryRequeue().RequeueAfter), "binding: %+v %+v %v", bound, res, err)
 	// Simulate a crash: discard bound worker status, retaining only the Agent patch.
 	Expect(c.Get(ctx, client.ObjectKeyFromObject(a), a)).To(Succeed())
 	agents.Items = []unstructured.Unstructured{*a}
@@ -439,6 +474,7 @@ var _ = It("applies inclusive timeout, retry and healthy-reset clock boundaries"
 
 	ready := newWorkerStatus("standard", "standard", "ready", "ready-id", workerPhaseReady)
 	ready.AttemptCount = 1
+	ready.RetryCount = 1
 	ready.ReadySince = &origin
 	for _, tt := range []struct {
 		name string
@@ -446,14 +482,17 @@ var _ = It("applies inclusive timeout, retry and healthy-reset clock boundaries"
 		want int32
 	}{
 		{"just before healthy threshold", base.Add(minHealthyDuration - time.Second), 1},
-		{"exact healthy threshold", base.Add(minHealthyDuration), 0},
-		{"just after healthy threshold", base.Add(minHealthyDuration + time.Second), 0},
+		{"exact healthy threshold", base.Add(minHealthyDuration), 1},
+		{"just after healthy threshold", base.Add(minHealthyDuration + time.Second), 1},
 	} {
 		By(tt.name)
 		func() {
 			workers := []v1alpha1.WorkerStatus{ready}
 			resetHealthyWorkers(ctrllog.FromContext(context.Background()), co, workers, tt.now)
 			Expect(workers[0].AttemptCount).To(Equal(tt.want), "attemptCount=%d want %d", workers[0].AttemptCount, tt.want)
+			if tt.name != "just before healthy threshold" {
+				Expect(workers[0].RetryCount).To(Equal(int32(0)))
+			}
 		}()
 	}
 })
@@ -511,6 +550,38 @@ var _ = It("records Agent timeout and readiness observations once", func() {
 	}
 })
 
+var _ = It("reports an unavailable worker registry result with its image context", func() {
+	fixed := metav1.NewTime(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+	deadline := metav1.NewTime(fixed.Add(agentRegistrationTimeout))
+	image := "registry.example.test/ocp/release:4.22.0"
+	w := newWorkerStatus("standard", "standard", "worker", "worker-id", workerPhaseWaitingForAgent)
+	w.RegistrationDeadline = &deadline
+	w.RegistryAccessReady = &metav1.Condition{
+		Type: workerRegistryProbeCondition, Status: metav1.ConditionFalse, Reason: "ProbePending",
+		Message: "Tenant worker image source is waiting to pull " + image,
+	}
+	co := &v1alpha1.ClusterOrder{
+		ObjectMeta: metav1.ObjectMeta{Name: "caas-order", Namespace: "osac"},
+		Spec:       v1alpha1.ClusterOrderSpec{SupportsAutomaticCaaSEndpoints: true},
+		Status: v1alpha1.ClusterOrderStatus{
+			Conditions: []metav1.Condition{{
+				Type:   string(v1alpha1.ClusterOrderConditionManagementPublicationReady),
+				Status: metav1.ConditionTrue, LastTransitionTime: fixed,
+			}},
+			APIDNSRecordsPublishedTime: &fixed,
+			Jobs: []v1alpha1.NetworkJobStatus{{
+				Task: "publish_public_dns_api", Manager: v1alpha1.NetworkJobManagerNone,
+				State: v1alpha1.NetworkJobStateSucceeded,
+			}},
+		},
+	}
+	r := &Reconciler{recorder: events.NewFakeRecorder(10), NetworkingProvisioningEnabled: true}
+	got := r.checkAgentRegistrationTimeout(context.Background(), co, []v1alpha1.WorkerStatus{w}, deadline.Time)
+	Expect(got[0].Phase).To(Equal(workerPhaseFailed))
+	Expect(got[0].LastFailureReason).To(Equal(eventReasonRegistryAccessTimeout))
+	Expect(got[0].LastFailureMessage).To(ContainSubstring(image))
+})
+
 var _ = It("observes Agents before selecting slots and classifying stale ignition", func() {
 	_, _, co := nodeSetHarness("order", nodeRequest("standard", 1))
 	co.Annotations = map[string]string{infraEnvUIDAnnotation: "old"}
@@ -518,6 +589,7 @@ var _ = It("observes Agents before selecting slots and classifying stale ignitio
 		newWorkerStatus("standard", "standard", "installed", "id-1", workerPhaseWaitingForAgent),
 		newWorkerStatus("standard", "standard", "missing", "id-2", workerPhaseReady),
 	}
+	co.Status.Workers[0].Agent = &v1alpha1.WorkerAgentReference{Name: "agent", UID: "agent-uid"}
 	agents := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agentPhaseFixture("installed", true)}}
 	for i := range agents.Items {
 		agents.Items[i].SetNamespace(co.Namespace)

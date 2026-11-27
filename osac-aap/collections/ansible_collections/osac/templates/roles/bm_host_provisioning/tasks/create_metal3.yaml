@@ -38,6 +38,33 @@
       {{ (bmh_info.status.provisioning.state | default('') == 'provisioned') and
          (bmh_info.status.provisioning.image.url | default('') == template_params.imageURL) }}
 
+- name: Mark Metal3 cleanup as required before creating provisioning Secrets
+  when: not (already_provisioned | bool)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: metal3.io/v1alpha1
+      kind: BareMetalHost
+      metadata:
+        name: "{{ bmh_name }}"
+        namespace: "{{ bmh_namespace }}"
+        annotations:
+          osac.openshift.io/metal3-cleanup-required: "true"
+
+- name: Refresh BMH after writing cleanup marker
+  when: not (already_provisioned | bool)
+  kubernetes.core.k8s_info:
+    api_version: metal3.io/v1alpha1
+    kind: BareMetalHost
+    namespace: "{{ bmh_namespace }}"
+    name: "{{ bmh_name }}"
+  register: marker_bmh_result
+
+- name: Refresh BMH info after writing cleanup marker
+  when: not (already_provisioned | bool)
+  ansible.builtin.set_fact:
+    bmh_info: "{{ marker_bmh_result.resources[0] }}"
+
 - name: Skip provisioning when BMH already has the desired image
   when: already_provisioned | bool
   ansible.builtin.debug:

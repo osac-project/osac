@@ -145,6 +145,12 @@ spec:
                       format: int32
                       minimum: 0
                       type: integer
+                    inputAddress:
+                      description: |-
+                        InputAddress records the address supplied to an endpoint DNS publication
+                        job. It is retained through completion so a later reconcile cannot mistake
+                        a result for an address that changed while the job was running.
+                      type: string
                     jobID:
                       description: JobID is the AAP job ID; empty until AAP returned
                         it.

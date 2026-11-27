@@ -92,12 +92,30 @@ def test_guest_ingress_uses_the_hosted_control_plane_service_network_kubeconfig(
     fail_msg = require_secret["ansible.builtin.assert"]["fail_msg"]
     assert "was not found" in fail_msg
     assert "hosted_control_plane_namespace" not in fail_msg
-    configure = by_name["Configure guest ingress with the reserved address"]
+    decode = by_name[
+        "Decode the service-network admin kubeconfig with the published API URL"
+    ]["ansible.builtin.set_fact"]["_cluster_endpoint_admin_kubeconfig"]
+    assert "regex_replace" in decode
+    assert "kube-apiserver." in decode
+    assert "hosted_control_plane_namespace" in decode
+    assert ".svc" in decode
+    assert "hosted_cluster_api_url" in decode
+    endpoint_vars = load(PLAYBOOK)[0]["vars"]
+    assert "cluster_order.status.apiURL" in str(endpoint_vars["hosted_cluster_api_url"])
+    configure = by_name["Configure guest ingress with the allocated address"]
     assert configure["ansible.builtin.include_role"]["name"] == (
         "osac.service.metallb_ingress"
     )
+    assert configure["vars"]["metallb_ingress_admin_kubeconfig"] == (
+        "{{ _cluster_endpoint_admin_kubeconfig }}"
+    )
+    metallb_arguments = load(METALLB_TASKS.parent / "meta/argument_specs.yaml")
+    kubeconfig_argument = metallb_arguments["argument_specs"][
+        "configure_metallb_ingress"
+    ]["options"]["metallb_ingress_admin_kubeconfig"]
+    assert kubeconfig_argument["type"] == "raw"
     assert "ingress_allocated_address" in str(configure["vars"])
-    wait = by_name["Wait for the guest ingress Service to report the reserved address"]
+    wait = by_name["Wait for the guest ingress Service to report the allocated address"]
     assert wait["until"]
     assert "ingress_allocated_address" in str(wait["until"])
     assert wait["no_log"] is True
@@ -109,6 +127,22 @@ def test_metallb_tasks_do_not_log_the_admin_kubeconfig() -> None:
             module = task.get("kubernetes.core.k8s") or task.get("kubernetes.core.k8s_info")
             if module and "metallb_ingress_admin_kubeconfig" in str(module.get("kubeconfig")):
                 assert task.get("no_log") is True, task["name"]
+
+
+def test_metallb_wait_retries_transient_api_errors_and_any_running_agent() -> None:
+    tasks = load(METALLB_TASKS / "configure_metallb_ingress.yml")
+    wait = tasks[1]
+    module = wait["kubernetes.core.k8s_info"]
+
+    assert "failed_when" not in wait
+    assert wait["retries"] == 60
+    assert wait["delay"] == 10
+    assert ".get('resources', [])" in str(wait["until"])
+    assert "selectattr('status.phase', 'equalto', 'Running')" in str(wait["until"])
+    assert "rejectattr('metadata.deletionTimestamp', 'defined')" in str(wait["until"])
+    assert "selectattr('status.conditions', 'contains'" in str(wait["until"])
+    assert "resources[0]" not in str(wait["until"])
+    assert module["label_selectors"] == ["app=konnectivity-agent"]
 
 
 def test_dns_tasks_enforce_supported_domain_and_record_conventions() -> None:
@@ -153,6 +187,28 @@ def test_dns_tasks_enforce_supported_domain_and_record_conventions() -> None:
     api_wait = next(task for task in api_tasks if task["name"] == "Wait for API DNS records")
     assert api_wait["loop_control"]["label"] == "api-dns-wait"
     assert api_wait["no_log"] is True
+
+
+def test_endpoint_ipv4_assertions_return_booleans() -> None:
+    cases = (
+        (TASKS / "configure_guest_ingress.yaml", "ingress_allocated_address"),
+        (TASKS / "publish_public_dns_api.yaml", "external_ip.address"),
+        (TASKS / "publish_public_dns_ingress.yaml", "external_ip.address"),
+    )
+
+    for path, address in cases:
+        task = next(
+            task
+            for task in load(path)
+            if "ansible.builtin.assert" in task
+            and address in str(task["ansible.builtin.assert"].get("that", []))
+        )
+        conditions = task["ansible.builtin.assert"]["that"]
+        assert any(
+            f"{address} is ansible.utils.ipv4" in str(condition)
+            for condition in conditions
+        )
+        assert all("ansible.utils.ipaddr('ipv4')" not in str(condition) for condition in conditions)
 
 
 def test_dns_publication_waits_for_records_using_the_configured_authoritative_server() -> None:
@@ -285,6 +341,47 @@ def test_actual_playbook_binds_controller_ingress_inputs_without_cluster_access(
             "OSAC_TEST_HCP_NAMESPACE": "cluster-a-hcp",
             "OSAC_TEST_INGRESS_ADDRESS": address,
             "OSAC_TEST_KUBECONFIG_TOKEN": fixture_token,
+            "OSAC_TEST_EXPECTED_SERVER": "https://kube-apiserver.cluster-a-hcp.svc:6443",
+        },
+    )
+
+    output = proc.stdout + proc.stderr
+    if fixture_token in output:
+        raise AssertionError("actual endpoint playbook output exposed the kubeconfig token")
+    if proc.returncode != 0:
+        safe_stdout = proc.stdout.replace(fixture_token, "[REDACTED]")
+        safe_stderr = proc.stderr.replace(fixture_token, "[REDACTED]")
+        raise AssertionError(
+            f"actual endpoint playbook failed:\n{safe_stdout}\n{safe_stderr}"
+        )
+
+
+def test_actual_playbook_replaces_the_service_api_port_without_duplication(tmp_path: Path) -> None:
+    address = "192.0.2.83"
+    fixture_token = secrets.token_urlsafe(32)
+    public_api = "https://api.hosted-order-a.rdu06.example.test:6443"
+    proc = _run_endpoint_playbook(
+        tmp_path,
+        "configure_guest_ingress",
+        {
+            "cluster_order": {
+                "metadata": {"name": "order-a", "namespace": "osac-system"},
+                "status": {
+                    "apiURL": public_api,
+                    "clusterReference": {
+                        "namespace": "cluster-a",
+                        "hostedClusterName": "hosted-order-a",
+                    },
+                },
+            },
+            "hosted_control_plane_namespace": "cluster-a-hcp",
+            "ingress_allocated_address": address,
+        },
+        {
+            "OSAC_TEST_HCP_NAMESPACE": "cluster-a-hcp",
+            "OSAC_TEST_INGRESS_ADDRESS": address,
+            "OSAC_TEST_KUBECONFIG_TOKEN": fixture_token,
+            "OSAC_TEST_EXPECTED_SERVER": public_api,
         },
     )
 

@@ -39,8 +39,8 @@ type cleanupWorkload struct {
 
 // NET-CLEAN-07 catches missing deployed watches/RBAC, premature finalizer
 // removal, reversed cleanup order, and deletion of resources owned by others.
-// The installed manager reconciles all objects. Unmanaged children and test
-// finalizers simulate a provider that has not yet completed detach/release.
+// Fulfillment-owned automatic children are explicitly marked deleting by the
+// test; test finalizers simulate provider detach/release still in progress.
 var _ = Describe("Deployed workload networking cleanup", Ordered, func() {
 	const agentCRDName = "agents.agent-install.openshift.io"
 	const hostedClusterCRDName = "hostedclusters.hypershift.openshift.io"
@@ -237,10 +237,18 @@ spec:
 				output, err := exec.Command("kubectl", "delete", workload.kind, name,
 					"-n", operatorNamespace, "--wait=false").CombinedOutput()
 				Expect(err).NotTo(HaveOccurred(), string(output))
-				if workload.kind == "ComputeInstance" {
-					By("Fulfillment requesting deletion of the ComputeInstance attachment")
-					cleanupRequestDelete(attachment)
-				}
+				By("holding the workload finalizer without deleting Fulfillment-owned children")
+				Eventually(func(g Gomega) {
+					currentParent, getErr := cleanupGet(parent)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(currentParent.GetDeletionTimestamp()).NotTo(BeNil())
+					g.Expect(currentParent.GetFinalizers()).To(ContainElement(workload.finalizer))
+					currentAttachment, attachmentErr := cleanupGet(attachment)
+					g.Expect(attachmentErr).NotTo(HaveOccurred())
+					g.Expect(currentAttachment.GetDeletionTimestamp()).To(BeNil())
+				}, 2*time.Minute, time.Second).Should(Succeed())
+				By("Fulfillment requesting deletion of the automatic attachment")
+				cleanupRequestDelete(attachment)
 				Eventually(func(g Gomega) {
 					current, getErr := cleanupGet(attachment)
 					g.Expect(getErr).NotTo(HaveOccurred())
@@ -285,10 +293,8 @@ spec:
 				By("finishing attachment provider cleanup and observing EIP deletion")
 				cleanupRelease(attachment)
 				Eventually(func() (bool, error) { return cleanupAbsent(attachment) }, time.Minute, time.Second).Should(BeTrue())
-				if workload.kind == "ComputeInstance" {
-					By("Fulfillment requesting deletion of the ComputeInstance ExternalIP")
-					cleanupRequestDelete(ip)
-				}
+				By("Fulfillment requesting deletion of the automatic ExternalIP")
+				cleanupRequestDelete(ip)
 				Eventually(func(g Gomega) {
 					current, getErr := cleanupGet(ip)
 					g.Expect(getErr).NotTo(HaveOccurred())

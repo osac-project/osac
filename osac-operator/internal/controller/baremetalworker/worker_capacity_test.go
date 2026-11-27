@@ -108,6 +108,32 @@ var _ = It("issues at most one Create per invocation", func() {
 	}
 })
 
+var _ = It("does not dispatch a CaaS retry without resolved image inputs", func() {
+	r, fc, co := nodeSetHarness("caas-unresolved-inputs", nodeRequest("standard", 1))
+	co.Spec.SupportsAutomaticCaaSEndpoints = true
+	Expect(r.Update(context.Background(), co)).To(Succeed())
+	added, err := r.reserveWorkerSlots(context.Background(), co)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(added).To(BeTrue())
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+
+	result, err := r.reconcileDueWorkerCreation(context.Background(), co,
+		authoritativeTestCluster(context.Background(), r, co), workerCreationInputs{}, indexWorkerBMIs(nil))
+	Expect(err).NotTo(HaveOccurred())
+	Expect(result.IsZero()).To(BeFalse(), "unresolved CaaS input was dispatched")
+	Expect(fc.names).To(BeEmpty(), "BMI created without a resolved disk image")
+})
+
+var _ = It("does not select a failed worker before its retry checkpoint", func() {
+	co := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+		NodeRequests: []v1alpha1.NodeRequest{nodeRequest("standard", 1)},
+	}, Status: v1alpha1.ClusterOrderStatus{Workers: []v1alpha1.WorkerStatus{
+		newWorkerStatus("standard", "standard", "failed", "", workerPhaseFailed),
+	}}}
+	_, prev := selectDueSlot(co, time.Now())
+	Expect(prev).To(BeNil(), "failed worker without cleanup checkpoint was selected")
+})
+
 var _ = It("rejects a stale cached order instead of creating duplicate workers", func() {
 	r, fc, co := nodeSetHarness("r01-stale", nodeRequest("standard", 2))
 	stale := co.DeepCopy()

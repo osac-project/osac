@@ -329,6 +329,7 @@ var _ = Describe("createSelectedWorker records rejected creates", func() {
 		Expect(err).NotTo(HaveOccurred(), "retry arming: result=%+v err=%v", res, err)
 		w = co.Status.Workers[0]
 		Expect(w.AttemptCount).To(Equal(int32(1)), "backoff not armed: %+v", w)
+		Expect(w.RetryCount).To(Equal(int32(1)), "retry history not armed: %+v", w)
 		Expect(w.NextRetryTime).NotTo(BeNil(), "backoff not armed: %+v", w)
 		Expect(w.AttemptStartedAt).To(BeNil(), "cleanup checkpoint did not clear the origin: %+v", w)
 		Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateReserved), "backoff not armed: %+v", w)
@@ -355,6 +356,7 @@ var _ = Describe("createSelectedWorker records rejected creates", func() {
 		runStagesUntilSettled(r, co, 6)
 		w := co.Status.Workers[0]
 		Expect(w.AttemptCount).To(Equal(int32(2)), "second cycle: %+v", w)
+		Expect(w.RetryCount).To(Equal(int32(2)), "retry history did not advance: %+v", w)
 		Expect(w.NextRetryTime).NotTo(BeNil(), "second cycle: %+v", w)
 		Expect(w.NextRetryTime.Sub(first.Time)).To(BeNumerically(">=", 25*time.Second), "backoff did not grow: %+v", w)
 		Expect(w.NextRetryTime.Sub(first.Time)).To(BeNumerically("<=", 35*time.Second), "backoff grew unexpectedly: %+v", w)

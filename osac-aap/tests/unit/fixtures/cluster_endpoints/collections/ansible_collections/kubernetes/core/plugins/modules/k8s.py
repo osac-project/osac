@@ -15,6 +15,13 @@ def main() -> None:
         },
         supports_check_mode=True,
     )
+    expected_server = os.environ.get("OSAC_TEST_EXPECTED_SERVER")
+    kubeconfig = module.params.get("kubeconfig") or {}
+    clusters = kubeconfig.get("clusters", []) if isinstance(kubeconfig, dict) else []
+    server = clusters[0].get("cluster", {}).get("server") if clusters else None
+    if expected_server and server != expected_server:
+        module.fail_json(msg="service-network kubeconfig did not use the expected API Service FQDN")
+
     definition = module.params["definition"]
     if definition.get("kind") == "IPAddressPool":
         expected_address = os.environ["OSAC_TEST_INGRESS_ADDRESS"]

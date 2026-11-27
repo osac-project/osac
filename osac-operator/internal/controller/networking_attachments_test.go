@@ -304,6 +304,30 @@ var _ = Describe("ExternalIPAttachment and NATGateway controllers", func() {
 			"address": "192.168.10.5", "routing_domain": map[string]any{"type": "provider_management"}}))
 	})
 
+	It("attaches a legacy Cluster ingress endpoint using the default subnet reference", func() {
+		co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: crdTestName("legacy-co"), Namespace: h.ns,
+			Labels: map[string]string{osacClusterOrderIDLabel: clID},
+		}, Spec: v1alpha1.ClusterOrderSpec{
+			TemplateID:        "tpl",
+			NetworkAttachment: &v1alpha1.ClusterNetworkAttachment{SubnetRef: "default-ipv4"},
+		}}
+		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		co.Status.IngressEndpoint = "10.0.1.193"
+		Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
+		eipa := attachment(func(s *v1alpha1.ExternalIPAttachmentSpec) {
+			s.Cluster = ptr.To(clID)
+			s.TargetEndpoint = ptr.To(v1alpha1.ExternalIPAttachmentTargetEndpointIngress)
+		})
+
+		reconcileNet(eipas, eipa)
+		Expect(h.aap.latest(networktask.AttachExternalIP, netFabric).vars["destination"]).To(Equal(map[string]any{
+			"address": "10.0.1.193",
+			"routing_domain": map[string]any{
+				"type": "tenant_virtual_network", "virtual_network_id": "vn-1", "subnet_id": "sn-1",
+			},
+		}))
+	})
+
 	It("deletes without a detach when the attach never started", func() {
 		eipa := attachment(func(s *v1alpha1.ExternalIPAttachmentSpec) { s.ComputeInstance = ptr.To("ci-missing") })
 		reconcileNet(eipas, eipa)

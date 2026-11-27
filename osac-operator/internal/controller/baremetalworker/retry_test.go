@@ -89,7 +89,9 @@ var _ = It("schedules worker rechecks at the earliest pending deadline", func() 
 	futureRetry.NextRetryTime = &future
 	healthyReset := bmi("ready", "ready-id", workerPhaseReady)
 	healthyReset.AttemptCount = 1
+	healthyReset.RetryCount = 1
 	healthyReset.ReadySince = &readySince
+	failedWithoutRetry := bmi("failed-without-retry", "", workerPhaseFailed)
 	tests := []struct {
 		name    string
 		workers []v1alpha1.WorkerStatus
@@ -101,6 +103,7 @@ var _ = It("schedules worker rechecks at the earliest pending deadline", func() 
 		{"waiting for agent is rechecked", []v1alpha1.WorkerStatus{bmi("a", "a-id", workerPhaseWaitingForAgent)}, agentRequeueInterval, agentRequeueInterval},
 		{"binding is rechecked", []v1alpha1.WorkerStatus{bmi("a", "a-id", workerPhaseBinding)}, agentRequeueInterval, agentRequeueInterval},
 		{"pending cleanup is rechecked", []v1alpha1.WorkerStatus{pendingCleanup}, teardownRequeueInterval, teardownRequeueInterval},
+		{"failed cleanup without checkpoint is rechecked", []v1alpha1.WorkerStatus{failedWithoutRetry}, teardownRequeueInterval, teardownRequeueInterval},
 		{"deleting is rechecked", []v1alpha1.WorkerStatus{bmi("a", "a-id", workerPhaseDeleting)}, teardownRequeueInterval, teardownRequeueInterval},
 		{"future retry waits for its deadline", []v1alpha1.WorkerStatus{futureRetry}, time.Second, 2 * time.Minute},
 		{"healthy reset keeps a timer", []v1alpha1.WorkerStatus{healthyReset}, time.Second, minHealthyDuration},
@@ -179,7 +182,7 @@ var _ = Describe("FormatWorkersFailed", func() {
 
 	It("formats one failed worker", func() {
 		workers := []v1alpha1.WorkerStatus{
-			{Name: "w-0", Phase: workerPhaseFailed, AttemptCount: 2, NextRetryTime: &retryTime},
+			{Name: "w-0", Phase: workerPhaseFailed, AttemptCount: 2, RetryCount: 1, NextRetryTime: &retryTime},
 		}
 		Expect(FormatWorkersFailed(workers)).To(Equal(
 			"retry 1: attempt 2, next retry " + retryTime.UTC().Format(time.RFC3339),
@@ -189,8 +192,8 @@ var _ = Describe("FormatWorkersFailed", func() {
 	It("formats multiple failed workers", func() {
 		workers := []v1alpha1.WorkerStatus{
 			{Name: "w-0", Phase: workerPhaseReady},
-			{Name: "w-1", Phase: workerPhaseFailed, AttemptCount: 1, NextRetryTime: &retryTime},
-			{Name: "w-2", Phase: workerPhaseFailed, AttemptCount: 3, NextRetryTime: &retryTime},
+			{Name: "w-1", Phase: workerPhaseFailed, AttemptCount: 1, RetryCount: 1, NextRetryTime: &retryTime},
+			{Name: "w-2", Phase: workerPhaseFailed, AttemptCount: 3, RetryCount: 2, NextRetryTime: &retryTime},
 		}
 		Expect(FormatWorkersFailed(workers)).To(Equal(
 			"retry 1: attempt 1, next retry " + retryTime.UTC().Format(time.RFC3339) +
@@ -200,7 +203,7 @@ var _ = Describe("FormatWorkersFailed", func() {
 
 	It("shows pending when next retry time is nil", func() {
 		workers := []v1alpha1.WorkerStatus{
-			{Name: "w-0", Phase: workerPhaseFailed, AttemptCount: 1},
+			{Name: "w-0", Phase: workerPhaseFailed, AttemptCount: 1, RetryCount: 1},
 		}
 		Expect(FormatWorkersFailed(workers)).To(Equal("retry 1: attempt 1, next retry pending"))
 	})

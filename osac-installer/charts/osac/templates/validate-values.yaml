@@ -4,6 +4,29 @@
 {{- if hasKey (.Values.bmf.env | default dict) "enableNetworkingProvisioning" -}}
 {{- fail "bmf.env.enableNetworkingProvisioning was removed; use global.networking.provisioningEnabled (boolean). Choose one state for all networking consumers." -}}
 {{- end -}}
+{{- if .Values.global.services.caas.enabled -}}
+{{- $values := fromYaml (toYaml .Values) -}}
+{{- $clusterConfig := dig "aap" "instanceGroups" "clusterFulfillment" "config" dict $values -}}
+{{- $externalDomain := get $clusterConfig "EXTERNAL_ACCESS_BASE_DOMAIN" | default "" -}}
+{{- $clusterDomain := "" -}}
+{{- if .Capabilities.APIVersions.Has "config.openshift.io/v1/Ingress" -}}
+{{- $ingress := lookup "config.openshift.io/v1" "Ingress" "" "cluster" -}}
+{{- if $ingress -}}
+{{- $clusterDomain = $ingress.spec.domain | default "" -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $clusterDomain "" -}}
+{{- $clusterDomain = .Values.global.clusterDomain | default "" -}}
+{{- end -}}
+{{- $defaultHostedDomain := "" -}}
+{{- if ne $clusterDomain "" -}}
+{{- $defaultHostedDomain = printf "hosted.%s" (trimPrefix "apps." $clusterDomain) -}}
+{{- end -}}
+{{- $hostedDomain := get $clusterConfig "HOSTED_CLUSTER_BASE_DOMAIN" | default (ternary $defaultHostedDomain "" (ne $externalDomain "")) -}}
+{{- if ne $externalDomain $hostedDomain -}}
+{{- fail "aap.instanceGroups.clusterFulfillment.config.EXTERNAL_ACCESS_BASE_DOMAIN must equal aap.instanceGroups.clusterFulfillment.config.HOSTED_CLUSTER_BASE_DOMAIN for CaaS" -}}
+{{- end -}}
+{{- end -}}
 {{- include "osac.validateValues" . -}}
 {{- if .Values.bmf.netbox.enabled }}
 {{- $serviceIssuer := tpl (required "service.auth.issuerUrl is required when bmf.netbox.enabled is true" .Values.service.auth.issuerUrl) . }}

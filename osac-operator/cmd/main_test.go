@@ -690,7 +690,7 @@ var _ = Describe("newClusterFromKubeconfig", func() {
 	BeforeEach(func() {
 		localScheme := runtime.NewScheme()
 		remoteScheme = runtime.NewScheme()
-		addSchemesForRemoteControllers(localScheme, remoteScheme, true, true, true, true)
+		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, false, true, true, false)
 	})
 
 	It("rejects empty or whitespace-only kubeconfig paths without falling back to in-cluster config", func() {
@@ -814,7 +814,7 @@ var _ = Describe("addSchemesForRemoteControllers", func() {
 	It("registers StorageClass on remoteScheme and HostedControlPlane/BareMetalInstance on localScheme", func() {
 		localScheme := runtime.NewScheme()
 		remoteScheme := runtime.NewScheme()
-		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, true, true)
+		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, false, true, true, false)
 
 		Expect(remoteScheme.Recognizes(storagev1.SchemeGroupVersion.WithKind("StorageClass"))).To(BeTrue())
 		Expect(localScheme.Recognizes(hypershiftv1beta1.GroupVersion.WithKind("HostedControlPlane"))).To(BeTrue())

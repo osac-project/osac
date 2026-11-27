@@ -15,11 +15,13 @@ package baremetalworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -29,8 +31,9 @@ import (
 )
 
 const (
-	eventReasonWorkerRetry  = "WorkerRetry"
-	eventReasonWorkerFailed = "WorkerFailed"
+	eventReasonWorkerRetry                    = "WorkerRetry"
+	eventReasonWorkerFailed                   = "WorkerFailed"
+	eventReasonRegistryProbePreparationFailed = "RegistryProbePreparationFailed"
 )
 
 // FailureCategory classifies a worker failure for backoff schedule selection.
@@ -69,7 +72,7 @@ var backoffSchedules = map[FailureCategory]backoffSchedule{
 // ClassifyFailure maps a LastFailureReason string to a FailureCategory.
 func ClassifyFailure(reason string) FailureCategory {
 	switch reason {
-	case eventReasonAgentRegistrationTimeout:
+	case eventReasonAgentRegistrationTimeout, eventReasonRegistryAccessTimeout:
 		return FailureCategoryAgentTimeout
 	case "NoHostAvailable", "ResourceExhausted":
 		return FailureCategoryResource
@@ -78,11 +81,11 @@ func ClassifyFailure(reason string) FailureCategory {
 	}
 }
 
-// ComputeBackoff returns the backoff duration for the given failure category and attempt count.
-// Attempt 0 is treated as attempt 1 (first retry).
-func ComputeBackoff(category FailureCategory, attemptCount int32) time.Duration {
+// ComputeBackoff returns the backoff duration for the given failure category
+// and resettable retry count. Retry 0 is treated as retry 1.
+func ComputeBackoff(category FailureCategory, retryCount int32) time.Duration {
 	sched := backoffSchedules[category]
-	idx := int(attemptCount) - 1
+	idx := int(retryCount) - 1
 	if idx < 0 {
 		idx = 0
 	}
@@ -111,14 +114,29 @@ func (r *Reconciler) handleFailedWorkers(
 		if !gone {
 			return nil
 		}
+		if w.RegistryProbePrepared {
+			if err := r.cleanupFailedWorkerRegistryProbe(ctx, co, *w); err != nil {
+				log.Error(err, "failed worker registry probe cleanup is pending", "worker", w.Name)
+				continue
+			}
+		}
 		log.Info("confirmed failed incarnation cleanup", "worker", w.Name, "bmiID", w.BareMetalInstance.ID)
+		// AttemptCount is the monotonic identity used by probe resources. RetryCount
+		// is deliberately independent: a healthy interval may clear it without
+		// changing the resource identity or making the next failure look old.
 		w.AttemptCount++
+		w.RetryCount++
 		category := ClassifyFailure(w.LastFailureReason)
-		backoff := ComputeBackoff(category, w.AttemptCount)
+		backoff := ComputeBackoff(category, w.RetryCount)
 		now := metav1.Now()
 		retryTime := metav1.NewTime(now.Add(backoff))
 		w.NextRetryTime = &retryTime
 		w.BareMetalInstance.ID = ""
+		w.Agent = nil
+		w.RegistrationDeadline = nil
+		w.RegistryProbePrepared = false
+		w.RegistryProbeImage = ""
+		w.RegistryAccessReady = nil
 		// Only confirmed old-incarnation absence makes a new reservation safe to
 		// cancel. Unknown Create outcomes never pass this cleanup checkpoint.
 		w.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
@@ -133,6 +151,85 @@ func (r *Reconciler) handleFailedWorkers(
 		return nil
 	}
 	return nil
+}
+
+func workerRegistryProbeMayExist(worker v1alpha1.WorkerStatus, networkingEnabled bool) bool {
+	return worker.RegistryProbePrepared || (networkingEnabled && worker.AttemptStartedAt != nil)
+}
+
+// cleanupRetiringWorkerRegistryProbes removes guest probe resources even when
+// injection failed before RegistryProbePrepared could be persisted. The
+// attempt clock is written before probe preparation, so it is durable evidence
+// that preparation may have created resources.
+func (r *Reconciler) cleanupRetiringWorkerRegistryProbes(
+	ctx context.Context, order *v1alpha1.ClusterOrder,
+) error {
+	if !order.Spec.SupportsAutomaticCaaSEndpoints || !r.NetworkingProvisioningEnabled {
+		return nil
+	}
+	for _, worker := range order.Status.Workers {
+		if worker.Phase != workerPhaseUnbinding && worker.Phase != workerPhaseDeleting {
+			continue
+		}
+		if !workerRegistryProbeMayExist(worker, r.NetworkingProvisioningEnabled) {
+			continue
+		}
+		if err := r.cleanupFailedWorkerRegistryProbe(ctx, order, worker); err != nil {
+			if apierrors.IsNotFound(err) {
+				if recorded := workerByName(order.Status.Workers, worker.Name); recorded != nil {
+					recorded.RegistryProbePrepared = false
+					recorded.AttemptStartedAt = nil
+				}
+				continue
+			}
+			// Retiring probe cleanup is independently retried by the worker
+			// recheck timer. Do not let one guest/API deletion failure block
+			// creation, Agent binding, or convergence of other workers.
+			ctrllog.FromContext(ctx).Error(err, "retiring worker registry probe cleanup is pending",
+				"worker", worker.Name)
+			continue
+		}
+		if recorded := workerByName(order.Status.Workers, worker.Name); recorded != nil {
+			recorded.RegistryProbePrepared = false
+			recorded.RegistryProbeImage = ""
+			recorded.AttemptStartedAt = nil
+		}
+	}
+	return nil
+}
+
+func (r *Reconciler) cleanupFailedWorkerRegistryProbe(
+	ctx context.Context, order *v1alpha1.ClusterOrder, worker v1alpha1.WorkerStatus,
+) error {
+	names, err := workerRegistryProbeNamesFor(order, worker.Name, worker.AttemptCount)
+	if err != nil {
+		return err
+	}
+	resolver := r.registryProbeGuestResolver
+	if resolver == nil {
+		resolver = hostedClusterRegistryProbeResolver{management: r.Client, authoritative: r.apiReader}
+	}
+	guest, err := resolver.Resolve(ctx, order)
+	if err != nil {
+		if errors.Is(err, ErrRegistryProbeGuestGone) {
+			// The guest control plane and its API have already disappeared, so
+			// guest-side probe resources are gone with them. Do not block BMI,
+			// Agent, or ClusterOrder teardown on an API that no longer exists.
+			return nil
+		}
+		return fmt.Errorf("resolve guest API: %w", err)
+	}
+	var errs []error
+	if err := guest.client.CoreV1().ConfigMaps(names.namespace).Delete(ctx, names.configMap, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		errs = append(errs, fmt.Errorf("delete worker registry probe ConfigMap: %w", err))
+	}
+	if err := cleanupWorkerRegistryProbeCredentials(ctx, guest.client, order, names); err != nil {
+		errs = append(errs, err)
+	}
+	if err := cleanupWorkerRegistryProbeForWorker(ctx, guest.client, order, worker.Name); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func hasFailedIncarnations(workers []v1alpha1.WorkerStatus) bool {
@@ -163,7 +260,7 @@ func (r *Reconciler) retryFailedWorker(
 	if !res.IsZero() {
 		return res, nil
 	}
-	log.Info("created replacement BMI for failed worker", "name", prev.Name, "attempt", prev.AttemptCount, "id", bmi.GetId())
+	log.Info("created replacement BMI for failed worker", jsonNameField, prev.Name, "attempt", prev.AttemptCount, "id", bmi.GetId())
 	workerCreated(prev, bmi.GetMetadata().GetName(), bmi.GetId())
 	r.recorder.Eventf(co, nil, corev1.EventTypeNormal, eventReasonWorkerRetry, "RetryWorker",
 		"worker %s: retry attempt %d", prev.Name, prev.AttemptCount)
@@ -200,13 +297,17 @@ func (r *Reconciler) workerRecheckDeadline(workers []v1alpha1.WorkerStatus, now 
 		case w.Phase == workerPhaseFailed && w.BareMetalInstance.ID != "":
 			// Provider cleanup is still pending; recheck its completion.
 			consider(teardownRequeueInterval)
+		case w.Phase == workerPhaseFailed && w.NextRetryTime == nil:
+			// A failed ID-less worker may still be waiting for probe/resource
+			// cleanup before its retry checkpoint can be armed.
+			consider(teardownRequeueInterval)
 		case w.Phase == workerPhaseFailed && w.NextRetryTime != nil:
 			consider(time.Until(w.NextRetryTime.Time))
 		case w.Phase == workerPhaseProvisioning, w.Phase == workerPhaseWaitingForAgent, w.Phase == workerPhaseBinding:
 			consider(agentRequeueInterval)
 		case w.Phase == workerPhaseUnbinding, w.Phase == workerPhaseDeleting:
 			consider(teardownRequeueInterval)
-		case w.Phase == workerPhaseReady && w.AttemptCount > 0 && w.ReadySince != nil:
+		case w.Phase == workerPhaseReady && w.RetryCount > 0 && w.ReadySince != nil:
 			consider(minHealthyDuration - now.Sub(w.ReadySince.Time))
 		}
 	}
@@ -216,20 +317,20 @@ func (r *Reconciler) workerRecheckDeadline(workers []v1alpha1.WorkerStatus, now 
 	return ctrl.Result{RequeueAfter: earliest}
 }
 
-// resetHealthyWorkers resets attemptCount for workers that have been Ready for at least
-// MinHealthyDuration, clearing their failure history.
+// resetHealthyWorkers clears retry history after workers have been Ready for at
+// least MinHealthyDuration. AttemptCount is monotonic probe identity and never resets.
 func resetHealthyWorkers(log logr.Logger, co *v1alpha1.ClusterOrder, workers []v1alpha1.WorkerStatus, now time.Time) {
 	for i := range workers {
 		w := &workers[i]
-		if w.Phase != workerPhaseReady || w.AttemptCount == 0 || w.ReadySince == nil {
+		if w.Phase != workerPhaseReady || w.RetryCount == 0 || w.ReadySince == nil {
 			continue
 		}
 		if now.Sub(w.ReadySince.Time) < minHealthyDuration {
 			continue
 		}
-		log.Info("worker healthy for MinHealthyDuration, resetting attemptCount",
-			"worker", w.Name, "previousAttempts", w.AttemptCount)
-		w.AttemptCount = 0
+		log.Info("worker healthy for MinHealthyDuration, resetting retry history",
+			"worker", w.Name, "previousRetries", w.RetryCount, "attempt", w.AttemptCount)
+		w.RetryCount = 0
 		w.LastFailureReason = ""
 		w.LastFailureMessage = ""
 		w.LastFailureTime = nil

@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -102,6 +103,50 @@ func TestSyncSubnetMessage(t *testing.T) {
 	}
 	if remote.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY || remote.GetStatus().HasMessage() {
 		t.Fatalf("got %v, message set %v", remote.GetStatus().GetState(), remote.GetStatus().HasMessage())
+	}
+}
+
+func TestSyncSubnetIPAM(t *testing.T) {
+	remote := &privatev1.Subnet{}
+	remote.SetStatus(&privatev1.SubnetStatus{})
+	obj := &v1alpha1.Subnet{Status: v1alpha1.SubnetStatus{
+		IPAM: &v1alpha1.SubnetIPAM{
+			GatewayIPv4:       "10.0.0.1",
+			OverlayIPv4CIDRs:  []string{"10.0.0.0/25"},
+			PhysicalIPv4CIDRs: []string{"10.0.0.128/26"},
+			LBVIPIPv4CIDRs:    []string{"10.0.0.192/26"},
+		},
+	}}
+	if err := syncSubnetUpdate(context.Background(), obj, remote); err != nil {
+		t.Fatal(err)
+	}
+	got := remote.GetStatus().GetIpam()
+	if got == nil || got.GetGatewayIpv4() != "10.0.0.1" ||
+		len(got.GetLbVipIpv4Cidrs()) != 1 || got.GetLbVipIpv4Cidrs()[0] != "10.0.0.192/26" {
+		t.Fatalf("Subnet IPAM was not copied to Fulfillment: %+v", got)
+	}
+
+	obj.Status.IPAM = nil
+	if err := syncSubnetUpdate(context.Background(), obj, remote); err != nil {
+		t.Fatal(err)
+	}
+	if remote.GetStatus().GetIpam() != nil {
+		t.Fatalf("removed Subnet IPAM was not cleared: %+v", remote.GetStatus().GetIpam())
+	}
+}
+
+func TestSubnetFeedbackUpdateMaskIncludesIPAM(t *testing.T) {
+	paths := subnetFeedbackUpdateMask().GetPaths()
+	for _, expected := range []string{
+		"status.state",
+		"status.message",
+		"status.compute_instance_supported",
+		"status.compute_instance_unsupported_reason",
+		"status.ipam",
+	} {
+		if !slices.Contains(paths, expected) {
+			t.Fatalf("Subnet feedback update mask %v does not include %q", paths, expected)
+		}
 	}
 }
 

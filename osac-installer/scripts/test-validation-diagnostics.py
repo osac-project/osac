@@ -105,7 +105,7 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assert_private(result.stdout + result.stderr)
         self.assertIn("NETRIS_CONTROLLER_URL", result.stderr)
-        self.assertIn("https://", result.stderr)
+        self.assertIn("http(s):// URL", result.stderr)
         self.assertNotIn("without embedded credentials", result.stderr)
 
     def test_aap_url_validation_policy_is_unchanged(self):
@@ -186,7 +186,10 @@ class ValidationDiagnosticsTests(unittest.TestCase):
                 self.assert_private(result.stdout + result.stderr)
                 self.assertIn("offline chart rendering failed", result.stderr)
                 self.assertIn("no cluster changes", result.stderr)
-                self.assertEqual(len(calls.read_text().splitlines()), 2 if retry else 1)
+                # The gate first validates caller-supplied schema values with
+                # preflight disabled, then performs its report-mode render;
+                # the NetBox retry adds one more render.
+                self.assertEqual(len(calls.read_text().splitlines()), 3 if retry else 2)
 
     def test_offline_render_error_reports_template_location_without_message(self):
         """Check a template check failure names its location, not its value."""
@@ -931,7 +934,7 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         # and still withholds the value.
         self.assertIn(
             "instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL"
-            " must be an https:// URL",
+            " must be an http(s):// URL",
             result.stderr,
         )
 

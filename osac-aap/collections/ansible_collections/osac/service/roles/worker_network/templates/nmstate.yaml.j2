@@ -1,0 +1,17 @@
+interfaces:
+{% for interface in nmstate_interfaces %}
+  - name: {{ interface.name | to_json }}
+    type: ethernet
+    state: {{ 'up' if interface.selected else 'down' }}
+    ipv4:
+      enabled: {{ 'true' if interface.selected else 'false' }}
+{% if interface.selected %}
+      dhcp: true
+      auto-gateway: true
+      auto-dns: true
+      auto-routes: true
+      auto-route-metric: 10
+{% endif %}
+    ipv6:
+      enabled: false
+{% endfor %}

@@ -241,12 +241,6 @@ func (o *ClusterOrder) GetNetworkJobs() []NetworkJobStatus { return o.Status.Job
 // SetNetworkJobs replaces status.jobs.
 func (o *ClusterOrder) SetNetworkJobs(jobs []NetworkJobStatus) { o.Status.Jobs = jobs }
 
-// GetTaskInput returns status.taskInput.
-func (o *ClusterOrder) GetTaskInput() *runtime.RawExtension { return o.Status.TaskInput }
-
-// SetTaskInput replaces status.taskInput.
-func (o *ClusterOrder) SetTaskInput(input *runtime.RawExtension) { o.Status.TaskInput = input }
-
 var (
 	_ NetworkResourceObject = &VirtualNetwork{}
 
@@ -268,5 +262,4 @@ var (
 
 	_ NetworkTaskObject = &ComputeInstance{}
 
-	_ NetworkInputObject = &ClusterOrder{}
 )

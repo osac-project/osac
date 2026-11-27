@@ -85,6 +85,12 @@ type NetworkJobStatus struct {
 	// OSAC rejected the result; while retrying it also names the next retry time.
 	// +kubebuilder:validation:Optional
 	Message string `json:"message,omitempty"`
+
+	// InputAddress records the address supplied to an endpoint DNS publication
+	// job. It is retained through completion so a later reconcile cannot mistake
+	// a result for an address that changed while the job was running.
+	// +kubebuilder:validation:Optional
+	InputAddress string `json:"inputAddress,omitempty"`
 }
 
 // NetworkManagerRef records one manager selected for a resource.

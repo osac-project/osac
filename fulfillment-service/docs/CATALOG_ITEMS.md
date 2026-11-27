@@ -298,7 +298,10 @@ external access. Fulfillment stores `auto_external_ip_attachment: true` for
 these templates. A request or catalog policy that explicitly sets the field
 to `false` is rejected with `InvalidArgument`; do not lock it to `false` in a
 catalog item. Automatic ExternalIPs are created only when provider networking
-is enabled. CI and NICo template behavior is unchanged.
+is enabled. CI and NICo template behavior is unchanged. CaaS worker
+validation requires the automatic Cluster SecurityGroup only for templates
+that declare this capability; otherwise it matches the Cluster's explicit
+network-attachment groups.
 
 **ComputeInstanceCatalogItem** policies:
 

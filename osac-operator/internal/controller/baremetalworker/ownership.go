@@ -29,7 +29,12 @@ const (
 	// the fulfillment-service Cluster UUID. Same key as controller.osacClusterOrderIDLabel (unexported).
 	clusterOrderIDLabel      = "osac.openshift.io/clusterorder-uuid"
 	clusterOrderLabel        = "osac.openshift.io/cluster-order"
+	legacyClusterOrderLabel  = "osac.openshift.io/clusterorder"
 	ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
+	jsonNameField            = "name"
+	literalTrue              = "true"
+	conditionStatusTrue      = "True"
+	v1beta1APIVersion        = "v1beta1"
 )
 
 // authoritativeCluster loads the fulfillment Cluster that owns this order's workers. Neither the

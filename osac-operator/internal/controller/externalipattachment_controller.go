@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -195,11 +196,108 @@ func (r *ExternalIPAttachmentReconciler) resolveTarget(ctx context.Context, eipa
 			if co.Spec.NetworkAttachment == nil {
 				return target, nil
 			}
-			return r.tenantDestination(ctx, eipa.Namespace, target, co.Status.IngressEndpoint, co.Spec.NetworkAttachment.SubnetRef)
+			// Fulfillment reserves the guest MetalLB address in the immutable
+			// ClusterOrder spec. Use it before a guest node exists; status.
+			// ingressEndpoint is populated only after the guest service is
+			// observed and would deadlock bootstrap DNS/Assisted installation.
+			return r.clusterIngressDestination(ctx, eipa, co, target)
 		}
 		return target, nil
 	}
 	return attachmentTarget{}, fmt.Errorf("ExternalIPAttachment %s has no target", eipa.Name)
+}
+
+// clusterIngressDestination resolves the ClusterOrder's tenant subnet for an
+// ingress attachment. New orders carry the Fulfillment API ID; the generated
+// Kubernetes name and legacy default-ipv4 reference remain accepted while
+// older orders drain from the system.
+func (r *ExternalIPAttachmentReconciler) clusterIngressDestination(
+	ctx context.Context,
+	eipa *v1alpha1.ExternalIPAttachment,
+	co *v1alpha1.ClusterOrder,
+	target attachmentTarget,
+) (attachmentTarget, error) {
+	address := clusterIngressAddress(co)
+	if address == "" || co.Spec.NetworkAttachment == nil {
+		return target, nil
+	}
+	ref := co.Spec.NetworkAttachment.SubnetRef
+	subnets := &v1alpha1.SubnetList{}
+	if err := r.Client.List(ctx, subnets, client.InNamespace(eipa.Namespace)); err != nil {
+		return target, fmt.Errorf("list ClusterOrder ingress Subnets: %w", err)
+	}
+	tenant := eipa.GetAnnotations()[networktask.TenantAnnotation]
+	selectMatches := func(predicate func(*v1alpha1.Subnet) bool) []*v1alpha1.Subnet {
+		matches := make([]*v1alpha1.Subnet, 0, 1)
+		for i := range subnets.Items {
+			subnet := &subnets.Items[i]
+			if predicate(subnet) {
+				matches = append(matches, subnet)
+			}
+		}
+		return matches
+	}
+	matches := selectMatches(func(subnet *v1alpha1.Subnet) bool {
+		return subnet.GetLabels()[osacSubnetIDLabel] == ref &&
+			subnet.GetAnnotations()[networktask.TenantAnnotation] == tenant
+	})
+	if len(matches) == 0 {
+		matches = selectMatches(func(subnet *v1alpha1.Subnet) bool {
+			return subnet.Name == ref && subnet.GetAnnotations()[networktask.TenantAnnotation] == tenant
+		})
+	}
+	if len(matches) == 0 && ref == "default-ipv4" {
+		matches = selectMatches(func(subnet *v1alpha1.Subnet) bool {
+			if subnet.GetAnnotations()[networktask.TenantAnnotation] != tenant || subnet.Status.IPAM == nil {
+				return false
+			}
+			parsed, err := netip.ParseAddr(address)
+			if err != nil || !parsed.Is4() {
+				return false
+			}
+			for _, cidr := range subnet.Status.IPAM.LBVIPIPv4CIDRs {
+				prefix, prefixErr := netip.ParsePrefix(cidr)
+				if prefixErr == nil && prefix.Contains(parsed) {
+					return true
+				}
+			}
+			return false
+		})
+		if len(matches) > 1 {
+			defaultMatches := make([]*v1alpha1.Subnet, 0, 1)
+			for _, subnet := range matches {
+				if subnet.GetLabels()["osac.openshift.io/default"] == labelValueTrue && isReady(subnet) {
+					defaultMatches = append(defaultMatches, subnet)
+				}
+			}
+			if len(defaultMatches) == 1 {
+				matches = defaultMatches
+			}
+		}
+		if len(matches) == 0 {
+			matches = selectMatches(func(subnet *v1alpha1.Subnet) bool {
+				return subnet.GetAnnotations()[networktask.TenantAnnotation] == tenant &&
+					subnet.GetLabels()["osac.openshift.io/default"] == labelValueTrue && isReady(subnet)
+			})
+		}
+	}
+	if len(matches) != 1 {
+		return target, nil
+	}
+	subnet := matches[0]
+	subnetID := subnet.GetLabels()[osacSubnetIDLabel]
+	if subnetID == "" {
+		subnetID = ref
+	}
+	target.destination = v1alpha1.ExternalIPAttachmentDestination{
+		Address: address,
+		RoutingDomain: v1alpha1.ExternalIPAttachmentRoutingDomain{
+			Type:             v1alpha1.RoutingDomainTenantVirtualNetwork,
+			VirtualNetworkID: subnet.Spec.VirtualNetwork,
+			SubnetID:         subnetID,
+		},
+	}
+	return target, nil
 }
 
 // tenantDestination is a destination on the tenant VirtualNetwork of a Subnet.

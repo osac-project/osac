@@ -102,8 +102,9 @@ func (r *Reconciler) updateWorkerStatus(
 }
 
 // updateWorkerStatusWithAgent patches status.workers, aggregate counts, and the
-// WorkersFailed condition on the ClusterOrder. It also resets attemptCount for
-// workers that have been Ready for MinHealthyDuration.
+// WorkersFailed condition on the ClusterOrder. It also clears retry history for
+// workers that have been Ready for MinHealthyDuration; attempt identity remains
+// monotonic.
 func (r *Reconciler) updateWorkerStatusWithAgent(
 	ctx context.Context, co *v1alpha1.ClusterOrder, workers []v1alpha1.WorkerStatus,
 ) error {
@@ -272,7 +273,7 @@ func FormatWorkersFailed(workers []v1alpha1.WorkerStatus) string {
 		if w.Phase != workerPhaseFailed {
 			continue
 		}
-		retry := "pending"
+		retry := workerRegistryProbePendingStatus
 		if w.NextRetryTime != nil {
 			retry = w.NextRetryTime.UTC().Format(time.RFC3339)
 		}
@@ -301,6 +302,8 @@ func newWorkerStatus(nodeSet, instanceType, name, resourceID, phase string) v1al
 func workerCreated(w *v1alpha1.WorkerStatus, name, id string) {
 	w.BareMetalInstance = v1alpha1.BareMetalInstanceReference{Name: name, ID: id}
 	w.Phase = workerPhaseWaitingForAgent
+	w.Agent = nil
+	w.RegistrationDeadline = nil
 	w.NextRetryTime = nil
 	if w.CreationTimestamp.IsZero() {
 		w.CreationTimestamp = metav1.Now()

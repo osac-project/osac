@@ -12,7 +12,6 @@ rules:
   - ""
   resources:
   - configmaps
-  - pods
   - services
   verbs:
   - get
@@ -34,11 +33,23 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - create
+  - delete
   - get
   - list
+  - update
   - watch
 - apiGroups:
   - agent-install.openshift.io
@@ -61,6 +72,22 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - agent-install.openshift.io
+  resources:
+  - nmstateconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - capi-provider.agent-install.openshift.io
+  resources:
+  - agentmachines
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - cdi.kubevirt.io

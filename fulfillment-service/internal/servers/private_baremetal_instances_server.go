@@ -43,6 +43,12 @@ import (
 
 const bareMetalInstanceUserDataMaxBytes = 64 * 1024
 
+const (
+	clusterAPIIDAnnotation    = "osac.openshift.io/cluster-api-id"
+	clusterOrderUUIDLabel     = "osac.openshift.io/clusterorder-uuid"
+	caasAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
+)
+
 func validateBareMetalUserData(userData []byte) error {
 	if len(userData) > bareMetalInstanceUserDataMaxBytes {
 		return fmt.Errorf("size %d exceeds the maximum of %d bytes", len(userData), bareMetalInstanceUserDataMaxBytes)
@@ -74,6 +80,7 @@ type PrivateBareMetalInstancesServer struct {
 	virtualNetworksDao      *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao       *dao.GenericDAO[*privatev1.NetworkClass]
 	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
+	clustersDao             *dao.GenericDAO[*privatev1.Cluster]
 	diskImagesDao           *dao.GenericDAO[*privatev1.DiskImage]
 	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
@@ -201,6 +208,11 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
+	clustersDao, err := newGuardDAO[*privatev1.Cluster](b.logger)
+	if err != nil {
+		return
+	}
+
 	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -273,6 +285,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		virtualNetworksDao:      virtualNetworksDao,
 		networkClassesDao:       networkClassesDao,
 		securityGroupsDao:       securityGroupsDao,
+		clustersDao:             clustersDao,
 		diskImagesDao:           diskImagesDao,
 		externalIPPoolDao:       externalIPPoolDao,
 		externalIPDao:           externalIPDao,
@@ -352,6 +365,19 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err = s.validateSpec(candidate); err != nil {
 		return
 	}
+	// A CaaS worker create must acquire its owning Cluster row before any
+	// network-attachment resolution can lock the Subnet. Cluster deletion uses
+	// the same Cluster -> Subnet order; keeping it here prevents the inverse
+	// worker-create order from deadlocking teardown.
+	if clusterID := candidate.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]; clusterID != "" {
+		if !auth.IsControllerServiceAccount(ctx) {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+				"osac.openshift.io/cluster-api-id is accepted only for private CaaS worker creates")
+		}
+		if _, err = lockRecord(ctx, s.clustersDao, clusterID); err != nil {
+			return nil, err
+		}
+	}
 	ref := candidate.GetSpec().GetInstanceType()
 	if ref == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.instance_type is mandatory")
@@ -411,6 +437,9 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 			return
 		}
 	}
+	if err = s.validateCaaSWorkerCreate(ctx, candidate); err != nil {
+		return nil, err
+	}
 
 	if ref := candidate.GetSpec().GetDiskImage(); ref != nil {
 		if refKey(ref) == "" {
@@ -458,6 +487,15 @@ func (s *PrivateBareMetalInstancesServer) resolveCreationSource(ctx context.Cont
 func (s *PrivateBareMetalInstancesServer) Update(ctx context.Context,
 	request *privatev1.BareMetalInstancesUpdateRequest) (response *privatev1.BareMetalInstancesUpdateResponse, err error) {
 	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.BareMetalInstance) error {
+		currentClusterID := current.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]
+		candidateClusterID := candidate.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]
+		currentOrderID := current.GetMetadata().GetLabels()[clusterOrderUUIDLabel]
+		candidateOrderID := candidate.GetMetadata().GetLabels()[clusterOrderUUIDLabel]
+		if !auth.IsControllerServiceAccount(ctx) &&
+			(currentClusterID != candidateClusterID || currentOrderID != candidateOrderID) {
+			return grpcstatus.Error(grpccodes.InvalidArgument,
+				"CaaS worker ownership metadata can only be changed by the controller")
+		}
 		if err := s.validateAndResolveUserDataSecret(
 			ctx,
 			candidate.GetSpec(),

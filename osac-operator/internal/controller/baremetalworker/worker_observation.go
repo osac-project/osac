@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"time"
 
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -28,17 +31,25 @@ type bmiGetResult struct {
 // mutation: a create/delete/bind ends the invocation and a fresh observation
 // supplies the next one.
 type workerObservation struct {
-	byID   map[string]*privatev1.BareMetalInstance
-	byName map[string][]*privatev1.BareMetalInstance
-	gets   map[string]bmiGetResult
-	agents *unstructured.UnstructuredList
+	byID                   map[string]*privatev1.BareMetalInstance
+	byName                 map[string][]*privatev1.BareMetalInstance
+	gets                   map[string]bmiGetResult
+	agents                 *unstructured.UnstructuredList
+	capAgentReady          map[string]string
+	hubBMIs                map[string]*bmfov1alpha1.BareMetalInstance
+	networkAttachments     map[string]*v1alpha1.NetworkAttachment
+	networkAttachmentsByID map[string][]*v1alpha1.NetworkAttachment
 }
 
 func indexWorkerBMIs(bmis []*privatev1.BareMetalInstance) *workerObservation {
 	o := &workerObservation{
-		byID:   make(map[string]*privatev1.BareMetalInstance),
-		byName: make(map[string][]*privatev1.BareMetalInstance),
-		gets:   make(map[string]bmiGetResult),
+		byID:                   make(map[string]*privatev1.BareMetalInstance),
+		byName:                 make(map[string][]*privatev1.BareMetalInstance),
+		gets:                   make(map[string]bmiGetResult),
+		capAgentReady:          make(map[string]string),
+		hubBMIs:                make(map[string]*bmfov1alpha1.BareMetalInstance),
+		networkAttachments:     make(map[string]*v1alpha1.NetworkAttachment),
+		networkAttachmentsByID: make(map[string][]*v1alpha1.NetworkAttachment),
 	}
 	for _, bmi := range bmis {
 		id, name := bmi.GetId(), bmi.GetMetadata().GetName()
@@ -82,8 +93,113 @@ func (r *Reconciler) observeWorkerResources(ctx context.Context, co *v1alpha1.Cl
 		return nil, ctrl.Result{}, fmt.Errorf("observing worker BMIs: %w", err)
 	}
 	o := indexWorkerBMIs(bmis)
+	if co.Spec.SupportsAutomaticCaaSEndpoints {
+		reader := r.apiReader
+		if reader == nil {
+			reader = r.Client
+		}
+		if reader == nil {
+			return nil, ctrl.Result{}, fmt.Errorf("worker observation reader is not configured")
+		}
+		hubBMIs := &bmfov1alpha1.BareMetalInstanceList{}
+		if err := reader.List(ctx, hubBMIs, client.InNamespace(r.networkingNamespace)); err != nil {
+			return nil, ctrl.Result{}, fmt.Errorf("observing hub BareMetalInstances: %w", err)
+		}
+		for i := range hubBMIs.Items {
+			item := &hubBMIs.Items[i]
+			id := item.GetLabels()["osac.openshift.io/baremetalinstance-uuid"]
+			if id != "" {
+				o.hubBMIs[id] = item
+			}
+		}
+		if r.NetworkingProvisioningEnabled && co.DeletionTimestamp.IsZero() {
+			attachments := &v1alpha1.NetworkAttachmentList{}
+			if err := reader.List(ctx, attachments, client.InNamespace(r.networkingNamespace)); err != nil {
+				return nil, ctrl.Result{}, fmt.Errorf("observing worker NetworkAttachments: %w", err)
+			}
+			for i := range attachments.Items {
+				attachment := &attachments.Items[i]
+				if attachment.Spec.Target.Kind != v1alpha1.NetworkAttachmentTargetBareMetalInstance ||
+					attachment.Spec.Target.ID == "" {
+					continue
+				}
+				o.networkAttachments[attachment.Spec.Target.ID] = attachment
+				o.networkAttachmentsByID[attachment.Spec.Target.ID] = append(
+					o.networkAttachmentsByID[attachment.Spec.Target.ID], attachment)
+			}
+		}
+	}
 	o.agents, err = r.listAgents(ctx, co)
-	return o, ctrl.Result{}, err
+	if err != nil {
+		return o, ctrl.Result{}, err
+	}
+	// Once CAP-Agent has taken ownership, AgentMachine readiness is the durable
+	// worker signal. Assisted's Agent may retain an installation error after the
+	// CAPI handoff has completed, so do not hold the ClusterOrder on that stale
+	// condition. The list is scoped to the HostedControlPlane namespace recorded
+	// on this ClusterOrder.
+	if ref := co.Status.ClusterReference; ref != nil && ref.Namespace != "" && ref.HostedClusterName != "" {
+		machines := &unstructured.UnstructuredList{}
+		machines.SetGroupVersionKind(agentMachineListGVK)
+		// AgentMachine and the Hive ClusterDeployment are created in the
+		// HostedControlPlane namespace (<order namespace>-<HostedCluster name>),
+		// not in the parent namespace recorded by ClusterReference.Namespace.
+		hcpNamespace := ref.Namespace + "-" + ref.HostedClusterName
+		if err := r.List(ctx, machines, client.InNamespace(hcpNamespace)); err != nil {
+			// CAP-Agent is optional for legacy Assisted-only installations. The
+			// manager setup already gates the AgentMachine watch on CRD presence;
+			// observation must apply the same compatibility rule.
+			if !apiMeta.IsNoMatchError(err) {
+				return o, ctrl.Result{}, fmt.Errorf("observing AgentMachines for %s: %w", co.Name, err)
+			}
+		} else {
+			r.recordReadyCAPAgents(o, co, machines)
+		}
+	}
+	return o, ctrl.Result{}, nil
+}
+
+func (r *Reconciler) recordReadyCAPAgents(
+	o *workerObservation, co *v1alpha1.ClusterOrder, machines *unstructured.UnstructuredList,
+) {
+	for i := range machines.Items {
+		machine := &machines.Items[i]
+		ready, found, err := unstructured.NestedBool(machine.Object, "status", "ready")
+		if err != nil || !found || !ready {
+			continue
+		}
+		name, found, err := unstructured.NestedString(machine.Object, "status", "agentRef", "name")
+		if err != nil || !found || name == "" {
+			continue
+		}
+		agentUID, agentUIDFound, err := unstructured.NestedString(machine.Object, "status", "agentRef", "uid")
+		if err != nil {
+			continue
+		}
+		agentNamespace, found, err := unstructured.NestedString(machine.Object, "status", "agentRef", "namespace")
+		if err != nil || !found || agentNamespace == "" {
+			agentNamespace = co.Namespace
+		}
+		for j := range o.agents.Items {
+			agent := &o.agents.Items[j]
+			if agent.GetNamespace() != agentNamespace || agent.GetName() != name || agent.GetUID() == "" {
+				continue
+			}
+			// Older CAP-Agent versions expose only name/namespace in status.agentRef.
+			// In that case, the AgentMachine ownership label is the instance identity.
+			if !agentUIDFound || agentUID == "" {
+				if agent.GetLabels()["agentMachineRef"] != machine.GetName() {
+					continue
+				}
+			} else if string(agent.GetUID()) != agentUID {
+				continue
+			}
+			if agent.GetUID() != "" {
+				o.capAgentReady[agentNamespace+"/"+name] = string(agent.GetUID())
+				break
+			}
+		}
+	}
 }
 
 func (r *Reconciler) workerMACResolver(o *workerObservation) MACResolver {
@@ -94,6 +210,12 @@ func (r *Reconciler) workerMACResolver(o *workerObservation) MACResolver {
 		return r.resolveHostMACs
 	}
 	return func(ctx context.Context, id string) []string {
+		if r.NetworkingProvisioningEnabled {
+			attachment := o.networkAttachments[id]
+			if attachment != nil && attachment.Spec.Interface.MACAddress != "" {
+				return []string{attachment.Spec.Interface.MACAddress}
+			}
+		}
 		bmi, err := o.getBMI(ctx, r.fulfillment, id)
 		if err != nil {
 			return nil
@@ -149,7 +271,7 @@ func (r *Reconciler) observeExistingWorkers(ctx context.Context, co *v1alpha1.Cl
 	// supplies the snapshot and never re-derives phases elsewhere.
 	if o.agents != nil {
 		var err error
-		workers, err = projectAgentWorkerPhases(co, workers, o.agents)
+		workers, err = projectAgentWorkerPhasesWithCAP(co, workers, o.agents, o.capAgentReady)
 		if err != nil {
 			return nil, err
 		}

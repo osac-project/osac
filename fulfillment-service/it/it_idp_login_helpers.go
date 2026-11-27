@@ -682,6 +682,117 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 	return t.simulateOIDCLoginWithRequestParams(ctx, "osac-cli", "http://localhost", "", idpAlias, username, password, nil, nil)
 }
 
+// SimulatePasswordChangeLogin drives the authorization-code flow for a user
+// whose password is temporary. Keycloak presents its required-action form
+// after the initial credential submission; this helper submits the new
+// password and returns the resulting access token.
+func (t *Tool) SimulatePasswordChangeLogin(ctx context.Context, username, temporaryPassword, newPassword string) (string, error) {
+	codeVerifier, codeChallenge, err := generatePKCE()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate PKCE challenge: %w", err)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cookie jar: %w", err)
+	}
+	httpClient := &http.Client{
+		Jar:           jar,
+		Transport:     &http.Transport{TLSClientConfig: &tls.Config{RootCAs: t.caPool.Pool(), MinVersion: tls.VersionTLS12}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	params := url.Values{
+		"client_id":             {"osac-cli"},
+		"response_type":         {"code"},
+		"redirect_uri":          {"http://localhost"},
+		"state":                 {"osac-it-password-change"},
+		"scope":                 {"openid organization"},
+		"code_challenge":        {codeChallenge},
+		"code_challenge_method": {"S256"},
+	}
+	nextMethod := http.MethodGet
+	nextURL := fmt.Sprintf("https://%s/realms/osac/protocol/openid-connect/auth?%s", keycloakAddr, params.Encode())
+	var nextForm url.Values
+
+	for i := 0; i < 20; i++ {
+		var body io.Reader
+		if nextForm != nil {
+			body = strings.NewReader(nextForm.Encode())
+		}
+		req, err := http.NewRequestWithContext(ctx, nextMethod, nextURL, body)
+		if err != nil {
+			return "", fmt.Errorf("password-change hop %d: build request: %w", i, err)
+		}
+		if nextForm != nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("password-change hop %d: request failed: %w", i, err)
+		}
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		resp.Body.Close()
+		if readErr != nil {
+			return "", fmt.Errorf("password-change hop %d: read response: %w", i, readErr)
+		}
+
+		switch resp.StatusCode {
+		case http.StatusFound, http.StatusSeeOther, http.StatusMovedPermanently,
+			http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			location := resp.Header.Get("Location")
+			if location == "" {
+				return "", fmt.Errorf("password-change hop %d: redirect has no location", i)
+			}
+			resolved, parseErr := req.URL.Parse(location)
+			if parseErr != nil {
+				return "", fmt.Errorf("password-change hop %d: resolve redirect: %w", i, parseErr)
+			}
+			if strings.HasPrefix(resolved.String(), "http://localhost") {
+				callback, parseErr := url.Parse(resolved.String())
+				if parseErr != nil {
+					return "", fmt.Errorf("password-change hop %d: parse callback: %w", i, parseErr)
+				}
+				if callback.Query().Get("error") != "" {
+					return "", fmt.Errorf("password-change callback error: %s", callback.Query().Get("error_description"))
+				}
+				code := callback.Query().Get("code")
+				if code == "" {
+					return "", fmt.Errorf("password-change callback has no authorization code")
+				}
+				return t.exchangeKCCode(ctx, httpClient, code, "http://localhost", codeVerifier, "osac-cli", "")
+			}
+			nextMethod, nextURL, nextForm = http.MethodGet, resolved.String(), nil
+
+		case http.StatusOK:
+			if action := extractKCLoginFormAction(respBody); action != "" {
+				actionURL, parseErr := req.URL.Parse(action)
+				if parseErr != nil {
+					return "", fmt.Errorf("password-change hop %d: resolve login form: %w", i, parseErr)
+				}
+				nextMethod, nextURL = http.MethodPost, actionURL.String()
+				nextForm = url.Values{"username": {username}, "password": {temporaryPassword}, "credentialId": {""}}
+				continue
+			}
+			action, form := extractKCActionForm(respBody)
+			if action == "" {
+				return "", fmt.Errorf("password-change hop %d: response was not a Keycloak form", i)
+			}
+			actionURL, parseErr := req.URL.Parse(action)
+			if parseErr != nil {
+				return "", fmt.Errorf("password-change hop %d: resolve required-action form: %w", i, parseErr)
+			}
+			form.Set("password-new", newPassword)
+			form.Set("password-confirm", newPassword)
+			form.Set("logout-sessions", "off")
+			nextMethod, nextURL, nextForm = http.MethodPost, actionURL.String(), form
+
+		default:
+			return "", fmt.Errorf("password-change hop %d: unexpected HTTP status %d", i, resp.StatusCode)
+		}
+	}
+	return "", fmt.Errorf("password-change redirect chain exceeded maximum hops")
+}
+
 // SimulateMCPLogin obtains a user token for the deployed MCP resource using
 // the public development client and the same PKCE flow used by an MCP client.
 func (t *Tool) SimulateMCPLogin(ctx context.Context, resourceURL, username, password string) (string, error) {
@@ -972,6 +1083,9 @@ func generatePKCE() (verifier, challenge string, err error) {
 //
 //	<form id="kc-form-login" ... action="https://keycloak/realms/xxx/login-actions/authenticate?...">
 var kcLoginFormActionRe = regexp.MustCompile(`action="(https?://[^"]+/login-actions/authenticate[^"]*)"`)
+var kcAnyFormActionRe = regexp.MustCompile(`(?s)<form[^>]+action="(https?://[^"]+/login-actions/[^"]*)"[^>]*>(.*?)</form>`)
+var kcInputTagRe = regexp.MustCompile(`(?s)<input\b[^>]*>`)
+var kcInputAttributeRe = regexp.MustCompile(`([A-Za-z:-]+)="([^"]*)"`)
 
 // extractKCLoginFormAction parses a KC login page HTML body and returns the form action
 // URL, or an empty string if the body is not a KC login form.
@@ -982,4 +1096,24 @@ func extractKCLoginFormAction(body []byte) string {
 	}
 	// KC HTML-encodes & as &amp; in attribute values.
 	return strings.ReplaceAll(string(matches[1]), "&amp;", "&")
+}
+
+// extractKCActionForm returns a required-action form action and its hidden
+// inputs. Keycloak carries the login transaction in those hidden fields.
+func extractKCActionForm(body []byte) (string, url.Values) {
+	matches := kcAnyFormActionRe.FindSubmatch(body)
+	if len(matches) < 3 {
+		return "", nil
+	}
+	form := url.Values{}
+	for _, tag := range kcInputTagRe.FindAll(matches[2], -1) {
+		attributes := map[string]string{}
+		for _, attribute := range kcInputAttributeRe.FindAllSubmatch(tag, -1) {
+			attributes[string(attribute[1])] = string(attribute[2])
+		}
+		if attributes["type"] == "hidden" && attributes["name"] != "" {
+			form.Set(attributes["name"], attributes["value"])
+		}
+	}
+	return strings.ReplaceAll(string(matches[1]), "&amp;", "&"), form
 }

@@ -379,11 +379,6 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Optional
 	ComputeNetworkAttachmentStatuses []ComputeNetworkAttachmentStatus `json:"computeNetworkAttachmentStatuses,omitempty"`
 
-	// IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
-	// Populated when the instance is ready (phase Running).
-	// +kubebuilder:validation:Optional
-	IPAddress string `json:"ipAddress,omitempty"`
-
 	// Interfaces reports the running VMI's OSAC-managed interfaces, independent of attachment readiness.
 	// +kubebuilder:validation:Optional
 	Interfaces []ComputeInstanceInterfaceStatus `json:"interfaces,omitempty"`
@@ -427,7 +422,7 @@ type ComputeNetworkAttachmentStatus struct {
 // +kubebuilder:printcolumn:name="OS",type=string,JSONPath=`.spec.guestOSFamily`
 // +kubebuilder:printcolumn:name="RunStrategy",type=string,JSONPath=`.spec.runStrategy`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.ipAddress`
+// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.interfaces[0].ipAddress`
 // +kubebuilder:printcolumn:name="ExternalIP",type=string,JSONPath=`.status.externalIPAddress`,priority=1
 
 // ComputeInstance is the Schema for the computeinstances API

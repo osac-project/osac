@@ -99,7 +99,7 @@ func newComputeInstanceFeedbackBridge(hubClient clnt.Client, ciClient privatev1.
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					feedbackStatusConditionsPath, feedbackStatusStatePath, feedbackStatusStateTransitionTimePath,
-					"status.external_ip_address", "status.internal_ip_address", "status.interfaces",
+					"status.external_ip_address", "status.interfaces",
 					"status.compute_network_attachment_statuses", "status.last_restarted_at",
 					"status.instance_type", "status.instance_type_transition_time",
 				}},
@@ -279,7 +279,6 @@ func findComputeInstanceCondition(remote *privatev1.ComputeInstance, kind privat
 
 func syncCIIPAddresses(obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
 	remote.GetStatus().SetExternalIpAddress(obj.Status.ExternalIPAddress)
-	remote.GetStatus().SetInternalIpAddress(obj.Status.IPAddress)
 	statuses := make([]*privatev1.ComputeNetworkAttachmentStatus, 0, len(obj.Status.ComputeNetworkAttachmentStatuses))
 	for _, status := range obj.Status.ComputeNetworkAttachmentStatuses {
 		statuses = append(statuses, privatev1.ComputeNetworkAttachmentStatus_builder{

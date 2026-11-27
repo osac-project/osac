@@ -60,12 +60,14 @@ func (ci *ComputeInstance) GetTenantReferenceNamespace() string {
 	return ci.Status.TenantReference.Namespace
 }
 
-func (ci *ComputeInstance) SetIPAddress(ip string) {
-	ci.Status.IPAddress = ip
-}
-
+// GetIPAddress returns the first observed VM interface IPv4 address, if available.
 func (ci *ComputeInstance) GetIPAddress() string {
-	return ci.Status.IPAddress
+	for _, iface := range ci.Status.Interfaces {
+		if iface.IPAddress != "" {
+			return iface.IPAddress
+		}
+	}
+	return ""
 }
 
 func (ci *ComputeInstance) SetExternalIPAddress(ip string) {

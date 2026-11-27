@@ -873,27 +873,11 @@ func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, 
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	result, err := r.reconcileIPStatus(ctx, instance, na, vmi)
-	if err != nil {
-		return result, err
-	}
-	ifaceName := vmNetworkTenant
-	if !r.provisioningEnabled() {
-		ifaceName = vmNetworkDefault
-	}
-	instance.Status.Interfaces = observedVMIInterfaces(vmi, ifaceName, instance.Status.IPAddress)
-	return result, nil
-}
-
-// reconcileIPStatus accepts the VM address and maintains the existing IP and readiness projections.
-func (r *ComputeInstanceReconciler) reconcileIPStatus(ctx context.Context, instance *v1alpha1.ComputeInstance,
-	na *v1alpha1.NetworkAttachment, vmi *kubevirtv1.VirtualMachineInstance) (ctrl.Result, error) {
 	enabled := r.provisioningEnabled()
 	failed := na != nil && networkAttachmentFailed(na)
-	oldAddress := instance.Status.IPAddress
 	if vmi == nil {
 		instance.Status.ComputeNetworkAttachmentStatuses = nil
-		instance.SetIPAddress("")
+		instance.Status.Interfaces = nil
 		if enabled && !failed {
 			r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonVMNotRunning, "the VM is not running")
 		}
@@ -902,7 +886,8 @@ func (r *ComputeInstanceReconciler) reconcileIPStatus(ctx context.Context, insta
 
 	if !enabled {
 		instance.Status.ComputeNetworkAttachmentStatuses = nil
-		instance.SetIPAddress(firstIPv4OfInterface(vmi, vmNetworkDefault, nil))
+		address := firstIPv4OfInterface(vmi, vmNetworkDefault, nil)
+		instance.Status.Interfaces = observedVMIInterfaces(vmi, vmNetworkDefault, address)
 		return ctrl.Result{}, nil
 	}
 
@@ -919,14 +904,16 @@ func (r *ComputeInstanceReconciler) reconcileIPStatus(ctx context.Context, insta
 	if len(overlay) > 0 {
 		address = firstIPv4OfInterface(vmi, vmNetworkTenant, overlay)
 	}
+	if address == "" && len(overlay) == 0 && keepsValidatedAddress(instance, vmi, subnetID) {
+		// The range went away under a VM whose validated address is still reported.
+		// Keep projecting that address and don't change readiness. Only new addresses wait.
+		instance.Status.Interfaces = observedVMIInterfaces(vmi, vmNetworkTenant, instance.Status.ComputeNetworkAttachmentStatuses[0].IPAddress)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+	oldAddress := instance.GetIPAddress()
+	instance.Status.Interfaces = observedVMIInterfaces(vmi, vmNetworkTenant, address)
 	if address == "" {
-		if len(overlay) == 0 && keepsValidatedAddress(instance, vmi, subnetID) {
-			// The range went away under a VM whose address was validated against it and is
-			// still reported: keep the address and the condition. Only new addresses wait.
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
 		instance.Status.ComputeNetworkAttachmentStatuses = nil
-		instance.SetIPAddress("")
 		if len(overlay) == 0 {
 			if !failed {
 				r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonWaitingForIPAddress,
@@ -945,7 +932,6 @@ func (r *ComputeInstanceReconciler) reconcileIPStatus(ctx context.Context, insta
 		SubnetRef: subnetID,
 		IPAddress: address,
 	}}
-	instance.SetIPAddress(address)
 	if bound := boundIPv4Address(na); address != oldAddress && bound != "" && address != bound {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonIPAddressChanged, eventActionReconcile,
 			"the VM address changed from %s to %s; the network attachment keeps %s", bound, address, bound)
@@ -981,7 +967,7 @@ func (r *ComputeInstanceReconciler) reconcileReadyCondition(instance *v1alpha1.C
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 		if oldReadyStatus != metav1.ConditionTrue {
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonReady, eventActionReconcile,
-				"VirtualMachine is ready, IP: %s", instance.Status.IPAddress)
+				"VirtualMachine is ready, IP: %s", instance.GetIPAddress())
 		}
 		return
 	}

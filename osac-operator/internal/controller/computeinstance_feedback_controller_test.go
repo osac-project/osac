@@ -1652,38 +1652,30 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetExternalIpAddress()).To(Equal("10.0.0.100"))
 		})
 
-		It("should sync internal IP address from CR status", func() {
-			computeInstance := &osacv1alpha1.ComputeInstance{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
-			computeInstance.Status.IPAddress = "192.168.1.50"
-			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
-
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(mockClient.updateCalled).To(BeTrue())
-			Expect(mockClient.lastUpdate.GetStatus().GetInternalIpAddress()).To(Equal("192.168.1.50"))
-		})
-
-		It("should sync both external and internal IP addresses when both are set", func() {
+		It("should sync both the external IP and interface addresses when present", func() {
 			computeInstance := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
 			computeInstance.Status.ExternalIPAddress = "10.0.0.100"
-			computeInstance.Status.IPAddress = "192.168.1.50"
+			computeInstance.Status.Interfaces = []osacv1alpha1.ComputeInstanceInterfaceStatus{{
+				Name: "tenant", IPAddress: "192.168.1.50",
+			}}
 			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
 
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
 			Expect(mockClient.lastUpdate.GetStatus().GetExternalIpAddress()).To(Equal("10.0.0.100"))
-			Expect(mockClient.lastUpdate.GetStatus().GetInternalIpAddress()).To(Equal("192.168.1.50"))
+			interfaces := mockClient.lastUpdate.GetStatus().GetInterfaces()
+			Expect(interfaces).To(HaveLen(1))
+			Expect(interfaces[0].GetIpAddress()).To(Equal("192.168.1.50"))
 		})
 
-		It("should clear IP addresses when neither external IP status nor internal IP is set", func() {
+		It("should clear addresses when neither external IP nor interfaces are set", func() {
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
 			Expect(mockClient.lastUpdate.GetStatus().GetExternalIpAddress()).To(BeEmpty())
-			Expect(mockClient.lastUpdate.GetStatus().GetInternalIpAddress()).To(BeEmpty())
+			Expect(mockClient.lastUpdate.GetStatus().GetInterfaces()).To(BeEmpty())
 		})
 
 		It("should clear external IP when status field is cleared after detach", func() {

@@ -14,5 +14,5 @@ instances:
     name: mock-instance
     template: tpl-small-001
     state: COMPUTE_INSTANCE_STATE_RUNNING
-    internalIpAddress: "192.168.1.100"
+    interfaceIpAddress: "192.168.1.100"
     externalIpAddress: "136.47.228.207"

@@ -40,12 +40,12 @@ type TemplateData struct {
 
 // InstanceData contains compute instance data
 type InstanceData struct {
-	ID                string
-	Name              string
-	Template          string
-	State             publicv1.ComputeInstanceState
-	InternalIPAddress string
-	ExternalIPAddress string
+	ID                 string
+	Name               string
+	Template           string
+	State              publicv1.ComputeInstanceState
+	InterfaceIPAddress string
+	ExternalIPAddress  string
 }
 
 // YAML parsing structures
@@ -64,12 +64,12 @@ type templateFile struct {
 }
 
 type instanceFile struct {
-	ID                string `yaml:"id"`
-	Name              string `yaml:"name"`
-	Template          string `yaml:"template"`
-	State             string `yaml:"state"`
-	InternalIPAddress string `yaml:"internalIpAddress"`
-	ExternalIPAddress string `yaml:"externalIpAddress"`
+	ID                 string `yaml:"id"`
+	Name               string `yaml:"name"`
+	Template           string `yaml:"template"`
+	State              string `yaml:"state"`
+	InterfaceIPAddress string `yaml:"interfaceIpAddress"`
+	ExternalIPAddress  string `yaml:"externalIpAddress"`
 }
 
 // LoadComputeInstanceScenarioFromFile loads a compute instance scenario from a YAML file
@@ -111,12 +111,12 @@ func (f *computeInstanceScenarioFile) toScenario() (*ComputeInstanceScenario, er
 			return nil, fmt.Errorf("invalid compute instance state %q for instance %q", inst.State, inst.ID)
 		}
 		scenario.Instances[i] = &InstanceData{
-			ID:                inst.ID,
-			Name:              inst.Name,
-			Template:          inst.Template,
-			State:             publicv1.ComputeInstanceState(rawState),
-			InternalIPAddress: inst.InternalIPAddress,
-			ExternalIPAddress: inst.ExternalIPAddress,
+			ID:                 inst.ID,
+			Name:               inst.Name,
+			Template:           inst.Template,
+			State:              publicv1.ComputeInstanceState(rawState),
+			InterfaceIPAddress: inst.InterfaceIPAddress,
+			ExternalIPAddress:  inst.ExternalIPAddress,
 		}
 	}
 
@@ -137,6 +137,10 @@ func (t *TemplateData) ToProtoTemplate() *publicv1.ComputeInstanceTemplate {
 
 // ToProtoInstance converts InstanceData to a proto ComputeInstance
 func (i *InstanceData) ToProtoInstance() *publicv1.ComputeInstance {
+	var interfaces []*publicv1.ComputeInstanceInterfaceStatus
+	if i.InterfaceIPAddress != "" {
+		interfaces = []*publicv1.ComputeInstanceInterfaceStatus{{Name: "default", IpAddress: i.InterfaceIPAddress}}
+	}
 	return &publicv1.ComputeInstance{
 		Id: i.ID,
 		Metadata: &publicv1.Metadata{
@@ -147,7 +151,7 @@ func (i *InstanceData) ToProtoInstance() *publicv1.ComputeInstance {
 		},
 		Status: &publicv1.ComputeInstanceStatus{
 			State:             i.State,
-			InternalIpAddress: i.InternalIPAddress,
+			Interfaces:        interfaces,
 			ExternalIpAddress: i.ExternalIPAddress,
 		},
 	}

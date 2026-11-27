@@ -231,7 +231,7 @@ def check_schema() -> None:
     )
     check_rejected(
         ["--set", "service.mcp.enabled=true"],
-        "mcp is not allowed",
+        "additional properties 'mcp' not allowed",
     )
     check_rejected(
         ["--set", "global.mcp.limits.requestSize=not-a-quantity"],

@@ -17,7 +17,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -112,10 +114,21 @@ var _ = Describe("runtime limits", func() {
 	})
 
 	It("rejects unsupported request-size spellings and non-positive values", func() {
-		for _, value := range []string{"64ki", "not-a-quantity", "0", "-1Ki"} {
+		for _, value := range []string{
+			"64ki", "not-a-quantity", "0", "-1Ki", "18446744073709551617",
+		} {
 			_, err := parseRequestBodyLimit(value)
 			Expect(err).To(HaveOccurred(), value)
 		}
+	})
+
+	It("forwards runtime-limit options through NewHandler", func() {
+		validator := auth.NewMockJwtValidator(gomock.NewController(GinkgoT()))
+		_, err := NewHandler(
+			ServerDeps{}, validator, "", "", testExchanger,
+			WithRuntimeLimits(RuntimeLimits{RequestBodySize: 1, Concurrency: 0, Timeout: time.Second}),
+		)
+		Expect(err).To(MatchError("MCP concurrency limit must be positive"))
 	})
 
 	It("rejects invalid runtime limits", func() {
@@ -146,6 +159,26 @@ var _ = Describe("runtime limits", func() {
 			defer close(completed)
 			handler.ServeHTTP(recorder, request)
 		}()
+		Eventually(completed).Should(BeClosed())
+	})
+
+	It("interrupts an incomplete request body over a real connection", func() {
+		completed := make(chan struct{})
+		handler := newRuntimeLimitsMiddleware(1, 20*time.Millisecond)(http.HandlerFunc(func(
+			writer http.ResponseWriter, request *http.Request,
+		) {
+			defer close(completed)
+			_, _ = io.Copy(io.Discard, request.Body)
+		}))
+		server := httptest.NewServer(handler)
+		DeferCleanup(server.Close)
+
+		connection, err := net.Dial("tcp", server.Listener.Addr().String())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(connection.Close)
+		_, err = connection.Write([]byte("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nshort"))
+		Expect(err).ToNot(HaveOccurred())
+
 		Eventually(completed).Should(BeClosed())
 	})
 

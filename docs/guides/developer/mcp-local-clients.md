@@ -48,10 +48,12 @@ make -C osac-installer install-infra PLATFORM=kind PROFILE="$PROFILE" NS=osac
 
 The MCP client's access token is scoped to the MCP URL; the server exchanges
 it for a separate API token for the same user when a tool runs.
-If you change the MCP host or port, set `global.mcp.exchangeClientID` on
-`install-osac` to the external HTTPS URL, including its nonstandard port and a
-trailing `/`; the infrastructure fixtures derive the Keycloak client ID from
-that same value. The connection URL used by Codex or Inspector may omit that
+If you change the MCP host or port, set
+`global.mcp.exchangeClientID=<external-https-url-with-trailing-slash>` on both
+Helm releases: add it to `INFRA_VALUES_EXTRA` for `install-infra` and to
+`EXTRA_HELM_ARGS` for `install-osac`. Also set
+`global.mcp.publicURL=<external-https-url-with-trailing-slash>` on
+`install-osac`. The connection URL used by Codex or Inspector may omit that
 slash; the OAuth resource identifier must be identical in Keycloak, the MCP
 metadata, and the exchange client ID.
 

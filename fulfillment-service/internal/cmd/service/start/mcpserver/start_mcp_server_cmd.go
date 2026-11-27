@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -379,6 +380,9 @@ func parseRequestBodyLimit(value string) (int64, error) {
 	}
 	if quantity.IsZero() || quantity.Sign() < 0 {
 		return 0, fmt.Errorf("--mcp-request-body-limit must be positive, got %q", value)
+	}
+	if quantity.CmpInt64(math.MaxInt64) > 0 {
+		return 0, fmt.Errorf("--mcp-request-body-limit is too large, got %q", value)
 	}
 	return quantity.Value(), nil
 }
@@ -1007,7 +1011,7 @@ func NewHandler(
 	exchanger TokenExchanger,
 	options ...HandlerOption,
 ) (http.Handler, error) {
-	return NewHandlerWithOptions(deps, validator, oauthAuthorizationServer, oauthResourceURL, exchanger)
+	return NewHandlerWithOptions(deps, validator, oauthAuthorizationServer, oauthResourceURL, exchanger, options...)
 }
 
 // NewHandlerWithOptions builds the MCP HTTP handler with custom runtime limits.
@@ -1103,6 +1107,15 @@ func newRuntimeLimitsMiddleware(maxConcurrency int, timeout time.Duration) func(
 				http.Error(writer, "MCP server is busy", http.StatusServiceUnavailable)
 				return
 			}
+			responseController := http.NewResponseController(writer)
+			if err := responseController.SetReadDeadline(time.Now().Add(timeout)); err != nil &&
+				!errors.Is(err, http.ErrNotSupported) {
+				http.Error(writer, "MCP server cannot set a request deadline", http.StatusInternalServerError)
+				return
+			}
+			defer func() {
+				_ = responseController.SetReadDeadline(time.Time{})
+			}()
 			ctx, cancel := context.WithTimeout(request.Context(), timeout)
 			defer cancel()
 			next.ServeHTTP(writer, request.WithContext(ctx))

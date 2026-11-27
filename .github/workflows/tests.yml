@@ -287,7 +287,7 @@ jobs:
           echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 mcp.osac.localhost' | sudo tee -a /etc/hosts >/dev/null
-          make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+          python3 .github/scripts/fulfillment_ci_logs.py make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-fulfillment-service' && failure()
         run: |

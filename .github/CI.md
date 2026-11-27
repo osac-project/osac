@@ -132,6 +132,14 @@ flake-detection campaigns keep one execution per leg.
 
 A rule that a change must also add or change tests is not enforced: `CI` checks that the tests which exist pass.
 
+The fulfillment integration step captures the verbose Make and Ginkgo output in a private temporary file on the
+runner. The `it-logs/fulfillment-test.log` transcript in the existing artifact records recognized build, install and
+Ginkgo events as fixed labels, along with the Make exit status. It omits command arguments, application output,
+failure payloads and unrecognized lines. On failure the run summary shows Ginkgo phases, failure types and, where
+available, spec names and locations verified against checked-in test source. If a phase report is missing or
+incomplete, the summary says so and points to the artifact. The existing reports and cluster diagnostics retain
+their own collection paths.
+
 ## What you see on a pull request
 
 `CI` is one check. Open it to see which parts ran: a part your change does not touch shows as skipped inside that run,

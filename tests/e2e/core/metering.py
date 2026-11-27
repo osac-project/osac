@@ -79,6 +79,11 @@ def parse_time(s: str) -> datetime:
 # the two allow one second of cross-clock truncation.
 CR_STAMP_TOLERANCE = timedelta(seconds=1)
 
+# Release observations are taken on the test runner's clock after the resource
+# is confirmed gone, so they include polling delay and cross-clock skew. Allow
+# two minutes before calling a later billing end an overrun.
+RELEASE_STAMP_TOLERANCE = timedelta(minutes=2)
+
 
 def usage_interval(event: dict[str, Any]) -> tuple[datetime, datetime, Decimal]:
     """A heartbeat's usage interval and its quantity."""

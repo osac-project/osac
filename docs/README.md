@@ -30,6 +30,9 @@ for account administration, access grants, credential rotation, and workload aut
 - [Metering and billing](guides/admin/metering-and-billing.md): what metering
   publishes, granting a billing reader, the reading rule, and billing
   integration.
+- [Networking](networking/README.md): overview of tenant networking, the
+  network backends (Fabric and Kubernetes Managers), and which combinations
+  support VMs, bare metal, clusters, and east-west fabrics.
 - [Storage](storage/): concepts and configuration for tenant storage:
   StorageBackends, StorageTiers, ownership models, tenancy models, provider
   integrations, and tenant onboarding.

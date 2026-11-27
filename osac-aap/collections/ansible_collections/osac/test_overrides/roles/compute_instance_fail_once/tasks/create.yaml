@@ -1,0 +1,67 @@
+---
+- name: Check that the QE runner armed the retry fixture
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ compute_instance.metadata.namespace }}"
+    name: osac-7812-retry-armed
+  register: retry_fixture_arm
+
+- name: Require the dedicated QE fixture
+  ansible.builtin.assert:
+    that: retry_fixture_arm.resources | length == 1
+    fail_msg: The OSAC-7812 QE fixture has not been armed in the hub namespace.
+
+- name: Read the current provisioning attempt from the hub
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    namespace: "{{ compute_instance.metadata.namespace }}"
+    name: "{{ compute_instance.metadata.name }}"
+  register: retry_instance
+  no_log: true
+
+- name: Select the provisioning attempt
+  ansible.builtin.set_fact:
+    retry_attempt: >-
+      {{ (retry_instance.resources | first).status.jobs
+         | selectattr('task', 'equalto', 'provision')
+         | selectattr('manager', 'equalto', 'none')
+         | map(attribute='attempt') | first | int }}
+
+- name: Require the test to use exactly two attempts
+  ansible.builtin.assert:
+    that: retry_attempt | int in [1, 2]
+    fail_msg: This test template supports one controlled failure and one recovery attempt.
+
+- name: Fail the first provisioning attempt before creating the VM
+  when: retry_attempt | int == 1
+  block:
+    - name: Publish the controlled retryable AAP result
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_error:
+            message: OSAC-7812 controlled provider diagnostic
+            retryable: true
+
+    - name: End the first job as failed
+      ansible.builtin.fail:
+        msg: OSAC-7812 controlled provisioning failure
+
+- name: Wait for QE to observe the running retry
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ compute_instance.metadata.namespace }}"
+    name: "osac-7812-release-{{ compute_instance.metadata.name }}"
+  register: retry_gate
+  until: retry_gate.resources | length == 1
+  retries: 60
+  delay: 5
+
+- name: Provision the instance with the normal VM provider role
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_virt_vm
+    tasks_from: create

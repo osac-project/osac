@@ -121,7 +121,7 @@ message RoleBindingsDeleteRequest {
 }
 
 // Response message for deleting a role binding.
-message RoleBindingsDeleteResponse {}
+message RoleBindingsDeleteResponse { RoleBinding object = 1; }
 
 // Service for managing role bindings.
 //
@@ -161,6 +161,6 @@ service RoleBindings {
 
   // Deletes a role binding. This operation is only available to administrators.
   rpc Delete(RoleBindingsDeleteRequest) returns (RoleBindingsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/role_bindings/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/role_bindings/{id}" response_body: "object"};
   }
 }

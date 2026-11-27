@@ -286,12 +286,25 @@ func (s *IdentityProvidersServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.private.Delete(ctx, privateRequest)
+	privateResponse, err := s.private.Delete(ctx, privateRequest)
 	if err != nil {
+		return nil, err
+	}
+
+	privateObject := privateResponse.GetObject()
+	publicObject := &publicv1.IdentityProvider{}
+	err = s.outMapper.Copy(ctx, privateObject, publicObject)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private identity provider to public",
+			slog.Any("error", err),
+		)
 		return nil, err
 	}
 
 	// Create the public response:
 	response = &publicv1.IdentityProvidersDeleteResponse{}
+	response.SetObject(publicObject)
 	return
 }

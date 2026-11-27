@@ -290,7 +290,11 @@ func (s *PrivateComputeInstanceCatalogItemsServer) validateAndCanonicalizeTempla
 
 func (s *PrivateComputeInstanceCatalogItemsServer) Delete(ctx context.Context,
 	request *privatev1.ComputeInstanceCatalogItemsDeleteRequest) (response *privatev1.ComputeInstanceCatalogItemsDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.ComputeInstanceCatalogItemsDeleteResponse{Object: object}
 	return
 }
 

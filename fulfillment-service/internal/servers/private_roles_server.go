@@ -161,7 +161,12 @@ func (s *PrivateRolesServer) Delete(ctx context.Context,
 			return
 		}
 	}
-	err = s.generic.Delete(ctx, request, &response)
+
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.RolesDeleteResponse{Object: object}
 	return
 }
 

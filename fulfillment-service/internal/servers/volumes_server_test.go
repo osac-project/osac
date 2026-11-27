@@ -587,14 +587,18 @@ var _ = Describe("Public volumes server", func() {
 			Expect(st.Message()).To(ContainSubstring("object identifier is mandatory"))
 		})
 
-		// TC-D1: Delete of a created volume returns success.
+		// TC-D1: Delete of a created volume returns the deleted object.
 		It("Deletes a volume through the public API", func() {
 			created := createVolumeViaPublic("pub-vol-delete")
 
-			_, err := server.Delete(ctx, publicv1.VolumesDeleteRequest_builder{
+			deleteResponse, err := server.Delete(ctx, publicv1.VolumesDeleteRequest_builder{
 				Id: created.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			deleted := deleteResponse.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal(created.GetId()))
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
 
 		// TC-D2: Delete of a non-existent volume returns NotFound.

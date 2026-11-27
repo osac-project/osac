@@ -133,8 +133,9 @@ var _ = Describe("Public Users Server", func() {
 		Expect(getResp.Object.Metadata.Name).To(Equal("test-user"))
 	})
 
-	It("Deletes a user", func() {
+	It("Deletes a user and returns the pruned object", func() {
 		// Create a user:
+		testPassword := "secret123"
 		createReq := &publicv1.UsersCreateRequest{
 			Object: &publicv1.User{
 				Metadata: &publicv1.Metadata{
@@ -143,6 +144,9 @@ var _ = Describe("Public Users Server", func() {
 				Spec: &publicv1.UserSpec{
 					Username: "testuser",
 					Email:    "test@example.com",
+					Credentials: &publicv1.UserCredentials{
+						Password: &testPassword,
+					},
 				},
 			},
 		}
@@ -150,10 +154,15 @@ var _ = Describe("Public Users Server", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		// Delete the user:
-		_, err = publicServer.Delete(ctx, &publicv1.UsersDeleteRequest{
+		deleteResp, err := publicServer.Delete(ctx, &publicv1.UsersDeleteRequest{
 			Id: createResp.Object.Id,
 		})
 		Expect(err).ToNot(HaveOccurred())
+		deleted := deleteResp.GetObject()
+		Expect(deleted).ToNot(BeNil())
+		Expect(deleted.GetId()).To(Equal(createResp.Object.Id))
+		Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+		Expect(deleted.GetSpec().HasCredentials()).To(BeFalse())
 	})
 
 	It("Updates a user", func() {

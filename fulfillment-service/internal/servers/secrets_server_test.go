@@ -21,6 +21,7 @@ import (
 	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -488,17 +489,31 @@ var _ = Describe("Secrets Server", func() {
 				deleteFunc: func(_ context.Context,
 					_ *privatev1.SecretsDeleteRequest) (*privatev1.SecretsDeleteResponse, error) {
 					deleteCalled = true
-					return &privatev1.SecretsDeleteResponse{}, nil
+					return privatev1.SecretsDeleteResponse_builder{
+						Object: privatev1.Secret_builder{
+							Id:      "vault-secret",
+							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+							Metadata: privatev1.Metadata_builder{
+								DeletionTimestamp: timestamppb.Now(),
+							}.Build(),
+							Data: map[string][]byte{"key": []byte("value")},
+						}.Build(),
+					}.Build(), nil
 				},
 			}
 
 			server := newTestSecretsServer(mock)
-			_, err := server.Delete(ctx, publicv1.SecretsDeleteRequest_builder{
+			response, err := server.Delete(ctx, publicv1.SecretsDeleteRequest_builder{
 				Id: "vault-secret",
 			}.Build())
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(deleteCalled).To(BeTrue())
+			deleted := response.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal("vault-secret"))
+			Expect(deleted.GetData()).To(BeEmpty())
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
 	})
 })

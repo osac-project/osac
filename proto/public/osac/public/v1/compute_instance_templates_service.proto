@@ -108,7 +108,7 @@ message ComputeInstanceTemplatesDeleteRequest {
   string id = 1;
 }
 
-message ComputeInstanceTemplatesDeleteResponse {}
+message ComputeInstanceTemplatesDeleteResponse { ComputeInstanceTemplate object = 1; }
 
 service ComputeInstanceTemplates {
   // Retrieves the list of compute instance templates.
@@ -144,6 +144,6 @@ service ComputeInstanceTemplates {
 
   // Deletes a compute instance template.
   rpc Delete(ComputeInstanceTemplatesDeleteRequest) returns (ComputeInstanceTemplatesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/compute_instance_templates/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/compute_instance_templates/{id}" response_body: "object"};
   }
 }

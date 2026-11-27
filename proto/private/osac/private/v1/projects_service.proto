@@ -124,7 +124,7 @@ message ProjectsDeleteRequest {
 }
 
 // Response for a successful project deletion.
-message ProjectsDeleteResponse {}
+message ProjectsDeleteResponse { Project object = 1; }
 
 // Request to signal a project for reconciliation.
 message ProjectsSignalRequest {
@@ -172,7 +172,7 @@ service Projects {
 
   // Deletes a project.
   rpc Delete(ProjectsDeleteRequest) returns (ProjectsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/projects/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/projects/{id}" response_body: "object"};
   }
 
   // Signals a project for reconciliation.

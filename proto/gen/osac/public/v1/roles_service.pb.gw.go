@@ -345,7 +345,7 @@ func RegisterRolesHandlerServer(ctx context.Context, mux *runtime.ServeMux, serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Roles_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Roles_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Roles_Delete_0{resp.(*RolesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterRolesHandlerClient(ctx context.Context, mux *runtime.ServeMux, clie
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Roles_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Roles_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Roles_Delete_0{resp.(*RolesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_Roles_Update_0 struct {
 }
 
 func (m response_Roles_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_Roles_Delete_0 struct {
+	*RolesDeleteResponse
+}
+
+func (m response_Roles_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

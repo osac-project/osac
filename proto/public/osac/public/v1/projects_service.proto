@@ -120,7 +120,7 @@ message ProjectsDeleteRequest {
 }
 
 // Response for a successful project deletion.
-message ProjectsDeleteResponse {}
+message ProjectsDeleteResponse { Project object = 1; }
 
 service Projects {
   // Retrieves the list of projects.
@@ -156,6 +156,6 @@ service Projects {
 
   // Deletes a project.
   rpc Delete(ProjectsDeleteRequest) returns (ProjectsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/projects/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/projects/{id}" response_body: "object"};
   }
 }

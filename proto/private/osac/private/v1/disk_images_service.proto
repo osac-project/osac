@@ -106,7 +106,7 @@ message DiskImagesDeleteRequest {
   string id = 1;
 }
 
-message DiskImagesDeleteResponse {}
+message DiskImagesDeleteResponse { DiskImage object = 1; }
 
 message DiskImagesSignalRequest {
   option (cleanapi.message).private = true;
@@ -151,7 +151,7 @@ service DiskImages {
 
   // Deletes a disk image.
   rpc Delete(DiskImagesDeleteRequest) returns (DiskImagesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/disk_images/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/disk_images/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

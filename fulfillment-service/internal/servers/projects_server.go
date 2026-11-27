@@ -250,11 +250,20 @@ func (s *ProjectsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.ProjectsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.private.Delete(ctx, privateRequest)
+	privateResponse, err := s.private.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	publicObject := &publicv1.Project{}
+	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicObject)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private project to public", slog.Any("error", err))
+		return nil, err
+	}
+
+	// Create the public response:
 	response = &publicv1.ProjectsDeleteResponse{}
+	response.SetObject(publicObject)
 	return
 }

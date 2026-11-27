@@ -304,11 +304,25 @@ func (s *RoleBindingsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.RoleBindingsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateRoleBinding := privateResponse.GetObject()
+	publicRoleBinding := &publicv1.RoleBinding{}
+	err = s.outMapper.Copy(ctx, privateRoleBinding, publicRoleBinding)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private role binding to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process role binding")
+	}
+
+	// Create the public response:
 	response = &publicv1.RoleBindingsDeleteResponse{}
+	response.SetObject(publicRoleBinding)
 	return
 }

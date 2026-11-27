@@ -330,7 +330,9 @@ var _ = Describe("handleGetResourceOutcome", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output.LifecycleState).To(Equal("unknown"))
-		Expect(output.Unknowns).To(ConsistOf("readiness_freshness", "state_transition_time"))
+		Expect(output.Unknowns).To(ConsistOf(
+			"readiness_freshness", "state_transition_time", "internal_ip_address", "external_ip_address",
+		))
 		Expect(output.NextActions).To(BeEmpty())
 	})
 

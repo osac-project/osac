@@ -49,6 +49,12 @@ func computeInstanceOutcome(item *publicv1.ComputeInstance) GetResourceOutcomeOu
 	outcome.Timing.LastRestartedAt = formatTimestamp(status.GetLastRestartedAt())
 	appendStringFact(&outcome, "internal_ip_address", status.GetInternalIpAddress())
 	appendStringFact(&outcome, "external_ip_address", status.GetExternalIpAddress())
+	if status.GetInternalIpAddress() == "" {
+		outcome.Unknowns = append(outcome.Unknowns, "internal_ip_address")
+	}
+	if status.GetExternalIpAddress() == "" {
+		outcome.Unknowns = append(outcome.Unknowns, "external_ip_address")
+	}
 	if status.GetInstanceType() != nil {
 		appendStringFact(&outcome, "instance_type_id", status.GetInstanceType().GetId())
 	}

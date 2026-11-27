@@ -4496,7 +4496,7 @@ var _ = Describe("Private compute instances server", func() {
 						Spec: privatev1.ComputeInstanceSpec_builder{
 							Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 							InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-							DiskImage:    &privatev1.DiskImageReference{Id: diskImageKey},
+							DiskImage:    &privatev1.DiskImageReference{Id: diskImageKey, Tenant: "shared"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(20),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
@@ -4596,7 +4596,7 @@ var _ = Describe("Private compute instances server", func() {
 						Spec: privatev1.ComputeInstanceSpec_builder{
 							Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "bare-template-di-by-name"}.Build(),
 							InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-							DiskImage:    &privatev1.DiskImageReference{Name: "di-by-name"},
+							DiskImage:    &privatev1.DiskImageReference{Name: "di-by-name", Tenant: "shared"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(20),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),

@@ -69,7 +69,7 @@ var _ = Describe("Managed service-account authorization", Serial, func() {
 			Object: publicv1.RoleBinding_builder{
 				Metadata: publicv1.Metadata_builder{Name: "authz-" + uuid.New()[24:]}.Build(),
 				Spec: publicv1.RoleBindingSpec_builder{
-					Role: publicv1.RoleReference_builder{Id: roles["tenant-automation"]}.Build(),
+					Role: publicv1.RoleReference_builder{Id: roles["tenant-automation"], Tenant: "shared"}.Build(),
 					ServiceAccounts: []*publicv1.ServiceAccountReference{
 						publicv1.ServiceAccountReference_builder{Id: accountID}.Build(),
 					},
@@ -91,7 +91,7 @@ var _ = Describe("Managed service-account authorization", Serial, func() {
 
 		_, err = roleBindings.Update(ctx, publicv1.RoleBindingsUpdateRequest_builder{
 			Object: publicv1.RoleBinding_builder{Id: bindingID, Spec: publicv1.RoleBindingSpec_builder{
-				Role: publicv1.RoleReference_builder{Id: roles["tenant-automation"]}.Build(),
+				Role: publicv1.RoleReference_builder{Id: roles["tenant-automation"], Tenant: "shared"}.Build(),
 			}.Build()}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.service_accounts"}},
 		}.Build())

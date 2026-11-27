@@ -115,8 +115,8 @@ var _ = Describe("Catalog item views", func() {
 					"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 3, BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Name: "compute", Tenant: "shared"}.Build()}.Build(),
 				}}.Build()}.Build(),
 				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{Locked: publicv1.AddOnOperatorReferenceList_builder{Items: []*publicv1.AddOnOperatorReference{
-					publicv1.AddOnOperatorReference_builder{Name: "cert-manager", Shared: true}.Build(),
-					publicv1.AddOnOperatorReference_builder{Name: "openshift-ai", Shared: true}.Build(),
+					publicv1.AddOnOperatorReference_builder{Name: "cert-manager", Tenant: "shared"}.Build(),
+					publicv1.AddOnOperatorReference_builder{Name: "openshift-ai", Tenant: "shared"}.Build(),
 				}}.Build()}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Editable: publicv1.EditableBoolField_builder{DefaultValue: new(false)}.Build()}.Build(),
 				NetworkAttachment:        publicv1.ClusterNetworkAttachmentFieldPolicy_builder{Locked: publicv1.ClusterNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Name: "net"}.Build()}.Build()}.Build(),
@@ -135,7 +135,7 @@ var _ = Describe("Catalog item views", func() {
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{Editable: publicv1.EditableAddOnOperatorReferenceList_builder{
 					DefaultValue: publicv1.AddOnOperatorReferenceList_builder{Items: []*publicv1.AddOnOperatorReference{
-						publicv1.AddOnOperatorReference_builder{Name: "cert-manager", Shared: true}.Build(),
+						publicv1.AddOnOperatorReference_builder{Name: "cert-manager", Tenant: "shared"}.Build(),
 					}}.Build(),
 				}.Build()}.Build(),
 			}.Build(),

@@ -293,8 +293,9 @@ var _ = Describe("buildSpec", func() {
 		c := &runnerContext{}
 		c.args.sshKey = "tenant-login"
 
-		spec, err := c.buildSpec("catalog-item-id", false)
+		spec, err := c.buildSpec("catalog-item-id", "tenant-a", false)
 		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetCatalogItem().GetTenant()).To(Equal("tenant-a"))
 		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
 	})
 
@@ -302,7 +303,7 @@ var _ = Describe("buildSpec", func() {
 		c := &runnerContext{}
 		c.args.sshKey = "name=tenant-login,project=apps"
 
-		spec, err := c.buildSpec("catalog-item-id", false)
+		spec, err := c.buildSpec("catalog-item-id", "tenant-a", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
 		Expect(spec.GetSshKey().GetProject()).To(Equal("apps"))
@@ -312,7 +313,7 @@ var _ = Describe("buildSpec", func() {
 		c := &runnerContext{}
 		c.args.sshKey = "tenant-login,apps"
 
-		_, err := c.buildSpec("catalog-item-id", false)
+		_, err := c.buildSpec("catalog-item-id", "tenant-a", false)
 		Expect(err).To(MatchError(
 			`invalid --ssh-key value "tenant-login,apps": expected a bare name or name=<name>[,project=<project>]`))
 	})
@@ -321,7 +322,7 @@ var _ = Describe("buildSpec", func() {
 		c := &runnerContext{}
 		c.args.diskImage = "rhel-9"
 
-		spec, err := c.buildSpec("catalog-item-id", false)
+		spec, err := c.buildSpec("catalog-item-id", "tenant-a", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetDiskImage().GetName()).To(Equal("rhel-9"))
 	})
@@ -329,7 +330,7 @@ var _ = Describe("buildSpec", func() {
 	It("should leave disk_image unset when the disk-image flag is empty", func() {
 		c := &runnerContext{}
 
-		spec, err := c.buildSpec("catalog-item-id", false)
+		spec, err := c.buildSpec("catalog-item-id", "tenant-a", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
@@ -338,7 +339,7 @@ var _ = Describe("buildSpec", func() {
 		c := &runnerContext{}
 		c.args.setFields = []string{"instance_type.name=bare-metal.large", "instance_type.tenant=shared"}
 
-		spec, err := c.buildSpec("catalog-item-id", false)
+		spec, err := c.buildSpec("catalog-item-id", "tenant-a", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetInstanceType().GetName()).To(Equal("bare-metal.large"))
 		Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
@@ -348,17 +349,17 @@ var _ = Describe("buildSpec", func() {
 		c := &runnerContext{}
 		c.args.instanceType = "standard-bm"
 
-		spec, err := c.buildSpec("catalog-item-id", false)
+		spec, err := c.buildSpec("catalog-item-id", "tenant-a", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetInstanceType().GetName()).To(Equal("standard-bm"))
 		Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
-		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
+		Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
 	})
 
 	It("should leave instance_type unset when the instance-type flag is empty", func() {
 		c := &runnerContext{}
 
-		spec, err := c.buildSpec("catalog-item-id", false)
+		spec, err := c.buildSpec("catalog-item-id", "tenant-a", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.HasInstanceType()).To(BeFalse())
 	})

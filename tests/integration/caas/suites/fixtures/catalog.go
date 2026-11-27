@@ -144,7 +144,7 @@ func ensureWorkerRelease(ctx context.Context, admin *grpc.ClientConn) error {
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Version:   releaseVersion,
 					Image:     ReleaseImage,
-					DiskImage: privatev1.DiskImageReference_builder{Name: imageName, Shared: true}.Build(),
+					DiskImage: privatev1.DiskImageReference_builder{Name: imageName, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build()}.Build(),
 		)
@@ -159,7 +159,7 @@ func ensureWorkerRelease(ctx context.Context, admin *grpc.ClientConn) error {
 		version.GetSpec().GetVersion() != releaseVersion ||
 		version.GetSpec().GetImage() != ReleaseImage ||
 		version.GetSpec().GetDiskImage().GetName() != imageName ||
-		!version.GetSpec().GetDiskImage().GetShared() {
+		version.GetSpec().GetDiskImage().GetTenant() != "shared" {
 		return fmt.Errorf("%s has incompatible ownership, release or worker image", clusterVersionName)
 	}
 
@@ -236,7 +236,7 @@ func ensureClusterTemplate(ctx context.Context, admin, user *grpc.ClientConn, te
 				Title:       "CI OpenShift Cluster",
 				Description: "Production ocp_ci_small template",
 				SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-					Version:          privatev1.ClusterVersionReference_builder{Name: clusterVersionName, Shared: true}.Build(),
+					Version:          privatev1.ClusterVersionReference_builder{Name: clusterVersionName, Tenant: "shared"}.Build(),
 					PullSecretSecret: privatev1.SecretLocalReference_builder{Name: "caas-it-pull-secret"}.Build(),
 					SshKey:           privatev1.SecretReference_builder{Id: sshKey.GetId()}.Build(),
 				}.Build(),
@@ -253,7 +253,7 @@ func ensureClusterTemplate(ctx context.Context, admin, user *grpc.ClientConn, te
 	defaults := clusterTemplate.GetSpecDefaults()
 	if clusterTemplate.GetId() != clusterTemplateID ||
 		defaults.GetVersion().GetName() != clusterVersionName ||
-		!defaults.GetVersion().GetShared() ||
+		defaults.GetVersion().GetTenant() != "shared" ||
 		defaults.GetPullSecretSecret().GetName() != "caas-it-pull-secret" ||
 		defaults.GetSshKey().GetId() != sshKey.GetId() {
 		return fmt.Errorf("caas-it-cluster selects incompatible template defaults")

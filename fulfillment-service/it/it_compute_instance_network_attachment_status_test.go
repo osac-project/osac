@@ -34,7 +34,7 @@ var _ = Describe("Compute instance network attachment status", Label("compute-ne
 			Object: publicv1.ComputeInstance_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 				Spec: publicv1.ComputeInstanceSpec_builder{
-					Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+					Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 				}.Build(),
 			}.Build(),

@@ -167,7 +167,7 @@ PY
 			"@type":    "type.googleapis.com/osac.public.v1.RoleBinding",
 			"metadata": map[string]any{"name": bindingName},
 			"spec": map[string]any{
-				"role":             map[string]string{"id": roles["tenant-automation"]},
+				"role":             map[string]string{"id": roles["tenant-automation"], "tenant": "shared"},
 				"service_accounts": []map[string]string{{"id": accountID}},
 			},
 		})

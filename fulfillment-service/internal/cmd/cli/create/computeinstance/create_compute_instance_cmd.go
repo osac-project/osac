@@ -296,7 +296,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		specResult, specErr := c.buildSpecFromCatalogItem(catalogItem.GetId())
+		specResult, specErr := c.buildSpecFromCatalogItem(
+			catalogItem.GetId(), catalogItem.GetMetadata().GetTenant(),
+		)
 		if specErr != nil {
 			return specErr
 		}
@@ -352,7 +354,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build the spec:
-	spec, err := c.buildSpec(template.GetId(), templateParameterValues)
+	spec, err := c.buildSpec(template.GetId(), template.GetMetadata().GetTenant(), templateParameterValues)
 	if err != nil {
 		return err
 	}
@@ -769,10 +771,10 @@ func (c *runnerContext) convertTextToTemplateParameterValue(ctx context.Context,
 }
 
 // buildSpec constructs the ComputeInstanceSpec from template info and CLI flags.
-func (c *runnerContext) buildSpec(templateID string,
+func (c *runnerContext) buildSpec(templateID, templateTenant string,
 	templateParams map[string]*anypb.Any) (*publicv1.ComputeInstanceSpec, error) {
 	spec := publicv1.ComputeInstanceSpec_builder{
-		Template:           &publicv1.ComputeInstanceTemplateReference{Id: templateID},
+		Template:           &publicv1.ComputeInstanceTemplateReference{Id: templateID, Tenant: templateTenant},
 		TemplateParameters: templateParams,
 	}
 	if c.args.diskImage != "" {
@@ -872,9 +874,11 @@ func (c *runnerContext) applyNetworkingFlags(spec *publicv1.ComputeInstanceSpec_
 }
 
 // buildSpecFromCatalogItem builds the spec for catalog-item-based creation.
-func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv1.ComputeInstanceSpec, error) {
+func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID, catalogItemTenant string) (*publicv1.ComputeInstanceSpec, error) {
 	spec := publicv1.ComputeInstanceSpec_builder{
-		CatalogItem: &publicv1.ComputeInstanceCatalogItemReference{Id: catalogItemID},
+		CatalogItem: &publicv1.ComputeInstanceCatalogItemReference{
+			Id: catalogItemID, Tenant: catalogItemTenant,
+		},
 	}
 	if c.args.diskImage != "" {
 		spec.DiskImage = &publicv1.DiskImageReference{Name: c.args.diskImage}

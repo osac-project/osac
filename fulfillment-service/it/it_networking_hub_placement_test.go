@@ -221,7 +221,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 					Id:       ipID,
 					Metadata: publicv1.Metadata_builder{Name: ipID}.Build(),
 					Spec: publicv1.ExternalIPSpec_builder{
-						Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
+						Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -268,7 +268,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-hub-a-cluster-%s", uuid.New()[24:])}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(instanceTypeID, 1),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
@@ -290,7 +290,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-hub-a-cluster-%s", uuid.New()[24:])}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(instanceTypeID, 1),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
@@ -442,7 +442,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 				Id:       crossHubClusterID,
 				Metadata: publicv1.Metadata_builder{Name: crossHubClusterID}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(instanceTypeID, 1),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),

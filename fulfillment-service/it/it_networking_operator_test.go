@@ -353,7 +353,7 @@ var _ = Describe("Networking with operator", Label(networkingOperatorLabel), fun
 				Object: publicv1.ExternalIP_builder{
 					Metadata: publicv1.Metadata_builder{Name: ndUniqueName("op-eip")}.Build(),
 					Spec: publicv1.ExternalIPSpec_builder{
-						Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
+						Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

@@ -261,7 +261,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		secretID := createCatalogItemUserDataSecretFixture(ctx, usersGroup)
 		instance, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			UserDataSource: publicv1.UserDataSource_builder{
 				Secret: publicv1.SecretLocalReference_builder{Id: secretID}.Build(),
@@ -329,7 +329,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		instance, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
@@ -361,7 +361,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		conn := tool.ExternalView().UserConn()
 		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
-			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
@@ -407,8 +407,8 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		conn := tool.ExternalView().UserConn()
 		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
-			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
-			InstanceType:       publicv1.InstanceTypeReference_builder{Id: firstInstanceType}.Build(),
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
+			InstanceType:       publicv1.InstanceTypeReference_builder{Id: firstInstanceType, Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
@@ -417,7 +417,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 
 		By("updating instance_type to the second type")
 		candidate := proto.Clone(instance).(*publicv1.ComputeInstance)
-		candidate.GetSpec().SetInstanceType(publicv1.InstanceTypeReference_builder{Id: secondInstanceType}.Build())
+		candidate.GetSpec().SetInstanceType(publicv1.InstanceTypeReference_builder{Id: secondInstanceType, Tenant: "shared"}.Build())
 		updateResponse, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 			Object:     candidate,
 			UpdateMask: catalogItemUpdateMask("spec.instance_type"),
@@ -434,7 +434,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		resource, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())

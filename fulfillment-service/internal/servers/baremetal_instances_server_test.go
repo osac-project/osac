@@ -128,7 +128,7 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
@@ -150,7 +150,7 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance-spoofed-status",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
@@ -176,7 +176,7 @@ var _ = Describe("Bare metal instances server", func() {
 				Object: publicv1.BareMetalInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: "deprecated-baremetal-instance"}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						DiskImage:      publicv1.DiskImageReference_builder{Id: "deprecated-bmi-disk-image"}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: "deprecated-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
@@ -201,7 +201,7 @@ var _ = Describe("Bare metal instances server", func() {
 				_, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 					Object: publicv1.BareMetalInstance_builder{
 						Spec: publicv1.BareMetalInstanceSpec_builder{
-							DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+							DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 							CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 							UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						}.Build(),
@@ -225,7 +225,7 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
@@ -249,9 +249,9 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: "default-type", Tenant: "shared"}.Build(),
 						RunStrategy:    new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
@@ -283,9 +283,9 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: "default-type", Tenant: "shared"}.Build(),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
@@ -382,7 +382,7 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
@@ -415,7 +415,7 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),

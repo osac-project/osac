@@ -98,7 +98,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 
 	object := func(name, cpu, image string, byName bool) *privatev1.BareMetalInstance {
 		typeRef := bareMetalInstanceTypeReference("type-" + cpu)
-		imageRef := privatev1.DiskImageReference_builder{Id: "image-" + image, Shared: true}.Build()
+		imageRef := privatev1.DiskImageReference_builder{Id: "image-" + image, Tenant: "shared"}.Build()
 		if byName {
 			typeRef.SetName(typeRef.GetId())
 			typeRef.SetId("")
@@ -145,7 +145,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 	}
 	catalogObject := func(typeMode, imageMode, image string, byName bool) *privatev1.BareMetalInstanceCatalogItem {
 		typeRef := bareMetalInstanceTypeReference("type-amd64")
-		imageRef := privatev1.DiskImageReference_builder{Id: "image-" + image, Shared: true}.Build()
+		imageRef := privatev1.DiskImageReference_builder{Id: "image-" + image, Tenant: "shared"}.Build()
 		if byName {
 			typeRef.SetName(typeRef.GetId())
 			typeRef.SetId("")
@@ -274,7 +274,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 			shared = response.GetObject()
 			item := catalogObject("absent", "locked", "amd64", false)
 			item.GetMetadata().SetTenant("hidden-tenant")
-			item.SetTemplate(privatev1.BareMetalInstanceTemplateReference_builder{Id: shared.GetId(), Shared: true}.Build())
+			item.SetTemplate(privatev1.BareMetalInstanceTemplateReference_builder{Id: shared.GetId(), Tenant: "shared"}.Build())
 			catalog, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{Object: item}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			visibility, err := auth.NewVisibility().AddVisibleTenants(testTenant, auth.SharedTenant).Build()
@@ -460,7 +460,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 		if field == "fields.instance_type" {
 			update.GetFields().SetInstanceType(privatev1.BareMetalInstanceTypeReferenceFieldPolicy_builder{Locked: bareMetalInstanceTypeReference("type-arm64")}.Build())
 		} else {
-			update.GetFields().SetDiskImage(privatev1.DiskImageReferenceFieldPolicy_builder{Locked: privatev1.DiskImageReference_builder{Id: "image-arm64", Shared: true}.Build()}.Build())
+			update.GetFields().SetDiskImage(privatev1.DiskImageReferenceFieldPolicy_builder{Locked: privatev1.DiskImageReference_builder{Id: "image-arm64", Tenant: "shared"}.Build()}.Build())
 		}
 		_, err = catalogServer.Update(ctx, privatev1.BareMetalInstanceCatalogItemsUpdateRequest_builder{Object: update, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{field}}}.Build())
 		assertMismatch(err)
@@ -569,10 +569,10 @@ var _ = Describe("Bare metal architecture admission", func() {
 			imagePolicy := &privatev1.DiskImageReferenceFieldPolicy{}
 			if locked {
 				typePolicy.SetLocked(bareMetalInstanceTypeReference("type-amd64"))
-				imagePolicy.SetLocked(privatev1.DiskImageReference_builder{Id: "image-" + image, Shared: true}.Build())
+				imagePolicy.SetLocked(privatev1.DiskImageReference_builder{Id: "image-" + image, Tenant: "shared"}.Build())
 			} else {
 				typePolicy.SetEditable(privatev1.EditableBareMetalInstanceTypeReferenceField_builder{DefaultValue: bareMetalInstanceTypeReference("type-amd64")}.Build())
-				imagePolicy.SetEditable(privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "image-" + image, Shared: true}.Build()}.Build())
+				imagePolicy.SetEditable(privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "image-" + image, Tenant: "shared"}.Build()}.Build())
 			}
 			// Bypass catalog admission to retain coverage for legacy incompatible offerings.
 			catalog, err := catalogServer.generic.dao.Create().SetObject(privatev1.BareMetalInstanceCatalogItem_builder{
@@ -588,7 +588,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 			obj.GetSpec().ClearDiskImage()
 			if override {
 				obj.GetSpec().SetInstanceType(bareMetalInstanceTypeReference("type-arm64"))
-				obj.GetSpec().SetDiskImage(privatev1.DiskImageReference_builder{Id: "image-" + image, Shared: true}.Build())
+				obj.GetSpec().SetDiskImage(privatev1.DiskImageReference_builder{Id: "image-" + image, Tenant: "shared"}.Build())
 				compatible = image == "arm64"
 			}
 			result, _, err := create(ctx, obj, public)
@@ -711,7 +711,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 		service, err := NewPrivateBareMetalInstancesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(restricted).Build()
 		Expect(err).NotTo(HaveOccurred())
 		obj := object("hidden-request", "amd64", "arm64", byName)
-		obj.GetSpec().GetDiskImage().SetShared(false)
+		obj.GetSpec().GetDiskImage().SetTenant("")
 		if byName {
 			obj.GetSpec().GetDiskImage().SetName("hidden-image")
 		} else {

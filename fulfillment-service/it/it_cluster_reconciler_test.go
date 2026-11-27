@@ -173,11 +173,11 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					AddOnOperators: []*publicv1.AddOnOperatorReference{
-						publicv1.AddOnOperatorReference_builder{Id: operatorID}.Build(),
+						publicv1.AddOnOperatorReference_builder{Id: operatorID, Tenant: "shared"}.Build(),
 					},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
@@ -253,10 +253,10 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: fmt.Sprintf("test-unpublished-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					AddOnOperators: []*publicv1.AddOnOperatorReference{
-						publicv1.AddOnOperatorReference_builder{Id: operatorID}.Build(),
+						publicv1.AddOnOperatorReference_builder{Id: operatorID, Tenant: "shared"}.Build(),
 					},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
@@ -278,7 +278,7 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					TemplateParameters: map[string]*anypb.Any{
@@ -340,14 +340,14 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": publicv1.ClusterNodeSet_builder{
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Shared: true}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Tenant: "shared"}.Build(),
 							Size:                  proto.Int32(3),
 						}.Build(),
 					},
@@ -390,13 +390,13 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: object.GetMetadata().GetName(),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": publicv1.ClusterNodeSet_builder{
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Shared: true}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Tenant: "shared"}.Build(),
 							Size:                  proto.Int32(5),
 						}.Build(),
 					},
@@ -441,7 +441,7 @@ var _ = Describe("Cluster reconciler", func() {
 						Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 						NetworkAttachment: network.clusterAttachment(),
 						NodeSets:          testClusterNodeSets(bmitName, 3),
 						TemplateParameters: map[string]*anypb.Any{

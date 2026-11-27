@@ -254,8 +254,8 @@ var _ = Describe("MCP server", func() {
 				Title:       "MCP compute instance template",
 				Description: "Template for MCP compute instance integration testing",
 				SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-					InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceTypeID}.Build(),
-					DiskImage:    privatev1.DiskImageReference_builder{Id: diskImageID}.Build(),
+					InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceTypeID, Tenant: "shared"}.Build(),
+					DiskImage:    privatev1.DiskImageReference_builder{Id: diskImageID, Tenant: "shared"}.Build(),
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
 						SizeGib:     proto.Int32(20),
 						StorageTier: privatev1.StorageTierReference_builder{Id: storageTierID}.Build(),
@@ -361,7 +361,7 @@ var _ = Describe("MCP server", func() {
 				Title:       "MCP compute instance",
 				Description: "Catalog item for MCP compute instance integration testing",
 				Published:   true,
-				Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+				Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
 					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
 						Editable: privatev1.EditableInstanceTypeReferenceField_builder{}.Build(),
@@ -960,7 +960,7 @@ var _ = Describe("MCP server", func() {
 				Title:       "MCP missing Secret catalog item",
 				Description: "Catalog item for missing-Secret MCP integration testing",
 				Published:   true,
-				Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+				Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
 					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
 						Editable: privatev1.EditableInstanceTypeReferenceField_builder{}.Build(),

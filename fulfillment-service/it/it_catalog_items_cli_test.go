@@ -39,7 +39,7 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			Published: true,
 		}.Build())
 		// The ComputeInstance reconciler resolves the API subnet and security group
@@ -104,19 +104,19 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 		version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 		template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
-			Version: privatev1.ClusterVersionReference_builder{Id: version}.Build(),
+			Version: privatev1.ClusterVersionReference_builder{Id: version, Tenant: "shared"}.Build(),
 		}.Build(), nil)
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-			Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+			Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			Published: true,
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				NetworkAttachment: publicv1.ClusterNetworkAttachmentFieldPolicy_builder{Locked: network.clusterAttachment()}.Build(),
 				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{
 					Items: map[string]*publicv1.ClusterCatalogNodeSet{
 						"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 2,
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 						}.Build(),
 					},
 				}.Build()}.Build(),

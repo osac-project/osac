@@ -613,8 +613,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			remote := remoteWithRequestedType(privatev1.InstanceTypeReference_builder{
 				Id:      "standard-8-32",
 				Name:    "standard-8-32",
-				Project: "other-project",
-				Shared:  true,
+				Project: "other-project", Tenant: "shared",
 			}.Build(), oldStamp)
 
 			syncCIRunningInstanceType(runningCR(false, true), remote)

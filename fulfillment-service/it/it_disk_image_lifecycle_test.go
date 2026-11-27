@@ -356,14 +356,14 @@ var _ = Describe("DiskImage lifecycle", func() {
 				}.Build(),
 				Id: computeInstanceId,
 				Spec: publicv1.ComputeInstanceSpec_builder{
-					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
-					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId, Tenant: "shared"}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId, Tenant: "shared"}.Build(),
 					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
 						SizeGib:     proto.Int32(20),
 						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
 					}.Build(),
-					DiskImage: publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
+					DiskImage: publicv1.DiskImageReference_builder{Id: diskImageId, Tenant: "shared"}.Build(),
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),

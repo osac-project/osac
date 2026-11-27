@@ -233,14 +233,14 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 				Id:       computeInstanceId,
 				Metadata: publicv1.Metadata_builder{Name: computeInstanceId}.Build(),
 				Spec: publicv1.ComputeInstanceSpec_builder{
-					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
-					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId, Tenant: "shared"}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId, Tenant: "shared"}.Build(),
 					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
 						SizeGib:     proto.Int32(20),
 						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
 					}.Build(),
-					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
+					DiskImage: &publicv1.DiskImageReference{Id: diskImageId, Tenant: "shared"},
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -259,7 +259,7 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 			Object: publicv1.ComputeInstance_builder{
 				Id: computeInstanceId,
 				Spec: publicv1.ComputeInstanceSpec_builder{
-					InstanceType: publicv1.InstanceTypeReference_builder{Name: resizeInstanceTypeId}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: resizeInstanceTypeId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},

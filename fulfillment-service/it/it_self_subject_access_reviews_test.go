@@ -189,7 +189,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 							Tenant: tenantName,
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template:          publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+							Template:          publicv1.ClusterTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 							NetworkAttachment: tenantNetwork.clusterAttachment(),
 							NodeSets:          testClusterNodeSets(instanceTypeID, 3),
 						}.Build(),
@@ -252,7 +252,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 								Tenant: tenantName,
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template:          publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+								Template:          publicv1.ClusterTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 								NetworkAttachment: tenantNetwork.clusterAttachment(),
 								NodeSets:          testClusterNodeSets(instanceTypeID, 3),
 							}.Build(),
@@ -291,7 +291,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 								Tenant: "b",
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+								Template: publicv1.ClusterTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 								NodeSets: testClusterNodeSets(instanceTypeID, 3),
 							}.Build(),
 						}.Build(),
@@ -573,7 +573,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: clusterName, Tenant: "development"}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 						NodeSets: testClusterNodeSets(instanceTypeID, 3),
 					}.Build(),
 				}.Build(),

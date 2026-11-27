@@ -115,7 +115,7 @@ var _ = Describe("Annotations", func() {
 					},
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 				}.Build(),
@@ -147,7 +147,7 @@ var _ = Describe("Annotations", func() {
 					Name: fmt.Sprintf("annotations-test-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 				}.Build(),
@@ -170,7 +170,7 @@ var _ = Describe("Annotations", func() {
 					},
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 				}.Build(),
 			}.Build(),
@@ -199,7 +199,7 @@ var _ = Describe("Annotations", func() {
 					Name: fmt.Sprintf("annotations-reserved-test-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 				}.Build(),
@@ -250,7 +250,7 @@ var _ = Describe("Annotations", func() {
 					},
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},
@@ -288,7 +288,7 @@ var _ = Describe("Annotations", func() {
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
 							NetworkAttachment: network.clusterAttachment(),
-							Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+							Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -306,7 +306,7 @@ var _ = Describe("Annotations", func() {
 							Name: fmt.Sprintf("annotations-test-%s", uuid.New()[24:32]),
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+							Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 							NetworkAttachment: network.clusterAttachment(),
 							NodeSets:          testClusterNodeSets(bmitName, 3),
 						}.Build(),
@@ -327,7 +327,7 @@ var _ = Describe("Annotations", func() {
 							},
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},

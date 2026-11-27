@@ -213,8 +213,7 @@ var _ = Describe("Compute instance catalog items server", func() {
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id: createResponse.GetObject().GetId(),
 					Template: publicv1.ComputeInstanceTemplateReference_builder{
-						Id:     "my-ci-shared-template-id",
-						Shared: true,
+						Id: "my-ci-shared-template-id", Tenant: "shared",
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -551,8 +550,8 @@ var _ = Describe("Catalog publication and references", func() {
 		Expect(err).ToNot(HaveOccurred())
 		request := publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: publicv1.ComputeInstanceCatalogItem_builder{
 			Metadata: publicv1.Metadata_builder{Name: "offering"}.Build(), Title: "Offering", Published: true,
-			Template: publicv1.ComputeInstanceTemplateReference_builder{Name: "my-ci-template", Shared: true}.Build(),
-			Fields:   publicv1.ComputeInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: publicv1.DiskImageReference_builder{Id: dependency.GetId()}.Build()}.Build()}.Build(),
+			Template: publicv1.ComputeInstanceTemplateReference_builder{Name: "my-ci-template", Tenant: "shared"}.Build(),
+			Fields:   publicv1.ComputeInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: publicv1.DiskImageReference_builder{Id: dependency.GetId(), Tenant: "shared"}.Build()}.Build()}.Build(),
 		}.Build()}.Build()
 		original := proto.Clone(request)
 		result, err := server.Create(ctx, request)

@@ -203,7 +203,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -639,7 +639,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 						Project: project,
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Shared: true}.Build(),
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 						NodeSets: testClusterNodeSets(bmitName, 3),
 					}.Build(),
 				}.Build(),
@@ -847,7 +847,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: pendingSubnetId}.Build(),
@@ -869,7 +869,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: "nonexistent-subnet-id"}.Build(),
@@ -935,7 +935,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -986,7 +986,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -1011,7 +1011,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Name: object.GetMetadata().GetName(),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: otherSubnetId}.Build(),
@@ -1057,7 +1057,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -1085,7 +1085,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Name: object.GetMetadata().GetName(),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),

@@ -284,7 +284,7 @@ var _ = Describe("MCP network resources", func() {
 		templateID := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		_, err = createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(),
 			publicv1.ComputeInstanceSpec_builder{
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 					publicv1.ComputeNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),

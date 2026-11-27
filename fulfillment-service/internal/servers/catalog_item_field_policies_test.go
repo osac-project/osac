@@ -310,8 +310,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 	It("applies BMaaS SSH-key policies without dropping SecretReference scope", func() {
 		defaultReference := privatev1.SecretReference_builder{
 			Name:    "default-key",
-			Project: "",
-			Shared:  true,
+			Project: "", Tenant: "shared",
 		}.Build()
 		fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
 			SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
@@ -323,7 +322,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(applyBareMetalInstanceCatalogItemPolicies(spec, fields)).To(Succeed())
 		Expect(spec.GetSshKey()).To(Equal(defaultReference))
 		Expect(spec.GetSshKey().GetProject()).To(BeEmpty())
-		Expect(spec.GetSshKey().GetShared()).To(BeTrue())
+		Expect(spec.GetSshKey().GetTenant()).To(Equal("shared"))
 
 		namedReference := privatev1.SecretReference_builder{Name: "project-key", Project: "project-a"}.Build()
 		lockedFields := privatev1.BareMetalInstanceCatalogItemFields_builder{

@@ -98,7 +98,7 @@ var _ = Describe("Role binding reconciler", func() {
 					Name: fmt.Sprintf("my-%s", uuid.New()),
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: privatev1.RoleReference_builder{Name: testRoleName}.Build(),
+					Role: privatev1.RoleReference_builder{Name: testRoleName, Tenant: "shared"}.Build(),
 					Users: []*privatev1.UserReference{
 						privatev1.UserReference_builder{Id: testUserID}.Build(),
 					},
@@ -153,7 +153,7 @@ var _ = Describe("Role binding reconciler", func() {
 
 		userBName := fmt.Sprintf("my-user-b-%s", uuid.New()[24:])
 		userBID, userBKeycloakID := createRoleBindingTestUser(testCtx, usersClient, userBName, nil)
-		bindingID := createReaderRoleBinding(testCtx, testUserID, testRoleName, auth.SharedTenant)
+		bindingID := createReaderRoleBinding(testCtx, testUserID, auth.SharedTenant, testRoleName)
 
 		initialMappingPollCtx, cancelInitialMappingPoll := context.WithTimeout(testCtx, time.Minute)
 		defer cancelInitialMappingPoll()
@@ -231,7 +231,7 @@ var _ = Describe("Role binding reconciler", func() {
 					Name: fmt.Sprintf("my-%s", uuid.New()),
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: privatev1.RoleReference_builder{Name: testRoleName}.Build(),
+					Role: privatev1.RoleReference_builder{Name: testRoleName, Tenant: "shared"}.Build(),
 					Users: []*privatev1.UserReference{
 						privatev1.UserReference_builder{Id: testUserID}.Build(),
 					},
@@ -312,7 +312,7 @@ var _ = Describe("Role binding reconciler", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetId()).To(Equal(original.GetId()))
 
-			createReaderRoleBinding(ctx, testUserID, roleName, auth.SharedTenant)
+			createReaderRoleBinding(ctx, testUserID, auth.SharedTenant, roleName)
 			Expect(readerTokenRoles(ctx, staticOldTokenSource)).ToNot(ContainElement(roleName))
 
 			getResponse, err = oldClient.Get(ctx, publicv1.ClustersGetRequest_builder{
@@ -402,7 +402,7 @@ var _ = Describe("Role binding reconciler", func() {
 					Name: fmt.Sprintf("my-%s", uuid.New()),
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: privatev1.RoleReference_builder{Name: testRoleName}.Build(),
+					Role: privatev1.RoleReference_builder{Name: testRoleName, Tenant: "shared"}.Build(),
 					Users: []*privatev1.UserReference{
 						privatev1.UserReference_builder{Id: testUserID}.Build(),
 					},
@@ -499,7 +499,7 @@ var _ = Describe("RoleBinding references", func() {
 					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: privatev1.RoleReference_builder{Name: "tenant-admin"}.Build(),
+					Role: privatev1.RoleReference_builder{Name: "tenant-admin", Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

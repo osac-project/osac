@@ -40,7 +40,7 @@ var _ = Describe("Resolved ClusterVersion lifecycle validation", func() {
 		},
 		Entry("rejects an absent reference", nil, grpccodes.FailedPrecondition),
 		Entry("rejects an empty reference", &privatev1.DiskImageReference{}, grpccodes.FailedPrecondition),
-		Entry("rejects scope selectors without identity", &privatev1.DiskImageReference{Shared: true, Project: "images"}, grpccodes.FailedPrecondition),
+		Entry("rejects scope selectors without identity", &privatev1.DiskImageReference{Project: "images", Tenant: "shared"}, grpccodes.FailedPrecondition),
 		Entry("accepts an ID", &privatev1.DiskImageReference{Id: "disk-image"}, grpccodes.OK),
 		Entry("accepts a name", &privatev1.DiskImageReference{Name: "disk-image"}, grpccodes.OK),
 	)

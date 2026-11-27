@@ -1,0 +1,178 @@
+---
+# Creates a HostedCluster with AWS platform type and GPU worker NodePools.
+# Replaces the default Agent-based hosted_cluster service role.
+
+- name: Set AWS defaults
+  ansible.builtin.set_fact:
+    aws_region: "{{ ocp_4_22_aws_maas_aws_region | default('us-east-1') }}"
+    aws_instance_type: "{{ ocp_4_22_aws_maas_aws_instance_type | default('g5.xlarge') }}"
+    aws_worker_count: "{{ ocp_4_22_aws_maas_aws_worker_count | default(2) | int }}"
+    aws_root_volume_size: "{{ ocp_4_22_aws_maas_aws_root_volume_size | default(120) | int }}"
+    aws_root_volume_type: "{{ ocp_4_22_aws_maas_aws_root_volume_type | default('gp3') }}"
+    aws_subnet_id: "{{ ocp_4_22_aws_maas_aws_subnet_id | default('') }}"
+    aws_security_group_id: "{{ ocp_4_22_aws_maas_aws_security_group_id | default('') }}"
+
+- name: Verify AWS credentials secret exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: aws-credentials
+    namespace: "{{ hosted_cluster_namespace }}"
+  register: aws_creds
+  failed_when: aws_creds.resources | length == 0
+
+- name: Create Secret resource containing pull-secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "pullsecret-cluster-{{ hosted_cluster_name }}"
+        namespace: "{{ hosted_cluster_namespace }}"
+        labels: "{{ hosted_cluster_default_cluster_order_label }}"
+      data:
+        .dockerconfigjson: "{{ hosted_cluster_settings.pull_secret | b64encode }}"
+      type: kubernetes.io/dockerconfigjson
+  no_log: true
+
+- name: Create Secret resource containing ssh public key
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "sshkey-cluster-{{ hosted_cluster_name }}"
+        namespace: "{{ hosted_cluster_namespace }}"
+        labels: "{{ hosted_cluster_default_cluster_order_label }}"
+      data:
+        id_rsa.pub: "{{ hosted_cluster_settings.ssh_public_key | b64encode }}"
+
+- name: Build AWS HostedCluster definition
+  ansible.builtin.set_fact:
+    hosted_cluster_definition:
+      apiVersion: hypershift.openshift.io/v1beta1
+      kind: HostedCluster
+      metadata:
+        name: "{{ hosted_cluster_name }}"
+        namespace: "{{ hosted_cluster_namespace }}"
+        labels: "{{ {'cluster.open-cluster-management.io/clusterset': 'default'} | combine(hosted_cluster_default_cluster_order_label) }}"
+      spec:
+        release:
+          image: "{{ ocp_release_image }}"
+        pullSecret:
+          name: "pullsecret-cluster-{{ hosted_cluster_name }}"
+        sshKey:
+          name: "sshkey-cluster-{{ hosted_cluster_name }}"
+        networking:
+          clusterNetwork:
+            - cidr: "{{ hosted_cluster_pod_cidr }}"
+          serviceNetwork:
+            - cidr: "{{ hosted_cluster_service_cidr }}"
+        platform:
+          type: AWS
+          aws:
+            region: "{{ aws_region }}"
+            cloudProviderConfig:
+              subnet:
+                id: "{{ aws_subnet_id }}"
+            endpointAccess: Public
+        dns:
+          baseDomain: "{{ hosted_cluster_base_domain }}"
+        infraID: "{{ hosted_cluster_name }}"
+        services:
+          - service: APIServer
+            servicePublishingStrategy:
+              type: LoadBalancer
+          - service: OAuthServer
+            servicePublishingStrategy:
+              type: Route
+          - service: OIDC
+            servicePublishingStrategy:
+              type: S3
+              s3:
+                bucket: "{{ hosted_cluster_name }}-oidc"
+                region: "{{ aws_region }}"
+          - service: Konnectivity
+            servicePublishingStrategy:
+              type: Route
+          - service: Ignition
+            servicePublishingStrategy:
+              type: Route
+        controllerAvailabilityPolicy: "{{ hosted_cluster_controller_availability_policy }}"
+        infrastructureAvailabilityPolicy: "{{ hosted_cluster_infrastructure_availability_policy }}"
+        olmCatalogPlacement: management
+        secretEncryption:
+          type: aescbc
+          aescbc:
+            activeKey:
+              name: "{{ hosted_cluster_name }}-etcd-encryption-key"
+
+- name: Remove subnet config when not specified
+  ansible.builtin.set_fact:
+    hosted_cluster_definition: >-
+      {{ hosted_cluster_definition | combine({
+        'spec': {
+          'platform': {
+            'aws': hosted_cluster_definition.spec.platform.aws | dict2items
+              | rejectattr('key', 'eq', 'cloudProviderConfig')
+              | items2dict
+          }
+        }
+      }, recursive=true) }}
+  when: aws_subnet_id | length == 0
+
+- name: Create etcd encryption key secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ hosted_cluster_name }}-etcd-encryption-key"
+        namespace: "{{ hosted_cluster_namespace }}"
+      type: Opaque
+      data:
+        key: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') | b64encode }}"
+
+- name: Create HostedCluster resource
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ hosted_cluster_definition }}"
+
+- name: Build AWS GPU NodePool definition
+  ansible.builtin.set_fact:
+    nodepool_definitions:
+      - apiVersion: hypershift.openshift.io/v1beta1
+        kind: NodePool
+        metadata:
+          name: "nodepool-{{ hosted_cluster_name }}-gpu-workers"
+          namespace: "{{ hosted_cluster_namespace }}"
+          labels: "{{ hosted_cluster_default_cluster_order_label }}"
+        spec:
+          clusterName: "{{ hosted_cluster_name }}"
+          replicas: "{{ aws_worker_count }}"
+          management:
+            autoRepair: false
+            upgradeType: Replace
+          platform:
+            type: AWS
+            aws:
+              instanceType: "{{ aws_instance_type }}"
+              rootVolume:
+                size: "{{ aws_root_volume_size }}"
+                type: "{{ aws_root_volume_type }}"
+              securityGroups: "{{ [{'id': aws_security_group_id}] if aws_security_group_id | length > 0 else omit }}"
+              subnet:
+                id: "{{ aws_subnet_id if aws_subnet_id | length > 0 else omit }}"
+          release:
+            image: "{{ ocp_release_image }}"
+
+- name: Create NodePool resources
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ nodepool_definitions }}"
+  loop_control:
+    label: "Create NodePool {{ item.metadata.name }}"

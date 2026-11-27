@@ -1,0 +1,115 @@
+---
+# Layer 4 — cross-tenant isolation. Reuses the API keys minted in L2
+# (_verify_ctx); deploys nothing. A key minted for tenant A must be rejected on
+# tenant B's gateway/model, and vice versa (expected 401/403).
+
+- name: "Isolation | Pick the first two real tenants"
+  ansible.builtin.set_fact:
+    _iso_pair: >-
+      {{ (_inscope_descriptors | rejectattr('is_default')
+          | map(attribute='name') | list)[:2] }}
+
+- name: "Isolation | Resolve A/B contexts"
+  ansible.builtin.set_fact:
+    _iso_a: "{{ _verify_ctx[_iso_pair[0]] }}"
+    _iso_b: "{{ _verify_ctx[_iso_pair[1]] }}"
+    _iso_a_name: "{{ _iso_pair[0] }}"
+    _iso_b_name: "{{ _iso_pair[1] }}"
+
+- name: "Isolation | {{ _iso_a_name }} key against {{ _iso_b_name }} gateway (expect 401/403)"
+  ansible.builtin.uri:
+    url: "https://{{ _iso_b.host }}/llm/{{ _iso_b.model }}/v1/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _iso_a.key }}"
+    body_format: json
+    body:
+      model: "{{ ocp_4_20_ai_maas_model_id }}"
+      messages:
+        - role: user
+          content: "Hello"
+      max_tokens: 10
+    status_code: [200, 401, 403, 429]
+    validate_certs: false
+  register: _iso_ab
+  failed_when: false
+  no_log: true
+
+- name: "Isolation | {{ _iso_b_name }} key against {{ _iso_a_name }} gateway (expect 401/403)"
+  ansible.builtin.uri:
+    url: "https://{{ _iso_a.host }}/llm/{{ _iso_a.model }}/v1/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _iso_b.key }}"
+    body_format: json
+    body:
+      model: "{{ ocp_4_20_ai_maas_model_id }}"
+      messages:
+        - role: user
+          content: "Hello"
+      max_tokens: 10
+    status_code: [200, 401, 403, 429]
+    validate_certs: false
+  register: _iso_ba
+  failed_when: false
+  no_log: true
+
+- name: "Isolation | Assert both directions rejected"
+  ansible.builtin.assert:
+    that:
+      - _iso_ab.status in [401, 403]
+      - _iso_ba.status in [401, 403]
+    fail_msg: >-
+      Cross-tenant isolation BREACHED — {{ _iso_a_name }}->{{ _iso_b_name }}={{ _iso_ab.status }},
+      {{ _iso_b_name }}->{{ _iso_a_name }}={{ _iso_ba.status }} (expected 401/403 both ways).
+    success_msg: >-
+      L4 OK: isolation enforced — {{ _iso_a_name }}->{{ _iso_b_name }}={{ _iso_ab.status }},
+      {{ _iso_b_name }}->{{ _iso_a_name }}={{ _iso_ba.status }}
+
+# --- L4 RBAC cross-tenant isolation (control-plane) ---
+# One tenant's admin group must NOT be able to act in another tenant's governance
+# namespace. Runs only when both tenants have an admin group configured.
+
+- name: "Isolation | Resolve A/B RBAC groups + governance namespaces"
+  ansible.builtin.set_fact:
+    _iso_a_group: "{{ (_inscope_descriptors | selectattr('name', 'equalto', _iso_a_name) | list | first).admin_group | default('') }}"
+    _iso_b_group: "{{ (_inscope_descriptors | selectattr('name', 'equalto', _iso_b_name) | list | first).admin_group | default('') }}"
+    _iso_a_govns: "{{ (_inscope_descriptors | selectattr('name', 'equalto', _iso_a_name) | list | first).govns }}"
+    _iso_b_govns: "{{ (_inscope_descriptors | selectattr('name', 'equalto', _iso_b_name) | list | first).govns }}"
+
+- name: "Isolation | RBAC cross-tenant check"
+  when:
+    - _iso_a_group | length > 0
+    - _iso_b_group | length > 0
+  block:
+    - name: "Isolation | {{ _iso_a_name }} group vs {{ _iso_b_name }} ns (expect no)"
+      environment:
+        KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+      ansible.builtin.command:
+        cmd: >-
+          oc auth can-i create maassubscriptions.maas.opendatahub.io
+          -n {{ _iso_b_govns }} --as=maas-verify --as-group={{ _iso_a_group }}
+      register: _iso_rbac_ab
+      changed_when: false
+      failed_when: false
+
+    - name: "Isolation | {{ _iso_b_name }} group vs {{ _iso_a_name }} ns (expect no)"
+      environment:
+        KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+      ansible.builtin.command:
+        cmd: >-
+          oc auth can-i create maassubscriptions.maas.opendatahub.io
+          -n {{ _iso_a_govns }} --as=maas-verify --as-group={{ _iso_b_group }}
+      register: _iso_rbac_ba
+      changed_when: false
+      failed_when: false
+
+    - name: "Isolation | Assert RBAC does not cross tenant boundaries"
+      ansible.builtin.assert:
+        that:
+          - _iso_rbac_ab.stdout | trim == 'no'
+          - _iso_rbac_ba.stdout | trim == 'no'
+        fail_msg: >-
+          RBAC isolation BREACHED — {{ _iso_a_group }}->{{ _iso_b_govns }}={{ _iso_rbac_ab.stdout | trim }},
+          {{ _iso_b_group }}->{{ _iso_a_govns }}={{ _iso_rbac_ba.stdout | trim }} (expected no).
+        success_msg: "L4 RBAC OK: tenant-admin groups are confined to their own governance namespace"

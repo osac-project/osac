@@ -1,0 +1,42 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: "{{ _gw_name }}"
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/instance: "{{ _gw_name }}"
+    app.kubernetes.io/name: maas
+    kuadrant.io/gateway: "true"
+    opendatahub.io/managed: "false"
+  annotations:
+    opendatahub.io/managed: "false"
+    security.opendatahub.io/authorino-tls-bootstrap: "true"
+spec:
+  gatewayClassName: data-science-gateway-class
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: "{{ _gw_name }}-options"
+  listeners:
+  - name: http
+    hostname: "{{ _gw_host }}"
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All
+  - name: https
+    hostname: "{{ _gw_host }}"
+    port: 443
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: All
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: "{{ _cert_name | default(ocp_4_20_ai_maas_gateway_cert_name) | default('router-certs') }}"
+      mode: Terminate

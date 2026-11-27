@@ -930,8 +930,9 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		// A subsequent explicit call must recheck the same name, not reserve anew.
 		r = buildReconciler(k8sClient)
 		fc.SetListEmptyCalls(2)
-		_, err = run()
-		Expect(err).To(MatchError(ContainSubstring("not found in re-list")))
+		wait, err := run()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(wait.RequeueAfter).To(Equal(30 * time.Second))
 		Expect(getOrder().Status.Workers).To(Equal(reserved))
 		Expect(fault.successful).To(Equal(1))
 		fc.SetListEmptyOnce()
@@ -984,8 +985,13 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		fault := &workerRelistClient{FulfillmentClient: fc, candidates: candidates, visibleInitially: visibleInitially}
 		provider = fault
 		r = buildReconciler(k8sClient)
-		_, err = run()
-		Expect(err).To(HaveOccurred())
+		wait, err := run()
+		if kind == "deletion timestamp" || kind == "deleting state" {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(wait.RequeueAfter).To(Equal(30 * time.Second))
+		} else {
+			Expect(err).To(HaveOccurred())
+		}
 		if visibleInitially {
 			Expect(fault.creates).To(Equal(0), "must reject deleting reference before creation")
 			Expect(fault.lists).To(Equal(1))
@@ -1738,9 +1744,10 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		// Cleanup proceeds; the unavailable prerequisite is still reported instead of
 		// silently completing the invocation.
 		for i := 0; i < 4 && len(fc.DeleteCalls()) == 0; i++ {
-			_, err = run()
+			result, err = run()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		}
-		Expect(err).To(HaveOccurred())
 		Expect(fc.DeleteCalls()).To(ContainElement(retiring.BareMetalInstance.ID))
 		Expect(ignition.Calls()).To(Equal(fetches), "cleanup must not fetch discovery ignition")
 		Expect(fc.CreateCalls()).To(HaveLen(creates))
@@ -1841,8 +1848,10 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		}.Build())
 		creates, deletes := len(fc.CreateCalls()), len(fc.DeleteCalls())
 
-		_, err := run()
-		Expect(err).To(HaveOccurred())
+		wait, err := run()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(wait.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(wait.RequeueAfter).To(BeNumerically("<=", 30*time.Second))
 		latest := getOrder()
 		Expect(latest.Status.ReadyWorkers).To(HaveValue(Equal(int32(0))))
 		Expect(latest.Status.DesiredWorkers).To(HaveValue(Equal(int32(2))))

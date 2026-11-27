@@ -45,7 +45,7 @@ func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterO
 	// creation prerequisite, an unknown lookup or a foreign object is held so
 	// existing-worker work still runs.
 	infra, infraRes, infraMutated, infraBoundaryErr := r.observeInfraEnvEvidence(ctx, co, cluster)
-	if infraMutated {
+	if infraBoundaryErr != nil || infraMutated {
 		return infraRes, infraBoundaryErr
 	}
 
@@ -59,7 +59,8 @@ func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterO
 
 	// At most one Create for the selected due slot, with image, ignition and
 	// instance type resolved only now, from the observation made above.
-	created, creationRes, creationErr := r.reconcileWorkerCreation(ctx, co, cluster, observed, infra)
+	creationStart := time.Now()
+	created, creationRes, creationErr := r.reconcileWorkerCreation(ctx, co, cluster, observed, infra, infraRes)
 	if created {
 		return creationRes, creationErr
 	}
@@ -79,10 +80,7 @@ func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterO
 	if creationErr != nil {
 		return ctrl.Result{}, creationErr
 	}
-	if !finishRes.IsZero() {
-		return finishRes, nil
-	}
-	return mergeWorkerWaits(creationRes, r.workerRecheckDeadline(co.Status.Workers, time.Now())), nil
+	return mergeWorkerWaits(infraRes, creationRes, finishRes, r.workerRecheckDeadline(co.Status.Workers, creationStart)), nil
 }
 
 // mergeWorkerWaits keeps the earliest positive recheck delay, clamped so a

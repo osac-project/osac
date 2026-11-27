@@ -362,7 +362,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(err).To(HaveOccurred(), "an unmanaged ClusterOrder must be skipped (no InfraEnv)")
 	})
 
-	It("reports invalid discovery ignition as an error and recovers when HTTP content is repaired", func() {
+	It("rechecks invalid discovery ignition on a fixed interval and recovers when HTTP content is repaired", func() {
 		preloadDiskImageChain()
 		create(newBareMetalClusterOrder("bmw-invalid-ignition"))
 		ign.SetContent([]byte("not-json"))
@@ -372,8 +372,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(setWorkerIgnitionURL(ctx, "bmw-invalid-ignition-infraenv", testNamespace, ign.URL())).To(Succeed())
 
 		res, err := runReconcile("bmw-invalid-ignition")
-		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
-		Expect(res.IsZero()).To(BeTrue())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.RequeueAfter).To(Equal(30 * time.Second))
 		Expect(fc.CreateCalls()).To(BeEmpty())
 		blocked := getClusterOrder("bmw-invalid-ignition")
 		cond := apimeta.FindStatusCondition(blocked.Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
@@ -382,8 +382,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(cond.Reason).To(Equal("IgnitionInvalid"))
 
 		res, err = runReconcile("bmw-invalid-ignition")
-		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
-		Expect(res.IsZero()).To(BeTrue())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.RequeueAfter).To(Equal(30 * time.Second))
 		Expect(getClusterOrder("bmw-invalid-ignition").ResourceVersion).To(Equal(blocked.ResourceVersion),
 			"unchanged invalid content must leave status unchanged")
 
@@ -702,33 +702,37 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", Label("baremetalw
 		Expect(cond).To(BeNil(), "RHCOSImageNotFound should not be set when disk_image is present")
 	})
 
-	It("sets RHCOSImageNotFound when ClusterVersion has no disk_image", func() {
-		addInstanceType("bm-standard")
-		fc.AddCluster(privatev1.Cluster_builder{
-			Id:       clusterUUID,
-			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
-			Spec: privatev1.ClusterSpec_builder{
-				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
-			}.Build(),
-		}.Build())
-		fc.AddClusterVersion(privatev1.ClusterVersion_builder{
-			Id:   cvID,
-			Spec: privatev1.ClusterVersionSpec_builder{}.Build(),
-		}.Build())
-
+	It("polls for missing image catalog prerequisites without allocating workers", func() {
+		cluster := privatev1.Cluster_builder{
+			Id: clusterUUID, Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
+			Spec: privatev1.ClusterSpec_builder{}.Build(),
+		}.Build()
+		fc.AddCluster(cluster)
 		co := newBareMetalClusterOrder("bmw-nodisk", map[string]string{clusterIDLabel: clusterUUID})
 		create(co)
-		makeInfraEnvReady("bmw-nodisk")
+		makeInfraEnvReady(co.Name)
 
-		res, err := runReconcile("bmw-nodisk")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
-		Expect(fc.CreateCalls()).To(BeEmpty())
-
-		cond := apimeta.FindStatusCondition(
-			getClusterOrder("bmw-nodisk").Status.Conditions, osacv1alpha1.ConditionRHCOSImageNotFound)
-		Expect(cond).ToNot(BeNil())
-		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		expectWait := func(message string) {
+			GinkgoHelper()
+			res, err := runReconcile(co.Name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+			Expect(fc.CreateCalls()).To(BeEmpty())
+			cond := apimeta.FindStatusCondition(getClusterOrder(co.Name).Status.Conditions, osacv1alpha1.ConditionRHCOSImageNotFound)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Message).To(ContainSubstring(message))
+		}
+		expectWait("no version reference")
+		cluster.GetSpec().SetVersion(privatev1.ClusterVersionReference_builder{Id: cvID}.Build())
+		fc.AddCluster(cluster)
+		expectWait("ClusterVersion " + cvID + " not found")
+		cv := privatev1.ClusterVersion_builder{Id: cvID, Spec: privatev1.ClusterVersionSpec_builder{}.Build()}.Build()
+		fc.AddClusterVersion(cv)
+		expectWait("no disk_image reference")
+		cv.GetSpec().SetDiskImage(privatev1.DiskImageReference_builder{Id: diskImageID}.Build())
+		fc.AddClusterVersion(cv)
+		expectWait("DiskImage " + diskImageID + " not found")
 	})
 
 	It("fails closed when the clusterorder-uuid label is absent", func() {

@@ -139,7 +139,7 @@ func (r *Reconciler) bindAgent(
 		return err
 	}
 	if latest.GetUID() != agent.GetUID() {
-		return fmt.Errorf("agent %s identity changed before binding", agent.GetName())
+		return errWorkerObservationChanged
 	}
 	if err := verifyAgentBinding(latest, co, worker); err != nil {
 		return err

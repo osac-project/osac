@@ -95,6 +95,29 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		Expect(h.aap.latest("publish_public_dns_api", "none").template).To(Equal("tenant-osac-cluster-endpoints"))
 	})
 
+	It("waits for service-network kubeconfig data but reports malformed data", func() {
+		hc := &hypershiftv1beta1.HostedCluster{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "workload", Name: "guest"},
+			Status: hypershiftv1beta1.HostedClusterStatus{Conditions: []metav1.Condition{
+				{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue},
+				{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
+			}},
+		}
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "workload-guest", Name: serviceNetworkKubeconfig}}
+		r := &ClusterOrderReconciler{Client: fake.NewClientBuilder().WithObjects(secret).Build()}
+		guest, ready, usable, err := r.guestClusterClient(ctx, hc)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(guest).To(BeNil())
+		Expect(ready).To(BeFalse())
+		Expect(usable).To(BeFalse())
+
+		Expect(r.Get(ctx, client.ObjectKeyFromObject(secret), secret)).To(Succeed())
+		secret.Data = map[string][]byte{"kubeconfig": []byte("not a kubeconfig")}
+		Expect(r.Update(ctx, secret)).To(Succeed())
+		_, _, _, err = r.guestClusterClient(ctx, hc)
+		Expect(err).To(MatchError(ContainSubstring("parse HostedControlPlane service-network kubeconfig")))
+	})
+
 	It("classifies guest API transport failures as not usable", func() {
 		Expect(isGuestAPITransportError(&url.Error{Op: "Get", URL: "https://guest.example.test", Err: fmt.Errorf("connection refused")})).To(BeTrue())
 		Expect(isGuestAPITransportError(context.DeadlineExceeded)).To(BeTrue())

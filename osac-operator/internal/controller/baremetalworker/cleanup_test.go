@@ -23,6 +23,7 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -62,6 +63,33 @@ var _ = It("retains the BMI identity after a lost Delete acknowledgement", func(
 	Expect(r.handleFailedWorkers(context.Background(), co)).To(Succeed())
 	Expect(co.Status.Workers[0].AttemptCount).To(Equal(int32(1)), "missing retry checkpoint: %+v", co.Status.Workers)
 	Expect(co.Status.Workers[0].BareMetalInstance.ID).To(Equal(""), "missing retry checkpoint: %+v", co.Status.Workers)
+})
+
+var _ = It("polls for missing cleanup inventory without releasing the failed BMI", func() {
+	ctx := context.Background()
+	r, base, co := workerReadHarness()
+	fc := &teardownReadClient{workerReadClient: base}
+	r.fulfillment = fc
+	w := &co.Status.Workers[0]
+	w.Phase = workerPhaseFailed
+	Expect(r.Status().Update(ctx, co)).To(Succeed())
+	fc.returned = ownedBMIFixture(co, w.BareMetalInstance.Name, w.BareMetalInstance.ID)
+	fc.listed = []*privatev1.BareMetalInstance{fc.returned}
+	agent := &unstructured.Unstructured{}
+	agent.SetGroupVersionKind(agentGVK)
+	agent.SetNamespace(co.Namespace)
+	agent.SetName("awaiting-inventory")
+	agent.SetLabels(map[string]string{infraEnvAgentLabel: co.Name + infraEnvNameSuffix})
+	Expect(r.Create(ctx, agent)).To(Succeed())
+
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)}
+	res, err := r.Reconcile(ctx, req)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(res.RequeueAfter).To(Equal(teardownRequeueInterval))
+	Expect(fc.deletes).To(BeZero())
+	Expect(r.Get(ctx, req.NamespacedName, co)).To(Succeed())
+	Expect(co.Status.Workers[0].BareMetalInstance.ID).To(Equal(fc.returned.GetId()))
+	Expect(co.Status.Workers[0].NextRetryTime).To(BeNil())
 })
 
 var _ = It("rejects cleanup when the recorded worker slot has changed", func() {

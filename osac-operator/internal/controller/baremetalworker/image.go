@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -46,10 +48,13 @@ func (r *Reconciler) resolveDiskImage(
 
 	versionID := cluster.GetSpec().GetVersion().GetId()
 	if versionID == "" {
-		return nil, ctrl.Result{}, fmt.Errorf("cluster %s has no version reference", clusterID)
+		return r.waitForDiskImage(ctx, co, fmt.Sprintf("Cluster %s has no version reference", clusterID))
 	}
 
 	cv, err := r.fulfillment.GetClusterVersion(ctx, versionID)
+	if status.Code(err) == codes.NotFound {
+		return r.waitForDiskImage(ctx, co, fmt.Sprintf("ClusterVersion %s not found", versionID))
+	}
 	if err != nil {
 		return nil, ctrl.Result{}, fmt.Errorf("getting cluster version %s: %w", versionID, err)
 	}
@@ -57,15 +62,13 @@ func (r *Reconciler) resolveDiskImage(
 	diskImage := cv.GetSpec().GetDiskImage()
 	diskImageKey := refKeyStr(diskImage)
 	if diskImageKey == "" {
-		log.Info("ClusterVersion has no disk_image, setting RHCOSImageNotFound", "clusterVersion", versionID)
-		if condErr := r.setRHCOSImageNotFound(ctx, co, metav1.ConditionTrue, reasonDiskImageNotFound,
-			fmt.Sprintf("ClusterVersion %s has no disk_image reference", versionID)); condErr != nil {
-			return nil, ctrl.Result{}, condErr
-		}
-		return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
+		return r.waitForDiskImage(ctx, co, fmt.Sprintf("ClusterVersion %s has no disk_image reference", versionID))
 	}
 
 	di, err := r.fulfillment.GetDiskImage(ctx, diskImageKey)
+	if status.Code(err) == codes.NotFound {
+		return r.waitForDiskImage(ctx, co, fmt.Sprintf("DiskImage %s not found", diskImageKey))
+	}
 	if err != nil {
 		return nil, ctrl.Result{}, fmt.Errorf("getting disk image %s: %w", diskImageKey, err)
 	}
@@ -82,6 +85,13 @@ func (r *Reconciler) resolveDiskImage(
 	}
 
 	return image, ctrl.Result{}, nil
+}
+
+func (r *Reconciler) waitForDiskImage(ctx context.Context, co *v1alpha1.ClusterOrder, message string) (*privatev1.DiskImageReference, ctrl.Result, error) {
+	if err := r.setRHCOSImageNotFound(ctx, co, metav1.ConditionTrue, reasonDiskImageNotFound, message); err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
 }
 
 // refKeyStr derives the lookup key for a DiskImage reference, mirroring the ComputeInstance

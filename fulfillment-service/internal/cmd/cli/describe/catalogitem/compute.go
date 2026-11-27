@@ -33,7 +33,7 @@ func ComputeCmd() *cobra.Command {
 
 func fetchCompute(ctx context.Context, conn *grpc.ClientConn, ref string) (view, error) {
 	client := publicv1.NewComputeInstanceCatalogItemsClient(conn)
-	matched, err := lookup.Find(ref, "compute instance catalog item", func(filter string, limit int32) ([]*publicv1.ComputeInstanceCatalogItem, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "compute instance catalog item", func(filter string, limit int32) ([]*publicv1.ComputeInstanceCatalogItem, error) {
 		response, err := client.List(ctx, publicv1.ComputeInstanceCatalogItemsListRequest_builder{Filter: proto.String(filter), Limit: proto.Int32(limit)}.Build())
 		if err != nil {
 			return nil, fmt.Errorf("failed to list compute instance catalog items: %w", err)

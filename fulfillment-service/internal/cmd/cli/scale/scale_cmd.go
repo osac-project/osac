@@ -120,7 +120,7 @@ func scaleCluster(
 	nodeSetName string,
 	newSize int32,
 ) error {
-	cluster, err := lookup.Find(clusterRef, "cluster", func(filter string, limit int32) ([]*publicv1.Cluster, error) {
+	cluster, err := lookup.FindScoped(ctx, clusterRef, "cluster", func(filter string, limit int32) ([]*publicv1.Cluster, error) {
 		resp, err := client.List(ctx, publicv1.ClustersListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

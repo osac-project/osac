@@ -118,7 +118,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	eipClient := publicv1.NewExternalIPsClient(conn)
-	eip, err := lookup.Find(c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
+	eip, err := lookup.FindScoped(ctx, c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
 		resp, err := eipClient.List(ctx, publicv1.ExternalIPsListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),
@@ -141,7 +141,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	switch {
 	case c.args.computeInstance != "":
 		ciClient := publicv1.NewComputeInstancesClient(conn)
-		ci, err := lookup.Find(c.args.computeInstance, "compute instance", func(filter string, limit int32) ([]*publicv1.ComputeInstance, error) {
+		ci, err := lookup.FindScoped(ctx, c.args.computeInstance, "compute instance", func(filter string, limit int32) ([]*publicv1.ComputeInstance, error) {
 			resp, err := ciClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{
 				Filter: proto.String(filter),
 				Limit:  proto.Int32(limit),
@@ -159,7 +159,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	case c.args.cluster != "":
 		clClient := publicv1.NewClustersClient(conn)
-		cl, err := lookup.Find(c.args.cluster, "cluster", func(filter string, limit int32) ([]*publicv1.Cluster, error) {
+		cl, err := lookup.FindScoped(ctx, c.args.cluster, "cluster", func(filter string, limit int32) ([]*publicv1.Cluster, error) {
 			resp, err := clClient.List(ctx, publicv1.ClustersListRequest_builder{
 				Filter: proto.String(filter),
 				Limit:  proto.Int32(limit),
@@ -185,7 +185,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	case c.args.baremetalInstance != "":
 		bmClient := publicv1.NewBareMetalInstancesClient(conn)
-		bm, err := lookup.Find(c.args.baremetalInstance, "bare metal instance", func(filter string, limit int32) ([]*publicv1.BareMetalInstance, error) {
+		bm, err := lookup.FindScoped(ctx, c.args.baremetalInstance, "bare metal instance", func(filter string, limit int32) ([]*publicv1.BareMetalInstance, error) {
 			resp, err := bmClient.List(ctx, publicv1.BareMetalInstancesListRequest_builder{
 				Filter: proto.String(filter),
 				Limit:  proto.Int32(limit),

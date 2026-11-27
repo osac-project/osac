@@ -93,7 +93,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	defer conn.Close()
 
 	vnClient := publicv1.NewVirtualNetworksClient(conn)
-	vn, err := lookup.Find(c.args.virtualNetwork, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
+	vn, err := lookup.FindScoped(ctx, c.args.virtualNetwork, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
 		resp, err := vnClient.List(ctx, publicv1.VirtualNetworksListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),
@@ -108,7 +108,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	eipClient := publicv1.NewExternalIPsClient(conn)
-	eip, err := lookup.Find(c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
+	eip, err := lookup.FindScoped(ctx, c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
 		resp, err := eipClient.List(ctx, publicv1.ExternalIPsListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

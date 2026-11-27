@@ -15,12 +15,19 @@ package computeinstance
 
 import (
 	"context"
+	"io"
+	"log/slog"
+	"strconv"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -434,4 +441,109 @@ var _ = Describe("--additional-disk flag parsing", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("value is empty"))
 	})
+})
+
+type fakeComputeInstanceTemplatesClient struct {
+	publicv1.ComputeInstanceTemplatesClient
+	filter      string
+	firstFilter string
+	items       []*publicv1.ComputeInstanceTemplate
+}
+
+func (f *fakeComputeInstanceTemplatesClient) List(
+	_ context.Context, request *publicv1.ComputeInstanceTemplatesListRequest, _ ...grpc.CallOption,
+) (*publicv1.ComputeInstanceTemplatesListResponse, error) {
+	f.filter = request.GetFilter()
+	if f.firstFilter == "" {
+		f.firstFilter = f.filter
+	}
+	items := f.items
+	if f.filter != "" {
+		items = filterComputeInstanceTemplates(items, f.filter)
+	}
+	return publicv1.ComputeInstanceTemplatesListResponse_builder{
+		Items: items,
+		Size:  int32(len(items)),
+		Total: int32(len(items)),
+	}.Build(), nil
+}
+
+func filterComputeInstanceTemplates(
+	items []*publicv1.ComputeInstanceTemplate, filter string,
+) []*publicv1.ComputeInstanceTemplate {
+	result := make([]*publicv1.ComputeInstanceTemplate, 0, len(items))
+	for _, item := range items {
+		tenant := item.GetMetadata().GetTenant()
+		if strings.Contains(filter, strconv.Quote(tenant)) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func computeInstanceTemplate(id, name, tenant string) *publicv1.ComputeInstanceTemplate {
+	return publicv1.ComputeInstanceTemplate_builder{
+		Id: id,
+		Metadata: publicv1.Metadata_builder{
+			Name:   name,
+			Tenant: tenant,
+		}.Build(),
+	}.Build()
+}
+
+var _ = Describe("Create compute instance template lookup", func() {
+	DescribeTable("uses the effective tenant or shared tenant",
+		func(ref string, items []*publicv1.ComputeInstanceTemplate, expectSuccess bool, expectedTenant string) {
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			console, err := terminal.NewConsole().
+				SetLogger(logger).
+				SetStdout(io.Discard).
+				SetStderr(io.Discard).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(console.AddTemplates(templatesFS, "templates")).To(Succeed())
+
+			client := &fakeComputeInstanceTemplatesClient{items: items}
+			runner := &runnerContext{
+				templatesClient: client,
+				console:         console,
+			}
+			runner.args.template = ref
+			ctx := config.TenantIntoContext(context.Background(), "tenant-a")
+
+			template, err := runner.findTemplate(ctx)
+			Expect(client.firstFilter).To(ContainSubstring(
+				`this.metadata.tenant == "tenant-a" || this.metadata.tenant == "shared"`,
+			))
+			if expectSuccess {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(template.GetMetadata().GetTenant()).To(Equal(expectedTenant))
+			} else {
+				Expect(err).To(HaveOccurred())
+			}
+		},
+		Entry("tenant-local template by ID",
+			"tenant-local-id",
+			[]*publicv1.ComputeInstanceTemplate{computeInstanceTemplate("tenant-local-id", "template", "tenant-a")},
+			true,
+			"tenant-a"),
+		Entry("shared template by ID",
+			"shared-id",
+			[]*publicv1.ComputeInstanceTemplate{computeInstanceTemplate("shared-id", "template", "shared")},
+			true,
+			"shared"),
+		Entry("unrelated tenant template is not selected",
+			"unrelated-id",
+			[]*publicv1.ComputeInstanceTemplate{computeInstanceTemplate("unrelated-id", "template", "tenant-b")},
+			false,
+			""),
+		Entry("tenant-local and shared matches remain ambiguous",
+			"ambiguous-id",
+			[]*publicv1.ComputeInstanceTemplate{
+				computeInstanceTemplate("ambiguous-id", "template", "tenant-a"),
+				computeInstanceTemplate("ambiguous-id", "template", "shared"),
+			},
+			false,
+			""),
+	)
 })

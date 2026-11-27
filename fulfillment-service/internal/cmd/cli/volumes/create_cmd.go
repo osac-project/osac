@@ -121,7 +121,8 @@ func (c *createRunner) run(cmd *cobra.Command, args []string) (err error) {
 
 	// Build metadata:
 	metadataBuilder := publicv1.Metadata_builder{
-		Name: c.name,
+		Name:   c.name,
+		Tenant: config.TenantFromContext(ctx),
 	}
 	if c.project != "" {
 		metadataBuilder.Project = c.project

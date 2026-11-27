@@ -59,7 +59,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewBareMetalInstancesClient(conn)
 
-	matched, err := lookup.Find(ref, "bare metal instance", func(filter string, limit int32) ([]*publicv1.BareMetalInstance, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "bare metal instance", func(filter string, limit int32) ([]*publicv1.BareMetalInstance, error) {
 		resp, err := client.List(ctx, publicv1.BareMetalInstancesListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

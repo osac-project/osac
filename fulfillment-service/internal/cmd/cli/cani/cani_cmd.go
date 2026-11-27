@@ -107,7 +107,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	review := publicv1.SelfSubjectAccessReview_builder{
 		Metadata: publicv1.Metadata_builder{
 			Name:   "can-i-check",
-			Tenant: c.settings.Tenant(),
+			Tenant: config.TenantFromContext(ctx),
 		}.Build(),
 		Spec: publicv1.SelfSubjectAccessReviewSpec_builder{
 			Service: service,

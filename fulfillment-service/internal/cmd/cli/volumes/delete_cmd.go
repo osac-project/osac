@@ -67,7 +67,7 @@ func (c *deleteRunner) run(cmd *cobra.Command, args []string) (err error) {
 	client := publicv1.NewVolumesClient(conn)
 
 	// Resolve volume by name or ID:
-	volume, err := lookup.Find(ref, "volume", func(filter string, limit int32) ([]*publicv1.Volume, error) {
+	volume, err := lookup.FindScoped(ctx, ref, "volume", func(filter string, limit int32) ([]*publicv1.Volume, error) {
 		resp, err := client.List(ctx, publicv1.VolumesListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

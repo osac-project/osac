@@ -99,7 +99,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	defer conn.Close()
 
 	vnClient := publicv1.NewVirtualNetworksClient(conn)
-	vn, err := lookup.Find(c.args.virtualNetwork, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
+	vn, err := lookup.FindScoped(ctx, c.args.virtualNetwork, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
 		resp, err := vnClient.List(ctx, publicv1.VirtualNetworksListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

@@ -71,7 +71,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewSecurityGroupsClient(conn)
 
-	matched, err := lookup.Find(ref, "security group", func(filter string, limit int32) ([]*publicv1.SecurityGroup, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "security group", func(filter string, limit int32) ([]*publicv1.SecurityGroup, error) {
 		resp, err := client.List(ctx, publicv1.SecurityGroupsListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

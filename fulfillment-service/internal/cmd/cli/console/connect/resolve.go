@@ -27,7 +27,7 @@ import (
 // ResolveInstance resolves a name or ID to a compute instance ID.
 func ResolveInstance(ctx context.Context, conn *grpc.ClientConn, key string) (string, error) {
 	client := publicv1.NewComputeInstancesClient(conn)
-	ci, err := lookup.Find(key, "compute instance", func(filter string, limit int32) ([]*publicv1.ComputeInstance, error) {
+	ci, err := lookup.FindScoped(ctx, key, "compute instance", func(filter string, limit int32) ([]*publicv1.ComputeInstance, error) {
 		resp, err := client.List(ctx, publicv1.ComputeInstancesListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

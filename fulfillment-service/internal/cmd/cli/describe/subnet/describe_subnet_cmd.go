@@ -71,7 +71,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewSubnetsClient(conn)
 
-	matched, err := lookup.Find(ref, "subnet", func(filter string, limit int32) ([]*publicv1.Subnet, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "subnet", func(filter string, limit int32) ([]*publicv1.Subnet, error) {
 		resp, err := client.List(ctx, publicv1.SubnetsListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

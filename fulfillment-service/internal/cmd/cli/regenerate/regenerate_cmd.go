@@ -117,7 +117,7 @@ func (c *runnerContext) regenerateServiceAccount(ctx context.Context, writer io.
 }
 
 func (c *runnerContext) findAccount(ctx context.Context, ref string) (*publicv1.ServiceAccount, error) {
-	return lookup.Find(ref, "service account", func(filter string, limit int32) ([]*publicv1.ServiceAccount, error) {
+	return lookup.FindScoped(ctx, ref, "service account", func(filter string, limit int32) ([]*publicv1.ServiceAccount, error) {
 		response, err := c.accounts.List(ctx, publicv1.ServiceAccountsListRequest_builder{
 			Filter: proto.String(filter), Limit: proto.Int32(limit),
 		}.Build())

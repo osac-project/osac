@@ -63,7 +63,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 	}()
 
 	client := publicv1.NewFabricDomainsClient(conn)
-	matched, err := lookup.Find(args[0], "fabric domain", func(filter string, limit int32) ([]*publicv1.FabricDomain, error) {
+	matched, err := lookup.FindScoped(ctx, args[0], "fabric domain", func(filter string, limit int32) ([]*publicv1.FabricDomain, error) {
 		response, err := client.List(ctx, publicv1.FabricDomainsListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

@@ -105,12 +105,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 		}
 	}()
 
-	tenant := config.TenantFromContext(ctx)
 	vnClient := publicv1.NewVirtualNetworksClient(conn)
-	virtualNetwork, err := lookup.Find(c.args.virtualNetwork, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
-		if tenant != "" {
-			filter = fmt.Sprintf("(%s) && this.metadata.tenant == %q", filter, tenant)
-		}
+	virtualNetwork, err := lookup.FindScoped(ctx, c.args.virtualNetwork, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
 		response, err := vnClient.List(ctx, publicv1.VirtualNetworksListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

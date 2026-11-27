@@ -14,8 +14,11 @@ language governing permissions and limitations under the License.
 package lookup
 
 import (
+	"context"
 	"errors"
 	"fmt"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	"github.com/onsi/ginkgo/v2/dsl/table"
@@ -130,6 +133,57 @@ var _ = Describe("Find", func() {
 			Expect(err.Error()).To(ContainSubstring("connection refused"))
 			var notFound *ErrNotFound
 			Expect(errors.As(err, &notFound)).To(BeFalse())
+		})
+	})
+
+	Describe("FindScoped", func() {
+		table.DescribeTable("tenant filter construction",
+			func(ctx context.Context, expectedFilter string) {
+				var got string
+				_, _ = FindScoped(ctx, "my-vm", "compute instance", captureListFn(&got))
+				Expect(got).To(Equal(expectedFilter))
+			},
+			table.Entry("tenant only",
+				config.TenantIntoContext(context.Background(), "acme"),
+				`(this.id == "my-vm" || this.metadata.name == "my-vm") && this.metadata.tenant == "acme"`),
+			table.Entry("no tenant",
+				context.Background(),
+				`this.id == "my-vm" || this.metadata.name == "my-vm"`),
+		)
+
+		It("should preserve the original ID/name predicate when scoped", func() {
+			var got string
+			ctx := config.TenantIntoContext(context.Background(), "acme")
+			_, _ = FindScoped(ctx, `my"vm`, "compute instance", captureListFn(&got))
+			Expect(got).To(Equal("(this.id == \"my\\\"vm\" || this.metadata.name == \"my\\\"vm\") && this.metadata.tenant == \"acme\""))
+		})
+
+	})
+
+	Describe("FindScopedOrShared", func() {
+		table.DescribeTable("tenant-or-shared filter construction",
+			func(ctx context.Context, expectedFilter string) {
+				var got string
+				_, _ = FindScopedOrShared(ctx, "my-vm", "compute instance", captureListFn(&got))
+				Expect(got).To(Equal(expectedFilter))
+			},
+			table.Entry("selected tenant and shared tenant",
+				config.TenantIntoContext(context.Background(), "acme"),
+				`(this.id == "my-vm" || this.metadata.name == "my-vm") && (this.metadata.tenant == "acme" || this.metadata.tenant == "shared")`),
+			table.Entry("no tenant",
+				context.Background(),
+				`this.id == "my-vm" || this.metadata.name == "my-vm"`),
+		)
+
+		It("should preserve ambiguity between tenant-local and shared matches", func() {
+			ctx := config.TenantIntoContext(context.Background(), "acme")
+			items := []*fakeItem{{id: "tenant-local"}, {id: "shared"}}
+			_, err := FindScopedOrShared(ctx, "my-vm", "compute instance", makeListFn(items))
+			Expect(err).To(HaveOccurred())
+			var ambiguous *ErrAmbiguous
+			Expect(errors.As(err, &ambiguous)).To(BeTrue())
+			Expect(ambiguous.Ref).To(Equal("my-vm"))
+			Expect(ambiguous.Kind).To(Equal("compute instance"))
 		})
 	})
 })

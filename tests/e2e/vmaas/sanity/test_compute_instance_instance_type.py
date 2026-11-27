@@ -354,9 +354,17 @@ def compute_instance_type_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("EDITOR", str(editor))
 
 
+def _wait_for_compute_instance_deletion(*, grpc: GRPCClient, k8s: K8sClient, uuid: str, name: str | None) -> None:
+    if name is not None:
+        wait_for_deletion(k8s=k8s, name=name)
+    # The instance type stays in use until Fulfillment removes the instance record.
+    wait_for_grpc_removal(grpc=grpc, uuid=uuid)
+
+
 @pytest.fixture
 def running_compute_instance_factory(
     cli: OsacCLI,
+    grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     default_network_attachment: dict[str, Any],
     vm_template: str,
@@ -386,8 +394,7 @@ def running_compute_instance_factory(
             _wait_for_configuration_applied(k8s_hub_client, name=ci_name, vcpus=vcpus, memory_gib=memory_gib)
         except Exception:
             cli.delete_compute_instance(uuid=ci_uuid)
-            if ci_name is not None:
-                wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+            _wait_for_compute_instance_deletion(grpc=grpc, k8s=k8s_hub_client, uuid=ci_uuid, name=ci_name)
             raise
         created.append((ci_uuid, ci_name))
         return ci_uuid, ci_name
@@ -396,7 +403,7 @@ def running_compute_instance_factory(
 
     for ci_uuid, ci_name in reversed(created):
         cli.delete_compute_instance(uuid=ci_uuid)
-        wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+        _wait_for_compute_instance_deletion(grpc=grpc, k8s=k8s_hub_client, uuid=ci_uuid, name=ci_name)
 
 
 def test_compute_instance_happy_path(
@@ -440,8 +447,7 @@ def test_compute_instance_happy_path(
     finally:
         if ci_uuid is not None:
             cli.delete_compute_instance(uuid=ci_uuid)
-            if ci_name is not None:
-                wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+            _wait_for_compute_instance_deletion(grpc=grpc, k8s=k8s_hub_client, uuid=ci_uuid, name=ci_name)
 
 
 def test_compute_instance_deletion_protection(
@@ -478,14 +484,12 @@ def test_compute_instance_deletion_protection(
     finally:
         if ci_uuid is not None:
             cli.delete_compute_instance(uuid=ci_uuid)
-            if ci_name is not None:
-                wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-            # The instance type stays in use until Fulfillment finishes deleting the instance record.
-            wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid)
+            _wait_for_compute_instance_deletion(grpc=grpc, k8s=k8s_hub_client, uuid=ci_uuid, name=ci_name)
 
 
 def test_compute_instance_deprecated_warning(
     cli: OsacCLI,
+    grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     default_network_attachment: dict[str, Any],
@@ -511,21 +515,21 @@ def test_compute_instance_deprecated_warning(
             include_stderr=True,
         )
         assert dep_rc == 0, f"create with DEPRECATED type should succeed, got: {dep_output}"
-        assert "deprecat" in dep_output.lower() or "warning" in dep_output.lower(), (
-            f"Expected deprecation warning in output, got: {dep_output}"
-        )
-
         uuid_match: re.Match[str] | None = re.search(
             r"'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'", dep_output
         )
         assert uuid_match is not None, f"Failed to parse UUID from CLI output: {dep_output}"
         deprecated_ci_uuid = uuid_match.group(1)
+        assert "deprecat" in dep_output.lower() or "warning" in dep_output.lower(), (
+            f"Expected deprecation warning in output, got: {dep_output}"
+        )
         deprecated_ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=deprecated_ci_uuid)
     finally:
         if deprecated_ci_uuid is not None:
             cli.delete_compute_instance(uuid=deprecated_ci_uuid)
-            if deprecated_ci_name is not None:
-                wait_for_deletion(k8s=k8s_hub_client, name=deprecated_ci_name)
+            _wait_for_compute_instance_deletion(
+                grpc=grpc, k8s=k8s_hub_client, uuid=deprecated_ci_uuid, name=deprecated_ci_name
+            )
 
 
 def test_compute_instance_nonexistent_instance_type(
@@ -560,6 +564,7 @@ def test_compute_instance_nonexistent_instance_type(
 
 def test_compute_instance_obsolete_instance_type(
     cli: OsacCLI,
+    grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     default_network_attachment: dict[str, Any],
@@ -580,9 +585,12 @@ def test_compute_instance_obsolete_instance_type(
         uuid_match = re.search(r"'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'", output)
         if uuid_match:
             ci_uuid = uuid_match.group(1)
-            cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
-            cli.delete_compute_instance(uuid=ci_uuid)
-            wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
+            cr_name: str | None = None
+            try:
+                cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
+            finally:
+                cli.delete_compute_instance(uuid=ci_uuid)
+                _wait_for_compute_instance_deletion(grpc=grpc, k8s=k8s_hub_client, uuid=ci_uuid, name=cr_name)
         elif k8s_hub_client.is_present(resource="computeinstance", name=ci_name):
             pytest.fail(f"ComputeInstance CR {ci_name} leaked but UUID could not be parsed from output: {output}")
     assert rc != 0, f"create with OBSOLETE instance type should be rejected, got: {output}"
@@ -982,7 +990,6 @@ def test_compute_instance_resize_from_catalog_item(
         try:
             if ci_uuid is not None:
                 grpc.delete_compute_instance(ci_id=ci_uuid)
-                if ci_name is not None:
-                    wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+                _wait_for_compute_instance_deletion(grpc=grpc, k8s=k8s_hub_client, uuid=ci_uuid, name=ci_name)
         finally:
             grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)

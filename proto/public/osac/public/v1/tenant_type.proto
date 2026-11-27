@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/role_type.proto";
 import "osac/public/v1/secret_type.proto";
@@ -28,6 +29,9 @@ message Tenant {
   string id = 1;
   Metadata metadata = 2;
   TenantSpec spec = 3;
+  TenantStatus status = 4 [
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
 }
 
 message TenantSpec {
@@ -85,4 +89,16 @@ message TenantSpec {
   // An unset value on an ordinary tenant inherits the shared tenant's selection.
   // An unset value on shared means there is no platform default.
   RoleReference default_role = 4;
+}
+
+// Represents the current operational state of a Tenant.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system updates them
+// based on the reconciliation with the identity provider.
+message TenantStatus {
+  // True once all four minimal onboarding requirements have succeeded.
+  bool onboarded = 1 [
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
+
 }

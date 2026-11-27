@@ -393,20 +393,13 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("public servers that send a nil update mask", func() {
-		// Tenants and BareMetalInstanceTemplates must stay Unimplemented or gain a case.
+		// BareMetalInstanceTemplates must stay Unimplemented or gain a case.
 		It("covers every public server that has an Update method", func() {
 			covered := map[string]bool{}
 			for _, c := range slices.Concat(publicFinalizerCases(), catalogItemFinalizerCases()) {
 				covered[string(protoreflect.FullName(c.service).Name())] = true
 			}
 			unimplemented := map[string]func() error{
-				"Tenants": func() error {
-					server, err := NewTenantsServer().
-						SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
-					Expect(err).ToNot(HaveOccurred())
-					_, err = server.Update(ctx, &publicv1.TenantsUpdateRequest{})
-					return err
-				},
 				"BareMetalInstanceTemplates": func() error {
 					server, err := NewBareMetalInstanceTemplatesServer().
 						SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
@@ -436,7 +429,7 @@ var _ = Describe("typed finalizer updates", func() {
 				return true
 			})
 			Expect(missing).To(BeEmpty(), "public servers with an Update method that have no finalizer case")
-			Expect(checked).To(ConsistOf("Tenants", "BareMetalInstanceTemplates"))
+			Expect(checked).To(ConsistOf("BareMetalInstanceTemplates"))
 		})
 
 		// Most servers map into an empty private object. Volumes, Clusters, BareMetalInstances, ProjectMemberships,
@@ -831,6 +824,15 @@ func runPublicFinalizerCases(publicCases []publicFinalizerCase, finalizers []str
 // publicFinalizerCases excludes the catalog-items servers, which have their own cases.
 func publicFinalizerCases() []publicFinalizerCase {
 	return []publicFinalizerCase{
+		{privatev1.Tenants_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewTenantsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.TenantsGetResponse).GetObject,
+			)
+		}},
 		{privatev1.Volumes_ServiceDesc.ServiceName, newPublicVolumesOps},
 		{privatev1.Clusters_ServiceDesc.ServiceName, newPublicClustersOps},
 		{privatev1.QuotaLimits_ServiceDesc.ServiceName, func() publicFinalizerOps {

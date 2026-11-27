@@ -19,6 +19,8 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -125,23 +127,142 @@ var _ = Describe("Public tenants server", func() {
 			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("my-tenant"))
 		})
 
-		It("Can't create a tenant, not implemented", func() {
-			// Try to create the tenant via the public server. It should fail with an Unimplemented error.
-			_, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{
-				Object: publicv1.Tenant_builder{
-					Metadata: publicv1.Metadata_builder{
-						Name: "my-tenant",
+		It("Exposes only the public onboarding status field", func() {
+			fields := (&publicv1.TenantStatus{}).ProtoReflect().Descriptor().Fields()
+			Expect(fields.Len()).To(Equal(1))
+			Expect(string(fields.Get(0).Name())).To(Equal("onboarded"))
+			Expect(fields.Get(0).Number()).To(Equal(protoreflect.FieldNumber(1)))
+		})
+
+		It("Maps only the public onboarding status field", func() {
+			privateMessage := "private detail"
+			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: &privatev1.Metadata{
+						Name: "status-tenant",
+					},
+					Status: privatev1.TenantStatus_builder{
+						Onboarded:        true,
+						State:            privatev1.TenantState_TENANT_STATE_SYNCED,
+						Message:          &privateMessage,
+						IdpTenantName:    "idp-tenant",
+						BreakGlassUserId: "breakglass-user",
+						Conditions: []*privatev1.TenantCondition{
+							privatev1.TenantCondition_builder{
+								Type:   privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+								Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+							}.Build(),
+						},
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.Unimplemented))
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			publicGet, err := publicServer.Get(ctx, publicv1.TenantsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(publicGet.GetObject().GetStatus().GetOnboarded()).To(BeTrue())
+
+			publicList, err := publicServer.List(ctx, publicv1.TenantsListRequest_builder{
+				Filter: new("this.metadata.name == 'status-tenant'"),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(publicList.GetItems()).To(HaveLen(1))
+			Expect(publicList.GetItems()[0].GetStatus().GetOnboarded()).To(BeTrue())
+
+			privateGet, err := privateServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			privateStatus := privateGet.GetObject().GetStatus()
+			Expect(privateStatus.GetOnboarded()).To(BeTrue())
+			Expect(privateStatus.GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+			Expect(privateStatus.GetMessage()).To(Equal("private detail"))
+			Expect(privateStatus.GetIdpTenantName()).To(Equal("idp-tenant"))
+			Expect(privateStatus.GetBreakGlassUserId()).To(Equal("breakglass-user"))
+			Expect(privateStatus.GetConditions()).To(HaveLen(1))
 		})
 
-		It("Can't update a tenant, not implemented", func() {
-			// Create the tenant using the private server, as that isn't implemented for the public server:
+		It("Creates a tenant without status", func() {
+			response, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{
+				Object: publicv1.Tenant_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "public-tenant",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).To(Equal("public-tenant"))
+			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("public-tenant"))
+		})
+
+		It("Restores public tenant status when status is not selected", func() {
+			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: &privatev1.Metadata{
+						Name: "status-restore-tenant",
+					},
+					Status: privatev1.TenantStatus_builder{Onboarded: true}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			updateResponse, err := publicServer.Update(ctx, publicv1.TenantsUpdateRequest_builder{
+				Object: publicv1.Tenant_builder{
+					Id: id,
+					Metadata: publicv1.Metadata_builder{
+						Name:   "status-restore-tenant",
+						Labels: map[string]string{"public": "true"},
+					}.Build(),
+					Status: publicv1.TenantStatus_builder{Onboarded: false}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).
+				To(HaveKeyWithValue("public", "true"))
+			Expect(updateResponse.GetObject().GetStatus().GetOnboarded()).To(BeTrue())
+		})
+
+		It("Updates a tenant without status", func() {
+			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: &privatev1.Metadata{
+						Name: "update-tenant",
+					},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			updateResponse, err := publicServer.Update(ctx, publicv1.TenantsUpdateRequest_builder{
+				Object: publicv1.Tenant_builder{
+					Id: id,
+					Metadata: publicv1.Metadata_builder{
+						Name:   "update-tenant",
+						Labels: map[string]string{"public": "true"},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("public", "true"))
+		})
+
+		It("Clears public tenant creation status", func() {
+			response, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{
+				Object: publicv1.Tenant_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "status-clear-tenant",
+					}.Build(),
+					Status: publicv1.TenantStatus_builder{Onboarded: true}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().HasStatus()).To(BeFalse())
+			Expect(response.GetObject().GetStatus().GetOnboarded()).To(BeFalse())
+		})
+
+		It("Rejects public tenant update with a status mask", func() {
 			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Metadata: &privatev1.Metadata{
@@ -150,22 +271,23 @@ var _ = Describe("Public tenants server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-			id := object.GetId()
+			id := createResponse.GetObject().GetId()
 
-			// Try to update the tenant via the public server. It should fail with an Unimplemented error.
 			_, err = publicServer.Update(ctx, publicv1.TenantsUpdateRequest_builder{
 				Object: publicv1.Tenant_builder{
 					Id: id,
 					Metadata: publicv1.Metadata_builder{
 						Name: "my-tenant",
 					}.Build(),
+					Status: publicv1.TenantStatus_builder{}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.onboarded"}},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.Unimplemented))
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("OUTPUT_ONLY"))
 		})
 
 		It("Can't delete a tenant, not implemented", func() {

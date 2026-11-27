@@ -11,7 +11,13 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import assert_grpc_field_violation, wait_for_cr, wait_for_provision, wait_for_running
+from tests.e2e.core.helpers import (
+    assert_grpc_field_violation,
+    wait_for_cr,
+    wait_for_grpc_removal,
+    wait_for_provision,
+    wait_for_running,
+)
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import env, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
@@ -91,15 +97,6 @@ def _delete_compute_instance_and_wait(grpc: GRPCClient, k8s: K8sClient, ci_id: s
     def is_not_found(exc: subprocess.CalledProcessError) -> bool:
         return re.search(r"(?m)^\s*Code:\s*NotFound\s*$", (exc.stderr or "") + "\n" + (exc.stdout or "")) is not None
 
-    def api_is_absent() -> bool:
-        try:
-            grpc.get_compute_instance(ci_id=ci_id)
-        except subprocess.CalledProcessError as exc:
-            if is_not_found(exc):
-                return True
-            raise
-        return False
-
     try:
         try:
             # Resolve before Delete so a fast deletion cannot hide the CR name.
@@ -120,15 +117,7 @@ def _delete_compute_instance_and_wait(grpc: GRPCClient, k8s: K8sClient, ci_id: s
             resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
             resource_id=cr_name,
         )
-        poll_until(
-            fn=api_is_absent,
-            until=lambda gone: gone is True,
-            retries=30,
-            delay=2,
-            description=f"ComputeInstance {ci_id} API deletion",
-            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
-            resource_id=ci_id,
-        )
+        wait_for_grpc_removal(grpc=grpc, uuid=ci_id)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         # grpcurl exceptions contain the bearer token in their command arguments.
         pending = exc.__context__

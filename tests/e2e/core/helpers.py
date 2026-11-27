@@ -31,6 +31,8 @@ _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _SUBNET_READY_STATE = "SUBNET_STATE_READY"
 _VIRTUAL_NETWORK_READY_STATE = "VIRTUAL_NETWORK_STATE_READY"
 _SECURITY_GROUP_READY_STATE = "SECURITY_GROUP_STATE_READY"
+# grpcurl adds 64 to gRPC status codes when exiting after a failed RPC.
+_GRPCURL_NOT_FOUND_EXIT_CODE = 64 + 5
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
 # Initial check plus thirty retries: fifteen minutes of scheduled waits after
@@ -310,12 +312,23 @@ def wait_for_deletion(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
+    """Wait for Get on the exact compute instance ID to return NotFound."""
+
+    def instance_is_absent() -> bool:
+        try:
+            grpc.get_compute_instance(ci_id=uuid)
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode == _GRPCURL_NOT_FOUND_EXIT_CODE:
+                return True
+            raise
+        return False
+
     poll_until(
-        fn=lambda: uuid not in grpc.list_compute_instance_ids(),
-        until=lambda v: v is True,
+        fn=instance_is_absent,
+        until=lambda gone: gone is True,
         retries=30,
         delay=2,
-        description=f"{uuid} removed from gRPC list",
+        description=f"ComputeInstance {uuid} API deletion",
         resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         resource_id=uuid,
     )

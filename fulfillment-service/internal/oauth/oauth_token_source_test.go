@@ -14,10 +14,16 @@ language governing permissions and limitations under the License.
 package oauth
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -198,6 +204,228 @@ var _ = Describe("Token source", func() {
 			Build()
 		Expect(err).To(MatchError("client secret is mandatory for the client credentials flow"))
 		Expect(source).To(BeNil())
+	})
+
+	Describe("File-backed client credentials", func() {
+		var (
+			path    string
+			builder *TokenSourceBuilder
+			logs    bytes.Buffer
+		)
+
+		BeforeEach(func() {
+			path = filepath.Join(GinkgoT().TempDir(), "client-secret")
+			logs.Reset()
+			builder = NewTokenSource().
+				SetLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))).
+				SetIssuer(server.URL()).
+				SetFlow(CredentialsFlow).
+				SetClientId("my_client").
+				SetClientSecretFile(path).
+				SetCaPool(caPool).
+				SetStore(store)
+		})
+
+		It("rejects configuring both an inline secret and a secret file", func() {
+			_, err := builder.SetClientSecret("inline").Build()
+			Expect(err).To(MatchError(ContainSubstring("mutually exclusive")))
+		})
+
+		It("rejects file-backed credentials in other flows", func() {
+			_, err := builder.SetFlow(DeviceFlow).Build()
+			Expect(err).To(MatchError(ContainSubstring("only supported for the client credentials flow")))
+		})
+
+		It("uses fresh cached tokens and reads the replaced file on the next grant", func() {
+			source, err := builder.Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			var grants atomic.Int32
+			server.RouteToHandler(http.MethodPost, "/token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
+				switch grants.Add(1) {
+				case 1:
+					Expect(r.FormValue("client_secret")).To(Equal("initial-value"))
+				case 2:
+					Expect(r.FormValue("client_secret")).To(Equal("rotated-value"))
+				default:
+					Fail("unexpected token grant")
+				}
+				Expect(r.FormValue("grant_type")).To(Equal("client_credentials"))
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprint(w, `{"access_token":"access","expires_in":3600}`)
+				Expect(err).NotTo(HaveOccurred())
+			}))
+
+			Expect(os.WriteFile(path, []byte("initial-value\n"), 0o600)).To(Succeed())
+			token, err := source.Token(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(token.Access).To(Equal("access"))
+
+			Expect(os.Remove(path)).To(Succeed())
+			token, err = source.Token(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(token.Access).To(Equal("access"))
+			Expect(grants.Load()).To(Equal(int32(1)))
+
+			replacement := path + ".next"
+			Expect(os.WriteFile(replacement, []byte("rotated-value"), 0o600)).To(Succeed())
+			Expect(os.Rename(replacement, path)).To(Succeed())
+			Expect(source.Invalidate(ctx)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(grants.Load()).To(Equal(int32(2)))
+		})
+
+		It("does not send a grant for an unavailable or blank file and recovers after repair", func() {
+			source, err := builder.Build()
+			Expect(err).NotTo(HaveOccurred())
+			var grants atomic.Int32
+			server.RouteToHandler(http.MethodPost, "/token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
+				grants.Add(1)
+				Expect(r.FormValue("client_secret")).To(Equal("repaired-value"))
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprint(w, `{"access_token":"access","expires_in":3600}`)
+				Expect(err).NotTo(HaveOccurred())
+			}))
+
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("failed to read client secret file")))
+			Expect(os.Mkdir(path, 0o700)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("failed to read client secret file")))
+			Expect(os.Remove(path)).To(Succeed())
+			Expect(os.WriteFile(path, []byte(" \r\n\t"), 0o600)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("client secret file is empty")))
+			Expect(grants.Load()).To(BeZero())
+
+			Expect(os.WriteFile(path, []byte("repaired-value"), 0o600)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(grants.Load()).To(Equal(int32(1)))
+		})
+
+		It("rejects a non-regular or oversized secret file without sending a grant", func() {
+			source, err := builder.Build()
+			Expect(err).NotTo(HaveOccurred())
+			var grants atomic.Int32
+			server.RouteToHandler(http.MethodPost, "/token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				grants.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprint(w, `{"access_token":"access","expires_in":3600}`)
+				Expect(err).NotTo(HaveOccurred())
+			}))
+
+			Expect(os.Mkdir(path, 0o700)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("not a regular file")))
+			Expect(os.Remove(path)).To(Succeed())
+
+			Expect(syscall.Mkfifo(path, 0o600)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("not a regular file")))
+			Expect(os.Remove(path)).To(Succeed())
+
+			Expect(os.WriteFile(path, make([]byte, maxClientSecretFileSize+1), 0o600)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("exceeds the maximum client secret file size")))
+			Expect(grants.Load()).To(BeZero())
+		})
+
+		It("reads a Kubernetes projected secret symlink and picks up its rotation", func() {
+			dir := GinkgoT().TempDir()
+			linkPath := filepath.Join(dir, "client-secret")
+
+			writeVersion := func(name, value string) {
+				versionDir := filepath.Join(dir, name)
+				Expect(os.Mkdir(versionDir, 0o755)).To(Succeed())
+				Expect(os.WriteFile(filepath.Join(versionDir, "client-secret"), []byte(value), 0o600)).To(Succeed())
+			}
+			// Kubernetes projects a Secret as "client-secret -> ..data/client-secret"
+			// and "..data -> ..<timestamp>", so the reader must follow both links.
+			writeVersion("..2026_11_27_15_00_00.000000000", "initial-value")
+			Expect(os.Symlink("..2026_11_27_15_00_00.000000000", filepath.Join(dir, "..data"))).To(Succeed())
+			Expect(os.Symlink(filepath.Join("..data", "client-secret"), linkPath)).To(Succeed())
+
+			source, err := builder.SetClientSecretFile(linkPath).Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			var grants atomic.Int32
+			server.RouteToHandler(http.MethodPost, "/token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
+				switch grants.Add(1) {
+				case 1:
+					Expect(r.FormValue("client_secret")).To(Equal("initial-value"))
+				case 2:
+					Expect(r.FormValue("client_secret")).To(Equal("rotated-value"))
+				default:
+					Fail("unexpected token grant")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprint(w, `{"access_token":"access","expires_in":3600}`)
+				Expect(err).NotTo(HaveOccurred())
+			}))
+
+			_, err = source.Token(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Rotation replaces the ..data symlink atomically; the visible file
+			// link stays in place.
+			writeVersion("..2026_11_27_15_05_00.000000000", "rotated-value")
+			Expect(os.Symlink("..2026_11_27_15_05_00.000000000", filepath.Join(dir, "..data_tmp"))).To(Succeed())
+			Expect(os.Rename(filepath.Join(dir, "..data_tmp"), filepath.Join(dir, "..data"))).To(Succeed())
+			Expect(source.Invalidate(ctx)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(grants.Load()).To(Equal(int32(2)))
+		})
+
+		It("sanitizes transport timeouts and unreadable success responses", func() {
+			const dummy = "file-credential-test-value"
+			Expect(os.WriteFile(path, []byte(dummy), 0o600)).To(Succeed())
+
+			server.RouteToHandler(http.MethodPost, "/token", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				time.Sleep(500 * time.Millisecond)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"access_token":"access","expires_in":3600}`))
+			}))
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.TLSClientConfig = &tls.Config{RootCAs: caPool.Pool()}
+			source, err := builder.SetHttpClient(&http.Client{
+				Timeout:   100 * time.Millisecond,
+				Transport: transport,
+			}).Build()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("token endpoint request timed out")))
+			Expect(err.Error()).NotTo(ContainSubstring(dummy))
+
+			server.RouteToHandler(http.MethodPost, "/token", RespondWith(http.StatusOK, `{"access_token":`,
+				http.Header{"Content-Type": {"application/json"}}))
+			Expect(source.Invalidate(ctx)).To(Succeed())
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("token endpoint returned an invalid response")))
+			Expect(err.Error()).NotTo(ContainSubstring(dummy))
+			Expect(logs.String()).NotTo(ContainSubstring(dummy))
+		})
+
+		It("does not log or return a credential echoed by the token endpoint", func() {
+			const dummy = "file-credential-test-value"
+			Expect(os.WriteFile(path, []byte(dummy), 0o600)).To(Succeed())
+			server.RouteToHandler(http.MethodPost, "/token", RespondWithJSONEncoded(http.StatusBadRequest, endpointError{
+				ErrorCode:        "invalid_client",
+				ErrorDescription: "echoed credential: " + dummy,
+			}, http.Header{"Content-Type": {"application/json"}}))
+			source, err := builder.Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = source.Token(ctx)
+			Expect(err).To(MatchError(ContainSubstring("HTTP 400")))
+			Expect(err.Error()).NotTo(ContainSubstring(dummy))
+			Expect(logs.String()).NotTo(ContainSubstring(dummy))
+		})
 	})
 
 	It("Can't be created without a token store", func() {

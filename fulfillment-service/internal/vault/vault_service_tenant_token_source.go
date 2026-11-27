@@ -31,14 +31,14 @@ import (
 )
 
 type ServiceTenantTokenSourceBuilder struct {
-	logger               *slog.Logger
-	vaultAddress         string
-	parentNamespace      string
-	keycloakIssuerURL    string
-	keycloakClientID     string
-	keycloakClientSecret string
-	keycloakAudience     string
-	caPool               *trust.CertPool
+	logger                   *slog.Logger
+	vaultAddress             string
+	parentNamespace          string
+	keycloakIssuerURL        string
+	keycloakClientID         string
+	keycloakClientSecretFile string
+	keycloakAudience         string
+	caPool                   *trust.CertPool
 }
 
 type ServiceTenantTokenSource struct {
@@ -88,8 +88,8 @@ func (b *ServiceTenantTokenSourceBuilder) SetKeycloakClientID(value string) *Ser
 	return b
 }
 
-func (b *ServiceTenantTokenSourceBuilder) SetKeycloakClientSecret(value string) *ServiceTenantTokenSourceBuilder {
-	b.keycloakClientSecret = value
+func (b *ServiceTenantTokenSourceBuilder) SetKeycloakClientSecretFile(path string) *ServiceTenantTokenSourceBuilder {
+	b.keycloakClientSecretFile = path
 	return b
 }
 
@@ -124,8 +124,8 @@ func (b *ServiceTenantTokenSourceBuilder) Build() (result *ServiceTenantTokenSou
 		err = errors.New("keycloak client ID is mandatory")
 		return
 	}
-	if b.keycloakClientSecret == "" {
-		err = errors.New("keycloak client secret is mandatory")
+	if b.keycloakClientSecretFile == "" {
+		err = errors.New("keycloak client secret file is mandatory")
 		return
 	}
 
@@ -142,7 +142,7 @@ func (b *ServiceTenantTokenSourceBuilder) Build() (result *ServiceTenantTokenSou
 		SetFlow(oauth.CredentialsFlow).
 		SetIssuer(b.keycloakIssuerURL).
 		SetClientId(b.keycloakClientID).
-		SetClientSecret(b.keycloakClientSecret).
+		SetClientSecretFile(b.keycloakClientSecretFile).
 		SetAudience(b.keycloakAudience).
 		SetCaPool(b.caPool).
 		SetStore(tokenStore).

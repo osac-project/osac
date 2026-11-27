@@ -24,9 +24,9 @@ import (
 )
 
 // NewLifecycleClientFromConfig creates a fully wired LifecycleClient from the
-// base and lifecycle configuration. It validates the config, reads the Keycloak
-// client secret from disk, creates the Vault authenticator, and builds the
-// lifecycle client. The caller provides the CA pool (which should already
+// base and lifecycle configuration. The Vault authenticator reads the Keycloak
+// secret file only when requesting a client credentials grant.
+// The caller provides the CA pool (which should already
 // include any vault-specific CA certificates).
 func NewLifecycleClientFromConfig(
 	logger *slog.Logger,
@@ -39,14 +39,6 @@ func NewLifecycleClientFromConfig(
 	}
 	if err := ValidateLifecycleConfig(lifecycle); err != nil {
 		return nil, err
-	}
-
-	keycloakClientSecret, err := readTrimmedFile(base.KeycloakClientSecretFile)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to read vault keycloak client secret from file '%s': %w",
-			base.KeycloakClientSecretFile, err,
-		)
 	}
 
 	logger.Info("Creating vault authenticator",
@@ -64,7 +56,7 @@ func NewLifecycleClientFromConfig(
 		SetVaultRole(lifecycle.Role).
 		SetKeycloakIssuerURL(base.KeycloakIssuerURL).
 		SetKeycloakClientID(base.KeycloakClientID).
-		SetKeycloakClientSecret(keycloakClientSecret).
+		SetKeycloakClientSecretFile(base.KeycloakClientSecretFile).
 		SetKeycloakAudience(base.KeycloakAudience).
 		SetCaPool(caPool).
 		Build()

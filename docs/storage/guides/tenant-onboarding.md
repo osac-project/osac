@@ -77,6 +77,65 @@ New tiers can be configured after a tenant is onboarded:
 - A workload requesting the new tier uses its current resolution at
   provisioning time.
 
+## VAST NFS preparation for CLaaS
+
+The Cloud Provider Admin can prepare the credentials before CLaaS class setup
+and volume provisioning are connected to the resolver. Create one OPAQUE
+Secret per OSAC tenant and registered VAST backend. For example, tenant
+`acme` shares one bundle across the `gold` and `silver` tiers when both use
+the backend `vast-east`.
+
+Save the example below as an owner-only file named `vast-nfs.yaml` (mode
+`0600`). Replace the sample VAST tenant name, credentials, and NFS settings
+with the values prepared for your tenant.
+`storage_tenant` is the tenant name in VAST. Store the VAST management address
+in the registered StorageBackend's endpoint.
+
+```yaml
+schema_version: 1
+provider: vast
+storage_tenant: acme-on-vast
+credentials:
+  username: acme-storage-admin
+  password: "<delegated VAST password>"
+endpoints:
+  data: acme-nfs.example.com
+options:
+  root_export: /acme/claas
+  view_policy: acme-nfs
+```
+
+Set `endpoints.data` to the direct NFS mount address: a fully qualified DNS
+name or IP address, without a URL scheme. For now, provide the pool address
+itself; OSAC does not look up a VIP pool by name. This is the mount address
+used by workloads, separate from the VAST management address in the registered
+StorageBackend.
+
+The resolver passes the management host to VAST CSI without its optional
+`https://` prefix. VAST CSI adds that scheme when connecting to the management
+API, so a configured URL does not become `https://https://...`.
+
+Use the OSAC CLI as a Cloud Provider Admin to create the Secret through the
+public Secrets API, in the default project of the `system` tenant. Name it
+`<osac-tenant>--<registered-backend>`.
+For example, tenant `acme` and backend `vast-east` use `acme--vast-east`.
+Use your own names in the command below. Single hyphens are allowed in either
+name. Reserve the double hyphen for the separator and keep the full Secret
+name within 63 characters, including the separator.
+
+```shell
+osac --tenant system --project '' create secret \
+  --name acme--vast-east --type opaque \
+  --from-file=config.yaml=./vast-nfs.yaml
+```
+
+Remove the local credential file after a successful upload. The Secret lookup
+uses the exact owner, default project and derived name.
+Labels can be used for organization.
+
+If the bundle is missing, check all three parts of the address. For an invalid
+bundle, verify the OPAQUE type, the `config.yaml` key and the required settings.
+
 ## Offboarding
 
 When a tenant is deleted:
@@ -86,6 +145,11 @@ When a tenant is deleted:
 - **CSP-managed:** OSAC removes its own records only. CSP-owned
   StorageClasses, CSI configuration, and the shared storage system are
   preserved.
+
+For a VAST NFS preparation Secret, the Cloud Provider Admin owns cleanup in the
+default `system` project. Once all volumes using the bundle have been removed,
+delete the Secret and revoke its delegated VAST credentials before reusing the
+OSAC tenant or backend name.
 
 ## Troubleshooting
 

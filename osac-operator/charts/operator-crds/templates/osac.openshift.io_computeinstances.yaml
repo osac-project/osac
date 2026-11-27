@@ -37,7 +37,7 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.ipAddress
+    - jsonPath: .status.interfaces[0].ipAddress
       name: IP
       type: string
     - jsonPath: .status.externalIPAddress
@@ -381,11 +381,29 @@ spec:
                   ExternalIPAddress is the external IP address attached to this instance via an ExternalIPAttachment.
                   Populated when an ExternalIPAttachment in state "Ready" references this ComputeInstance.
                 type: string
-              ipAddress:
-                description: |-
-                  IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
-                  Populated when the instance is ready (phase Running).
-                type: string
+              interfaces:
+                description: Interfaces reports the running VMI's OSAC-managed interfaces,
+                  independent of attachment readiness.
+                items:
+                  description: ComputeInstanceInterfaceStatus reports addresses observed
+                    on one guest-facing VMI interface.
+                  properties:
+                    ipAddress:
+                      description: IPAddress is the IPv4 address accepted by the ComputeInstance
+                        controller, if known.
+                      type: string
+                    macAddress:
+                      description: MACAddress is the canonical guest-facing MAC reported
+                        by the VMI, if known.
+                      type: string
+                    name:
+                      description: Name is the interface name from the VMI network
+                        definition.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               jobs:
                 description: |-
                   Jobs tracks the provision and deprovision jobs (manager none), one entry

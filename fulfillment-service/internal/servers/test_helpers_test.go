@@ -78,7 +78,9 @@ func createComputeInstanceInState(
 	}
 	status := privatev1.ComputeInstanceStatus_builder{State: state, Hub: hubID}
 	if state == privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
-		status.InternalIpAddress = "10.0.0.10"
+		status.Interfaces = []*privatev1.ComputeInstanceInterfaceStatus{
+			privatev1.ComputeInstanceInterfaceStatus_builder{Name: "tenant", IpAddress: "10.0.0.10"}.Build(),
+		}
 		status.ComputeNetworkAttachmentStatuses = []*privatev1.ComputeNetworkAttachmentStatus{
 			privatev1.ComputeNetworkAttachmentStatus_builder{IpAddress: "10.0.0.10"}.Build(),
 		}

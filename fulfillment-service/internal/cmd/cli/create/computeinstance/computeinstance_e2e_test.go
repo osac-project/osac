@@ -63,11 +63,11 @@ var _ = Describe("Compute Instance E2E", func() {
 			},
 			Instances: []*testing.InstanceData{
 				{
-					ID:                "ci-existing-001",
-					Name:              "existing-instance",
-					Template:          "tpl-test-001",
-					State:             publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
-					InternalIPAddress: "192.168.1.100",
+					ID:                 "ci-existing-001",
+					Name:               "existing-instance",
+					Template:           "tpl-test-001",
+					State:              publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+					InterfaceIPAddress: "192.168.1.100",
 				},
 			},
 		}

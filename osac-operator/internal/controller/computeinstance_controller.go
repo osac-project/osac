@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -863,21 +865,19 @@ func computeInstanceConfigApplied(instance *v1alpha1.ComputeInstance) bool {
 		instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion
 }
 
-// reconcileNetworkStatus discovers the VM address and sets NetworkReady
+// reconcileNetworkStatus discovers the VM's MAC and IP addresses and sets NetworkReady
 // (VMaaS design, Network status and address discovery).
 func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, instance *v1alpha1.ComputeInstance,
 	na *v1alpha1.NetworkAttachment, kv *kubevirtv1.VirtualMachine) (ctrl.Result, error) {
-	enabled := r.provisioningEnabled()
-	failed := na != nil && networkAttachmentFailed(na)
-	oldAddress := instance.Status.IPAddress
-
 	vmi, err := r.runningVMI(ctx, instance, kv)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	enabled := r.provisioningEnabled()
+	failed := na != nil && networkAttachmentFailed(na)
 	if vmi == nil {
 		instance.Status.ComputeNetworkAttachmentStatuses = nil
-		instance.SetIPAddress("")
+		instance.Status.Interfaces = nil
 		if enabled && !failed {
 			r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonVMNotRunning, "the VM is not running")
 		}
@@ -886,7 +886,8 @@ func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, 
 
 	if !enabled {
 		instance.Status.ComputeNetworkAttachmentStatuses = nil
-		instance.SetIPAddress(firstIPv4OfInterface(vmi, vmNetworkDefault, nil))
+		address := firstIPv4OfInterface(vmi, vmNetworkDefault, nil)
+		instance.Status.Interfaces = observedVMIInterfaces(vmi, vmNetworkDefault, address)
 		return ctrl.Result{}, nil
 	}
 
@@ -903,14 +904,16 @@ func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, 
 	if len(overlay) > 0 {
 		address = firstIPv4OfInterface(vmi, vmNetworkTenant, overlay)
 	}
+	if address == "" && len(overlay) == 0 && keepsValidatedAddress(instance, vmi, subnetID) {
+		// The range went away under a VM whose validated address is still reported.
+		// Keep projecting that address and don't change readiness. Only new addresses wait.
+		instance.Status.Interfaces = observedVMIInterfaces(vmi, vmNetworkTenant, instance.Status.ComputeNetworkAttachmentStatuses[0].IPAddress)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+	oldAddress := instance.GetIPAddress()
+	instance.Status.Interfaces = observedVMIInterfaces(vmi, vmNetworkTenant, address)
 	if address == "" {
-		if len(overlay) == 0 && keepsValidatedAddress(instance, vmi, subnetID) {
-			// The range went away under a VM whose address was validated against it and is
-			// still reported: keep the address and the condition. Only new addresses wait.
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
 		instance.Status.ComputeNetworkAttachmentStatuses = nil
-		instance.SetIPAddress("")
 		if len(overlay) == 0 {
 			if !failed {
 				r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonWaitingForIPAddress,
@@ -929,7 +932,6 @@ func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, 
 		SubnetRef: subnetID,
 		IPAddress: address,
 	}}
-	instance.SetIPAddress(address)
 	if bound := boundIPv4Address(na); address != oldAddress && bound != "" && address != bound {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonIPAddressChanged, eventActionReconcile,
 			"the VM address changed from %s to %s; the network attachment keeps %s", bound, address, bound)
@@ -965,7 +967,7 @@ func (r *ComputeInstanceReconciler) reconcileReadyCondition(instance *v1alpha1.C
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 		if oldReadyStatus != metav1.ConditionTrue {
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonReady, eventActionReconcile,
-				"VirtualMachine is ready, IP: %s", instance.Status.IPAddress)
+				"VirtualMachine is ready, IP: %s", instance.GetIPAddress())
 		}
 		return
 	}
@@ -1025,6 +1027,28 @@ func (r *ComputeInstanceReconciler) subnetOverlayCIDRs(ctx context.Context, subn
 		return nil, nil
 	}
 	return list.Items[0].Status.IPAM.OverlayIPv4CIDRs, nil
+}
+
+// observedVMIInterfaces reports the OSAC-managed interface, excluding guest-only interfaces.
+// Pair the accepted IP with the MAC from the same status entry. Before an IP is accepted,
+// a MAC alone is still useful to consumers.
+func observedVMIInterfaces(vmi *kubevirtv1.VirtualMachineInstance, name, ip string) []v1alpha1.ComputeInstanceInterfaceStatus {
+	if vmi == nil || !vmi.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	for _, iface := range vmi.Status.Interfaces {
+		if iface.Name != name || (ip != "" && iface.IP != ip && !slices.Contains(iface.IPs, ip)) {
+			continue
+		}
+		status := v1alpha1.ComputeInstanceInterfaceStatus{Name: name, IPAddress: ip}
+		if mac, err := net.ParseMAC(iface.MAC); err == nil && len(mac) == 6 {
+			status.MACAddress = mac.String()
+		}
+		if status.IPAddress != "" || status.MACAddress != "" {
+			return []v1alpha1.ComputeInstanceInterfaceStatus{status}
+		}
+	}
+	return nil
 }
 
 // firstIPv4OfInterface returns the first canonical IPv4 address of the VMI

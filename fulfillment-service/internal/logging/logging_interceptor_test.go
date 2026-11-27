@@ -1191,7 +1191,11 @@ func computeInstanceLogFixtures() (
 			Metadata: metadata,
 			Spec:     spec,
 			Status: publicv1.ComputeInstanceStatus_builder{
-				InternalIpAddress: "10.1.2.3",
+				Interfaces: []*publicv1.ComputeInstanceInterfaceStatus{
+					publicv1.ComputeInstanceInterfaceStatus_builder{
+						Name: "tenant", IpAddress: "10.1.2.3", MacAddress: "02:00:00:00:00:03",
+					}.Build(),
+				},
 				ExternalIpAddress: "192.0.2.4",
 				ComputeNetworkAttachmentStatuses: []*publicv1.ComputeNetworkAttachmentStatus{
 					publicv1.ComputeNetworkAttachmentStatus_builder{
@@ -1278,8 +1282,9 @@ func expectComputeInstancesListBodyLogs(buffer *bytes.Buffer, requestEvent, resp
 	Expect(items[0].(map[string]any)).To(HaveKeyWithValue("id", "compute-instance-list-fixture"))
 }
 
-// expectComputeInstanceBodyLogs checks that instance identifiers remain in body logs.
+// expectComputeInstanceBodyLogs checks that instance identifiers remain in body logs without interface MACs.
 func expectComputeInstanceBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {
+	Expect(buffer.String()).NotTo(ContainSubstring("02:00:00:00:00:03"))
 	messages := Parse(buffer)
 	requestLogs := Find(messages, requestEvent)
 	Expect(requestLogs).To(HaveLen(1))

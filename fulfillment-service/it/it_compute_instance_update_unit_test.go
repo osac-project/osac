@@ -82,8 +82,9 @@ func TestComputeInstanceWholeStatusUpdateRetriesConcurrentWriter(t *testing.T) {
 			t.Fatalf("update %d used version %d, want %d", i, got, i+1)
 		}
 	}
-	if got := client.object.GetStatus().GetInternalIpAddress(); got != "192.0.2.42" {
-		t.Fatalf("internal IP = %q, want fixture feedback", got)
+	interfaces := client.object.GetStatus().GetInterfaces()
+	if len(interfaces) != 1 || interfaces[0].GetIpAddress() != "192.0.2.42" {
+		t.Fatalf("interfaces = %v, want fixture feedback", interfaces)
 	}
 	if got := client.object.GetStatus().GetExternalIpAddress(); got != "198.51.100.7" {
 		t.Fatalf("concurrent status field = %q, want preserved value", got)

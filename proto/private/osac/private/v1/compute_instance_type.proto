@@ -250,7 +250,7 @@ message ComputeInstanceStatus {
   //
   // In this example the `PROVISIONED` condition is true (infrastructure is allocated), `CONFIGURATION_APPLIED` is true
   // (the desired configuration has been applied by the provisioning provider), and `READY` is true (the compute
-  // instance is reachable via the internal IP address in `status.internal_ip_address`).
+  // instance is reachable via an IPv4 address in `status.interfaces`).
   //
   // The `state` field reflects the VM power state as reported by the hypervisor. Possible states include
   // `STARTING`, `RUNNING`, `FAILED`, `DELETING`, `STOPPING`, `STOPPED`, and `PAUSED`.
@@ -261,11 +261,6 @@ message ComputeInstanceStatus {
   // Check the documentation of the values of the `ComputeInstanceConditionType` enumerated type to see possible conditions and
   // reasons.
   repeated ComputeInstanceCondition conditions = 2;
-
-  // Internal IP address of the compute instance.
-  //
-  // This will be empty if the compute instance isn't running.
-  string internal_ip_address = 3;
 
   // LastRestartedAt records when the last restart was initiated by the controller.
   //
@@ -326,6 +321,22 @@ message ComputeInstanceStatus {
   // Latest provisioning failure retained while a retry is pending or running, or after a terminal failure.
   // The system removes this field when provisioning succeeds, is cancelled for deletion, or starts for a new configuration.
   optional ComputeInstanceProvisioningFailure last_provisioning_failure = 13;
+
+  // Observed addresses on the running VM's OSAC-managed interfaces.
+  // A MAC can be reported before IP discovery. The list is empty during deletion.
+  repeated ComputeInstanceInterfaceStatus interfaces = 14;
+}
+
+// Observed addresses for one guest-facing VM interface.
+message ComputeInstanceInterfaceStatus {
+  // Interface name from the VMI network definition.
+  string name = 1;
+
+  // IPv4 address accepted by the ComputeInstance controller, if known.
+  string ip_address = 2;
+
+  // Canonical guest-facing MAC reported by the VMI, if known.
+  string mac_address = 3;
 }
 
 // Describes the latest system-observed provisioning failure.
@@ -475,7 +486,7 @@ enum ComputeInstanceConditionType {
   // Indicates that the compute instance is ready (reachable per readiness checks).
   //
   // When `status` is `TRUE`, the compute instance is running and the readiness check
-  // has passed. The instance is reachable via the internal IP address in `status.internal_ip_address`.
+  // has passed. The instance is reachable via an IPv4 address in `status.interfaces`.
   //
   // When `status` is `FALSE`, the instance is not yet reachable (e.g. it is still
   // starting, the readiness check has not passed, or the instance is stopped/paused).

@@ -51,7 +51,9 @@ func updateComputeInstanceTestStatus(
 		if !candidate.HasStatus() {
 			candidate.SetStatus(&privatev1.ComputeInstanceStatus{})
 		}
-		candidate.GetStatus().SetInternalIpAddress(address)
+		candidate.GetStatus().SetInterfaces([]*privatev1.ComputeInstanceInterfaceStatus{
+			privatev1.ComputeInstanceInterfaceStatus_builder{Name: "default", IpAddress: address}.Build(),
+		})
 		_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 			Object: candidate, UpdateMask: catalogItemUpdateMask(mask), Lock: true,
 		}.Build())
@@ -304,18 +306,20 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 
 		for _, update := range []struct{ mask, address string }{
 			{mask: "status", address: "192.0.2.42"},
-			{mask: "status.internal_ip_address", address: "192.0.2.43"},
+			{mask: "status.interfaces", address: "192.0.2.43"},
 		} {
 			By("writing private status feedback with mask " + update.mask)
 			err = updateComputeInstanceTestStatus(ctx, client, instance.GetId(), update.mask, update.address)
 			Expect(err).NotTo(HaveOccurred())
 			stored, err = client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			Expect(stored.GetObject().GetStatus().GetInternalIpAddress()).To(Equal(update.address))
+			interfaces := stored.GetObject().GetStatus().GetInterfaces()
+			Expect(interfaces).To(HaveLen(1))
+			Expect(interfaces[0].GetIpAddress()).To(Equal(update.address))
 			Expect(stored.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).To(Equal(secretID))
 		}
 
-		for _, paths := range [][]string{{"spec.run_strategy"}, {"status.internal_ip_address", "spec.run_strategy"}, {}} {
+		for _, paths := range [][]string{{"spec.run_strategy"}, {"status.interfaces", "spec.run_strategy"}, {}} {
 			candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
 			_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: candidate, UpdateMask: catalogItemUpdateMask(paths...),

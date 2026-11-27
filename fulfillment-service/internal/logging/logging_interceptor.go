@@ -673,7 +673,7 @@ func isSensitiveComputeInstanceField(field protoreflect.FieldDescriptor) bool {
 		}
 	case publicComputeInstanceStatus, privateComputeInstanceStatus:
 		switch name {
-		case "internal_ip_address", "external_ip_address", "compute_network_attachment_statuses":
+		case "interfaces", "external_ip_address", "compute_network_attachment_statuses":
 			return true
 		}
 	case publicComputeInstanceCatalogItem, privateComputeInstanceCatalogItem:

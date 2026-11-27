@@ -267,6 +267,18 @@ var _ = Describe("Compute instance provisioning columns", func() {
 		row := render(ctx, nil)
 		Expect(row["PROVISIONING"]).To(Equal("-"))
 		Expect(row["LAST FAILURE"]).To(Equal("-"))
+		Expect(row["INTERNAL IP ADDRESS"]).To(Equal("-"))
+	})
+
+	It("shows interface IPs and skips entries awaiting an IP", func(ctx context.Context) {
+		row := render(ctx, publicv1.ComputeInstanceStatus_builder{
+			Interfaces: []*publicv1.ComputeInstanceInterfaceStatus{
+				publicv1.ComputeInstanceInterfaceStatus_builder{Name: "first", IpAddress: "192.0.2.10"}.Build(),
+				publicv1.ComputeInstanceInterfaceStatus_builder{Name: "second", MacAddress: "02:00:00:00:00:02"}.Build(),
+				publicv1.ComputeInstanceInterfaceStatus_builder{Name: "third", IpAddress: "192.0.2.11"}.Build(),
+			},
+		}.Build())
+		Expect(row["INTERNAL IP ADDRESS"]).To(Equal("192.0.2.10, 192.0.2.11"))
 	})
 
 	DescribeTable("clears the presentation after success without waiting for readiness",

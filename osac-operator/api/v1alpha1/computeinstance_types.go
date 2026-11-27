@@ -379,15 +379,28 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Optional
 	ComputeNetworkAttachmentStatuses []ComputeNetworkAttachmentStatus `json:"computeNetworkAttachmentStatuses,omitempty"`
 
-	// IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
-	// Populated when the instance is ready (phase Running).
+	// Interfaces reports the running VMI's OSAC-managed interfaces, independent of attachment readiness.
 	// +kubebuilder:validation:Optional
-	IPAddress string `json:"ipAddress,omitempty"`
+	Interfaces []ComputeInstanceInterfaceStatus `json:"interfaces,omitempty"`
 
 	// ExternalIPAddress is the external IP address attached to this instance via an ExternalIPAttachment.
 	// Populated when an ExternalIPAttachment in state "Ready" references this ComputeInstance.
 	// +kubebuilder:validation:Optional
 	ExternalIPAddress string `json:"externalIPAddress,omitempty"`
+}
+
+// ComputeInstanceInterfaceStatus reports addresses observed on one guest-facing VMI interface.
+type ComputeInstanceInterfaceStatus struct {
+	// Name is the interface name from the VMI network definition.
+	Name string `json:"name"`
+
+	// IPAddress is the IPv4 address accepted by the ComputeInstance controller, if known.
+	// +kubebuilder:validation:Optional
+	IPAddress string `json:"ipAddress,omitempty"`
+
+	// MACAddress is the canonical guest-facing MAC reported by the VMI, if known.
+	// +kubebuilder:validation:Optional
+	MACAddress string `json:"macAddress,omitempty"`
 }
 
 // ComputeNetworkAttachmentStatus contains the discovered Subnet ID and IP address for one network attachment.
@@ -409,7 +422,7 @@ type ComputeNetworkAttachmentStatus struct {
 // +kubebuilder:printcolumn:name="OS",type=string,JSONPath=`.spec.guestOSFamily`
 // +kubebuilder:printcolumn:name="RunStrategy",type=string,JSONPath=`.spec.runStrategy`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.ipAddress`
+// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.interfaces[0].ipAddress`
 // +kubebuilder:printcolumn:name="ExternalIP",type=string,JSONPath=`.status.externalIPAddress`,priority=1
 
 // ComputeInstance is the Schema for the computeinstances API

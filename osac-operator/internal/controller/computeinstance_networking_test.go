@@ -356,11 +356,13 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 
 		f.aap.finish(computeInstanceProvisionTask, "successful", "")
 		createVM(f, vmNamespace, kubevirtv1.Running,
-			kubevirtv1.VirtualMachineInstanceNetworkInterface{Name: "guest-agent-only", IPs: []string{"10.9.0.40"}},
-			kubevirtv1.VirtualMachineInstanceNetworkInterface{Name: "tenant", IPs: []string{"fd00::5", "10.9.0.200", "10.9.0.20"}},
+			kubevirtv1.VirtualMachineInstanceNetworkInterface{MAC: "02:00:00:00:00:01", IPs: []string{"10.9.0.40"}},
+			kubevirtv1.VirtualMachineInstanceNetworkInterface{Name: "tenant", MAC: "02:00:00:00:00:02", IPs: []string{"fd00::5", "10.9.0.200", "10.9.0.20"}},
 		)
 		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
-			g.Expect(ci.Status.IPAddress).To(Equal("10.9.0.20"))
+			g.Expect(ci.Status.Interfaces).To(ConsistOf(osacv1alpha1.ComputeInstanceInterfaceStatus{
+				Name: "tenant", IPAddress: "10.9.0.20", MACAddress: "02:00:00:00:00:02",
+			}))
 			g.Expect(ci.Status.ComputeNetworkAttachmentStatuses).To(Equal([]osacv1alpha1.ComputeNetworkAttachmentStatus{{
 				SubnetRef: "vmaas-flow-subnet", IPAddress: "10.9.0.20",
 			}}))
@@ -411,13 +413,25 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 		})
 		f.aap.finish(computeInstanceProvisionTask, "successful", "")
 		createVM(f, vmNamespace, kubevirtv1.Running,
-			kubevirtv1.VirtualMachineInstanceNetworkInterface{Name: "tenant", IPs: []string{"10.9.0.200"}})
+			kubevirtv1.VirtualMachineInstanceNetworkInterface{MAC: "02:00:00:00:00:01"},
+			kubevirtv1.VirtualMachineInstanceNetworkInterface{Name: "tenant", MAC: "02:AA:00:00:00:02", IPs: []string{"10.9.0.200"}})
 		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
 			c := condition(ci, osacv1alpha1.ComputeInstanceConditionNetworkReady)
 			g.Expect(c.Reason).To(Equal(osacv1alpha1.ComputeInstanceReasonWaitingForIPAddress))
 			g.Expect(c.Message).To(ContainSubstring("10.9.0.0/25"))
-			g.Expect(ci.Status.IPAddress).To(BeEmpty())
 			g.Expect(ci.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
+			g.Expect(ci.Status.Interfaces).To(ConsistOf(osacv1alpha1.ComputeInstanceInterfaceStatus{
+				Name: "tenant", MACAddress: "02:aa:00:00:00:02",
+			}))
+		})
+
+		By("clearing observed interfaces when the VMI disappears")
+		vmi := &kubevirtv1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name, Namespace: vmNamespace}}
+		Expect(k8sClient.Delete(ctx, vmi)).To(Succeed())
+		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
+			g.Expect(condition(ci, osacv1alpha1.ComputeInstanceConditionNetworkReady).Reason).To(
+				Equal(osacv1alpha1.ComputeInstanceReasonVMNotRunning))
+			g.Expect(ci.Status.Interfaces).To(BeEmpty())
 		})
 	})
 
@@ -477,7 +491,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 			Consistently(func(g Gomega) {
 				res, _ := f.r.Reconcile(ctx, request(f.key))
 				ci := mustGetCI(f.key)
-				g.Expect(ci.Status.IPAddress).To(BeEmpty())
+				g.Expect(ci.Status.Interfaces).To(BeEmpty())
 				g.Expect(ci.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
 				g.Expect(res.RequeueAfter).NotTo(BeZero(), "polls until the range arrives")
 			}, 500*time.Millisecond, 100*time.Millisecond).Should(Succeed())
@@ -509,7 +523,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 			f := runningVMWith("vmaas-blip", "10.9.0.20", func(f *ciFixture) { createSubnet(f, []string{"10.9.0.0/25"}) })
 			setAttachmentStatus(f, attached("vmaas-blip-net", metav1.ConditionTrue, osacv1alpha1.ReasonSucceeded, ""))
 			reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
-				g.Expect(ci.Status.IPAddress).To(Equal("10.9.0.20"))
+				g.Expect(ci.Status.Interfaces).To(ConsistOf(osacv1alpha1.ComputeInstanceInterfaceStatus{Name: "tenant", IPAddress: "10.9.0.20"}))
 				g.Expect(condition(ci, osacv1alpha1.ComputeInstanceConditionReady).Status).To(Equal(metav1.ConditionTrue))
 			})
 
@@ -531,7 +545,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 			Consistently(func(g Gomega) {
 				res, _ := f.r.Reconcile(ctx, request(f.key))
 				ci := mustGetCI(f.key)
-				g.Expect(ci.Status.IPAddress).To(Equal("10.9.0.20"))
+				g.Expect(ci.Status.Interfaces).To(ConsistOf(osacv1alpha1.ComputeInstanceInterfaceStatus{Name: "tenant", IPAddress: "10.9.0.20"}))
 				g.Expect(ci.Status.ComputeNetworkAttachmentStatuses).To(HaveLen(1))
 				g.Expect(condition(ci, osacv1alpha1.ComputeInstanceConditionNetworkReady).Status).To(Equal(metav1.ConditionTrue))
 				g.Expect(condition(ci, osacv1alpha1.ComputeInstanceConditionReady).Status).To(Equal(metav1.ConditionTrue))
@@ -554,7 +568,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 			f := runningVMWith("vmaas-range", "10.9.0.200", func(f *ciFixture) { createSubnet(f, []string{"10.9.0.0/25"}) })
 			reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
 				g.Expect(condition(ci, osacv1alpha1.ComputeInstanceConditionNetworkReady).Message).To(ContainSubstring("10.9.0.0/25"))
-				g.Expect(ci.Status.IPAddress).To(BeEmpty())
+				g.Expect(ci.Status.Interfaces).To(BeEmpty())
 			})
 
 			Eventually(func() error {
@@ -566,7 +580,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 				return k8sClient.Update(ctx, vmi)
 			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
 			reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
-				g.Expect(ci.Status.IPAddress).To(Equal("10.9.0.20"))
+				g.Expect(ci.Status.Interfaces).To(ConsistOf(osacv1alpha1.ComputeInstanceInterfaceStatus{Name: "tenant", IPAddress: "10.9.0.20"}))
 			})
 		})
 	})
@@ -812,9 +826,11 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 
 		f.aap.finish(computeInstanceProvisionTask, "successful", "")
 		createVM(f, ns, kubevirtv1.Running,
-			kubevirtv1.VirtualMachineInstanceNetworkInterface{Name: "default", IP: "10.128.4.7"})
+			kubevirtv1.VirtualMachineInstanceNetworkInterface{Name: "default", MAC: "02:00:00:00:00:03", IP: "10.128.4.7"})
 		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
-			g.Expect(ci.Status.IPAddress).To(Equal("10.128.4.7"))
+			g.Expect(ci.Status.Interfaces).To(ConsistOf(osacv1alpha1.ComputeInstanceInterfaceStatus{
+				Name: "default", IPAddress: "10.128.4.7", MACAddress: "02:00:00:00:00:03",
+			}))
 			g.Expect(ci.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
 			g.Expect(condition(ci, osacv1alpha1.ComputeInstanceConditionReady).Status).To(Equal(metav1.ConditionTrue))
 		})

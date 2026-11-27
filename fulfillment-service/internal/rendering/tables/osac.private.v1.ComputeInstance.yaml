@@ -38,7 +38,9 @@ columns:
   type: osac.private.v1.Hub
 
 - header: INTERNAL IP ADDRESS
-  value: this.status.internal_ip_address
+  value: >-
+    this.status.interfaces.exists(i, i.ip_address != '') ?
+    this.status.interfaces.map(i, i.ip_address).filter(ip, ip != '').join(', ') : '-'
 
 - header: EXTERNAL IP ADDRESS
   value: this.status.external_ip_address

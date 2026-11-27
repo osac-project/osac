@@ -363,6 +363,11 @@ var _ = Describe("Compute instances server", func() {
 						Volumes: []*publicv1.ComputeInstanceVolume{
 							publicv1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-spoofed"}.Build(),
 						},
+						Interfaces: []*publicv1.ComputeInstanceInterfaceStatus{
+							publicv1.ComputeInstanceInterfaceStatus_builder{
+								Name: "spoofed", IpAddress: "192.0.2.99", MacAddress: "02:aa:00:00:00:99",
+							}.Build(),
+						},
 						ComputeNetworkAttachmentStatuses: []*publicv1.ComputeNetworkAttachmentStatus{
 							publicv1.ComputeNetworkAttachmentStatus_builder{
 								SubnetRef: "spoofed-subnet",
@@ -378,8 +383,8 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
-			// The status is output-only: a caller-supplied state and attachment
-			// statuses are dropped instead of persisted.
+			// Status is output-only; caller-supplied interface data is dropped.
+			Expect(object.GetStatus().GetInterfaces()).To(BeEmpty())
 			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED))
 			Expect(object.GetStatus().GetComputeNetworkAttachmentStatuses()).To(BeEmpty())
 			Expect(object.GetStatus().GetVolumes()).To(BeEmpty())
@@ -1262,7 +1267,15 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			id := createResponse.GetObject().GetId()
 
-			// Report a state transition and attachment feedback through the private API.
+			// Test the private list with both a complete observation and a MAC before IP discovery.
+			interfaces := []*privatev1.ComputeInstanceInterfaceStatus{
+				privatev1.ComputeInstanceInterfaceStatus_builder{
+					Name: "tenant", IpAddress: "192.0.2.11", MacAddress: "02:aa:00:00:00:02",
+				}.Build(),
+				privatev1.ComputeInstanceInterfaceStatus_builder{
+					Name: "second", MacAddress: "02:aa:00:00:00:03",
+				}.Build(),
+			}
 			// The time must be after creation: the source contract clamps a first time on
 			// or before it.
 			feedbackTime := timestamppb.New(time.Now().Truncate(time.Second))
@@ -1272,6 +1285,7 @@ var _ = Describe("Compute instances server", func() {
 					Status: privatev1.ComputeInstanceStatus_builder{
 						State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 						StateTransitionTime: feedbackTime,
+						Interfaces:          interfaces,
 						ComputeNetworkAttachmentStatuses: []*privatev1.ComputeNetworkAttachmentStatus{
 							privatev1.ComputeNetworkAttachmentStatus_builder{
 								SubnetRef: "test-subnet",
@@ -1281,14 +1295,25 @@ var _ = Describe("Compute instances server", func() {
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.state", "status.state_transition_time", "status.compute_network_attachment_statuses"},
+					Paths: []string{
+						"status.state", "status.state_transition_time",
+						"status.compute_network_attachment_statuses", "status.interfaces",
+					},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
 
-			// The feedback is visible through the public API:
+			privateGet, err := privateServer.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			storedInterfaces := privateGet.GetObject().GetStatus().GetInterfaces()
+			Expect(storedInterfaces).To(HaveLen(len(interfaces)))
+			for i, iface := range interfaces {
+				Expect(proto.Equal(storedInterfaces[i], iface)).To(BeTrue())
+			}
+
+			// The public API exposes the same interface data and preserves attachment status.
 			getResponse, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
 				Id: id,
 			}.Build())
@@ -1300,6 +1325,28 @@ var _ = Describe("Compute instances server", func() {
 			Expect(statusObject.GetComputeNetworkAttachmentStatuses()).To(HaveLen(1))
 			Expect(statusObject.GetComputeNetworkAttachmentStatuses()[0].GetSubnetRef()).To(Equal("test-subnet"))
 			Expect(statusObject.GetComputeNetworkAttachmentStatuses()[0].GetIpAddress()).To(Equal("192.0.2.11"))
+			Expect(statusObject.ProtoReflect().Descriptor().Fields().ByName("internal_ip_address")).To(BeNil())
+			Expect(statusObject.GetInterfaces()).To(HaveLen(len(interfaces)))
+			for i, iface := range interfaces {
+				observed := statusObject.GetInterfaces()[i]
+				Expect(observed.GetName()).To(Equal(iface.GetName()))
+				Expect(observed.GetIpAddress()).To(Equal(iface.GetIpAddress()))
+				Expect(observed.GetMacAddress()).To(Equal(iface.GetMacAddress()))
+			}
+
+			_, err = server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: getResponse.GetObject(), UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.interfaces"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			_, err = privateServer.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object:     privatev1.ComputeInstance_builder{Id: id, Status: &privatev1.ComputeInstanceStatus{}}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.interfaces"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			privateGet, err = privateServer.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(privateGet.GetObject().GetStatus().GetInterfaces()).To(BeEmpty())
 		})
 
 		It("Infers supplied writable fields from a maskless update", func() {

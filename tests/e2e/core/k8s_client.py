@@ -40,6 +40,17 @@ def hub_kubeconfig() -> str | None:
     return os.environ.get("OSAC_HUB_KUBECONFIG", "").strip() or None
 
 
+def bmh_kubeconfig() -> str | None:
+    """The BareMetalHost inventory kubeconfig from OSAC_BMH_KUBECONFIG, or None.
+
+    A vcluster run keeps the hub on the vcluster while the BMH inventory, and
+    the BareMetalHost CRs that describe it, stay on the outer cluster. None
+    means the inventory lives where the hub does, which is how a single-cluster
+    installation runs.
+    """
+    return os.environ.get("OSAC_BMH_KUBECONFIG", "").strip() or None
+
+
 def service_account_token_args(*, namespace: str, service_account: str, duration: str | None = None) -> list[str]:
     """The `oc create token` arguments for a service-account token.
 
@@ -915,7 +926,10 @@ class K8sClient:
             resource="baremetalinstance", name=name, jsonpath="{.status.networkAttachmentStatuses[0].ipAddress}"
         )
 
-    # BareMetalHost queries (explicit namespace — BMHs live in a different namespace)
+    # BareMetalHost queries (explicit namespace — BMHs live in a different
+    # namespace and, in a vcluster run, on a different cluster). Callers read
+    # them through the BMH client (the k8s_bmh_client fixture, built from
+    # OSAC_BMH_KUBECONFIG), never the hub client.
 
     def get_bmh_provisioning_state(self, *, name: str, bmh_namespace: str) -> str:
         output, rc = self._get(
@@ -955,7 +969,11 @@ class K8sClient:
         return output if rc == 0 else ""
 
     def count_bmhs_by_provisioning_state(self, *, bmh_namespace: str, states: set[str]) -> int:
-        """Return how many BareMetalHosts in ``bmh_namespace`` are in any of ``states``."""
+        """Return how many BareMetalHosts in ``bmh_namespace`` are in any of ``states``.
+
+        The listing runs against this client, so pass the BMH client: the
+        inventory is not guaranteed to live on the hub's cluster.
+        """
         raw: str = run(*self._base(), "get", "baremetalhost", "-n", bmh_namespace, "-o", "json")
         items: list[dict[str, Any]] = json.loads(raw).get("items", [])
         count = 0

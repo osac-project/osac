@@ -217,10 +217,11 @@ def traffic_kind_for_guest(vm_namespace: str, vm_name: str, identity_file: str) 
     return refine
 
 
-def register_guest_snapshot(name: str, instances: list[dict[str, str]], identity_file: str) -> None:
-    """Add the guests in `instances` to the failure snapshot; the list is read at failure time."""
+def register_guest_snapshot(name: str, instances: list[dict[str, str]], identity_file: str | None) -> None:
+    """Register KubeVirt snapshots and guest snapshots when SSH credentials are available."""
 
     def runner_for(vm: dict[str, str]) -> Callable[[str, int], tuple[str, int]]:
+        assert identity_file is not None
         return lambda command, timeout: guest_ssh.ssh_guest_unchecked(
             vm_namespace=vm["vm_namespace"],
             vm_name=vm["cr"],
@@ -232,7 +233,10 @@ def register_guest_snapshot(name: str, instances: list[dict[str, str]], identity
     def guests() -> list[tuple[str, Callable[[str, int], tuple[str, int]]]]:
         return [(vm["name"], runner_for(vm)) for vm in list(instances) if vm.get("vm_namespace") and vm.get("cr")]
 
-    failure_snapshot.SOURCES.register(name, failure_snapshot.guest_source(guests), kinds=failure_snapshot.GUEST_KINDS)
+    if identity_file is not None:
+        failure_snapshot.SOURCES.register(
+            name, failure_snapshot.guest_source(guests), kinds=failure_snapshot.GUEST_KINDS
+        )
     failure_snapshot.SOURCES.register(f"{name}-kubevirt", kubevirt_source(instances))
 
 

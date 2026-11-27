@@ -9,9 +9,7 @@ ComputeInstance and InstanceTypes and waits for natural VM cleanup.
 from __future__ import annotations
 
 import subprocess
-import sys
 from collections.abc import Callable, Iterator
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,20 +26,17 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
+from tests.e2e.vmaas.compute_instance_helpers import next_restart_timestamp
 from tests.e2e.vmaas.sanity.test_compute_instance_instance_type import (
     _condition_status,
     _configuration_snapshot,
     _instance_type_name,
-    _next_restart_timestamp,
     _wait_for_configuration_applied,
     _wait_for_resize_staged,
     _wait_for_resized_restart,
     _wait_for_vmi_resources,
 )
 from tests.e2e.vmaas.sanity.test_compute_instance_instance_type import active_instance_type as active_instance_type
-from tests.e2e.vmaas.sanity.test_compute_instance_instance_type import (
-    compute_instance_type_editor as compute_instance_type_editor,
-)
 from tests.e2e.vmaas.sanity.test_compute_instance_instance_type import medium_instance_type as medium_instance_type
 from tests.e2e.vmaas.sanity.test_compute_instance_instance_type import (
     running_compute_instance_factory as running_compute_instance_factory,
@@ -95,19 +90,18 @@ def mixed_resize_instance(
         wait_for_grpc_removal(grpc=grpc, uuid=ci_id)
 
 
-@pytest.mark.usefixtures("compute_instance_type_editor")
 def test_resize_rejects_missing_instance_type_via_cli(
     cli: OsacCLI,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     active_instance_type: str,
     running_compute_instance_factory: Callable[[str], tuple[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
+    compute_instance_spec_editor: Callable[[dict[str, object]], None],
 ) -> None:
     """TC-FR3-03: invalid target is rejected without changing the VM."""
     ci_id, cr_name = running_compute_instance_factory("active")
     before = _configuration_snapshot(k8s_hub_client.get_json(resource="computeinstance", name=cr_name))
-    monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", unique_name("resize-missing"))
+    compute_instance_spec_editor({"instance_type": {"id": unique_name("resize-missing")}})
     with pytest.raises(subprocess.CalledProcessError) as error:
         cli.edit_compute_instance(uuid=ci_id)
     message = (error.value.stderr or "").lower()
@@ -118,7 +112,6 @@ def test_resize_rejects_missing_instance_type_via_cli(
     assert _configuration_snapshot(k8s_hub_client.get_json(resource="computeinstance", name=cr_name)) == before
 
 
-@pytest.mark.usefixtures("compute_instance_type_editor")
 def test_resize_to_current_obsolete_type_is_noop_via_cli(
     cli: OsacCLI,
     grpc: GRPCClient,
@@ -127,7 +120,7 @@ def test_resize_to_current_obsolete_type_is_noop_via_cli(
     active_instance_type: str,
     medium_instance_type: str,
     running_compute_instance_factory: Callable[[str], tuple[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
+    compute_instance_spec_editor: Callable[[dict[str, object]], None],
 ) -> None:
     """TC-FR4-02: an obsolete current type remains valid as a no-op."""
     ci_id, cr_name = running_compute_instance_factory("active")
@@ -149,7 +142,7 @@ def test_resize_to_current_obsolete_type_is_noop_via_cli(
     )
     private_grpc.update_instance_type(name=active_instance_type, state="INSTANCE_TYPE_STATE_OBSOLETE")
     before = _configuration_snapshot(k8s_hub_client.get_json(resource="computeinstance", name=cr_name))
-    monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", active_instance_type)
+    compute_instance_spec_editor({"instance_type": {"id": active_instance_type}})
     cli.edit_compute_instance(uuid=ci_id)
     assert _instance_type_name(grpc.get_compute_instance(ci_id=ci_id)) == active_instance_type
     current = k8s_hub_client.get_json(resource="computeinstance", name=cr_name)
@@ -157,7 +150,6 @@ def test_resize_to_current_obsolete_type_is_noop_via_cli(
     assert _condition_status(current, "ConfigurationApplied") == "True"
 
 
-@pytest.mark.usefixtures("compute_instance_type_editor")
 def test_mixed_direction_resize_and_restart_via_cli(
     cli: OsacCLI,
     grpc: GRPCClient,
@@ -165,8 +157,7 @@ def test_mixed_direction_resize_and_restart_via_cli(
     k8s_virt_client: K8sClient,
     mixed_instance_types: tuple[str, str],
     mixed_resize_instance: tuple[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    compute_instance_spec_editor: Callable[[dict[str, object]], None],
 ) -> None:
     """TC-FR2-02: increase CPU while decreasing memory, then restart."""
     ci_id, cr_name = mixed_resize_instance
@@ -177,7 +168,7 @@ def test_mixed_direction_resize_and_restart_via_cli(
     previous_vmi = k8s_virt_client.get_vmi_creation_timestamp(vmi_namespace=vm_namespace, compute_instance_name=cr_name)
     previous_restart = k8s_hub_client.get_compute_instance_last_restarted_at(name=cr_name)
 
-    monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", mixed_instance_types[1])
+    compute_instance_spec_editor({"instance_type": {"id": mixed_instance_types[1]}})
     cli.edit_compute_instance(uuid=ci_id)
     assert _instance_type_name(grpc.get_compute_instance(ci_id=ci_id)) == mixed_instance_types[1]
     _wait_for_resize_staged(
@@ -192,21 +183,8 @@ def test_mixed_direction_resize_and_restart_via_cli(
         previous_config_version=previous_version,
     )
 
-    restart_timestamp = _next_restart_timestamp(previous_restart)
-    editor = tmp_path / "restart-editor.py"
-    editor.write_text(
-        f"#!{sys.executable}\n"
-        "import json, os, sys\n"
-        "from pathlib import Path\n"
-        "path = Path(sys.argv[1])\n"
-        "instance = json.loads(path.read_text())\n"
-        "instance['spec']['restart_requested_at'] = os.environ['OSAC_E2E_RESTART_AT']\n"
-        "path.write_text(json.dumps(instance))\n",
-        encoding="utf-8",
-    )
-    editor.chmod(0o700)
-    monkeypatch.setenv("EDITOR", str(editor))
-    monkeypatch.setenv("OSAC_E2E_RESTART_AT", restart_timestamp)
+    restart_timestamp = next_restart_timestamp(previous_restart)
+    compute_instance_spec_editor({"restart_requested_at": restart_timestamp})
     cli.edit_compute_instance(uuid=ci_id)
     _wait_for_resized_restart(
         k8s_hub_client,

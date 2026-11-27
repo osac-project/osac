@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import pytest
 
@@ -34,6 +37,31 @@ DEFAULT_IT_MEMORY_GIB: int = 4
 # Shared DiskImage source for CLI-based ComputeInstance scaffolding. Pinned (not
 # :latest) to match the source_ref the gRPC AC tests provision and for CI stability.
 DEFAULT_DISK_IMAGE_SOURCE_REF: str = "quay.io/containerdisks/fedora:41"
+
+
+@pytest.fixture
+def compute_instance_spec_editor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[dict[str, object]], None]:
+    """Set spec fields for the next CLI edit without changing the other fields."""
+    editor = tmp_path / "edit-compute-instance.py"
+    editor.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "path = Path(sys.argv[1])\n"
+        "instance = json.loads(path.read_text())\n"
+        "instance['spec'].update(json.loads(os.environ['OSAC_E2E_COMPUTE_INSTANCE_SPEC']))\n"
+        "path.write_text(json.dumps(instance))\n",
+        encoding="utf-8",
+    )
+    editor.chmod(0o700)
+    monkeypatch.setenv("EDITOR", str(editor))
+
+    def set_fields(fields: dict[str, object]) -> None:
+        monkeypatch.setenv("OSAC_E2E_COMPUTE_INSTANCE_SPEC", json.dumps(fields))
+
+    return set_fields
 
 
 @pytest.fixture(scope="session")

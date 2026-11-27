@@ -1,4 +1,7 @@
 {{- if include "osac-operator.serviceMonitorEnabled" . }}
+{{- /* The scrape verifies the service-CA certificate, so it only exists when the
+       metrics Service is served over TLS. */ -}}
+{{- if .Values.metrics.tls.enabled }}
 {{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor" }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -33,5 +36,6 @@ spec:
     relabelings:
     - targetLabel: job
       replacement: osac-operator
+{{- end }}
 {{- end }}
 {{- end }}

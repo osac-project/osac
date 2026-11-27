@@ -1,4 +1,7 @@
 {{- if include "bare-metal-fulfillment-operator.serviceMonitorEnabled" . }}
+{{- /* The scrape verifies the service-CA certificate, so it only exists when the
+       metrics Service is served over TLS. */ -}}
+{{- if .Values.metrics.tls.enabled }}
 {{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor" }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -31,5 +34,6 @@ spec:
     relabelings:
     - targetLabel: job
       replacement: bmf-operator
+{{- end }}
 {{- end }}
 {{- end }}

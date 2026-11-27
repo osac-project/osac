@@ -11,6 +11,10 @@ capabilities:
   apiVersions:
     - monitoring.coreos.com/v1
     - monitoring.coreos.com/v1/ServiceMonitor
+set:
+  # The HTTPS wiring is what this suite covers; the chart defaults to HTTP so a
+  # cluster without the service-ca controller can start the operator.
+  metrics.tls.enabled: true
 tests:
   - it: serves the service-CA certificate on 8443 by default
     template: metrics-service.yaml
@@ -122,3 +126,28 @@ tests:
     asserts:
       - notExists:
           path: spec.endpoints[0].tlsConfig.insecureSkipVerify
+
+  # A cluster without the service-ca controller never creates the Secret, so the
+  # default must start the operator over plain HTTP instead of waiting forever
+  # for a volume that will not appear.
+  - it: serves metrics over HTTP when the service-CA Secret is not available
+    set:
+      metrics.tls.enabled: false
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8080
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-cert-path=/etc/metrics-certs
+      - notExists:
+          path: spec.template.spec.volumes[?(@.name == "metrics-certs")]
+  - it: renders no HTTPS ServiceMonitor without TLS
+    set:
+      metrics.tls.enabled: false
+      serviceMonitor.enabled: true
+    template: servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

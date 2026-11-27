@@ -54,8 +54,12 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          {{- if .Values.metrics.tls.enabled }}
           - --metrics-bind-address=:8443
           - --metrics-cert-path=/etc/metrics-certs
+          {{- else }}
+          - --metrics-bind-address=:8080
+          {{- end }}
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         name: manager
@@ -140,9 +144,11 @@ spec:
             mountPath: /etc/openstack/
           - name: profiles
             mountPath: /etc/osac/profile/
+          {{- if .Values.metrics.tls.enabled }}
           - name: metrics-certs
             mountPath: /etc/metrics-certs
             readOnly: true
+          {{- end }}
           {{- if .Values.bcm.enabled }}
           - name: bcm-certs
             mountPath: /etc/osac/certs/{{ .Values.secrets.bcmCerts }}/
@@ -183,12 +189,14 @@ spec:
           configMap:
             name: {{ .Values.configMaps.profiles }}
             optional: true
+        {{- if .Values.metrics.tls.enabled }}
         # Not optional: the process exits when the service-CA Secret is absent,
         # so the pod must wait for it rather than serve a self-signed
         # certificate that Prometheus cannot verify.
         - name: metrics-certs
           secret:
             secretName: {{ include "bare-metal-fulfillment-operator.fullname" . }}-metrics-tls
+        {{- end }}
         {{- if .Values.bcm.enabled }}
         - name: bcm-certs
           secret:

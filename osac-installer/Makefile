@@ -983,6 +983,7 @@ endif
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
+		$(if $(DOMAIN),--set operator.metrics.tls.enabled=true --set bmf.metrics.tls.enabled=true) \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(INSTANCE_HELM_ARGS) \
 		$${ARGV[@]+"$${ARGV[@]}"} $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \

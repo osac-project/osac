@@ -162,6 +162,14 @@ networkManagers:
 # Standalone ServiceMonitor override. The umbrella chart enables scrapes
 # through global.observability; when both are off, neither the ServiceMonitor
 # nor its Prometheus ClusterRoleBinding renders.
+metrics:
+  tls:
+    # Serve /metrics over the service-CA certificate. The Secret is created by
+    # the service-ca controller from the metrics Service annotation, so it only
+    # exists on OpenShift; a cluster without that controller never gets the
+    # files and the pod would wait for the volume forever. The OSAC installer
+    # turns this on for OpenShift and leaves it off for kind.
+    enabled: false
 serviceMonitor:
   enabled: false
   # When empty, global.observability.collection.osacControlPlane is used.

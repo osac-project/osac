@@ -44,6 +44,10 @@ OBS_ARGS=(
   # The chart refuses an empty image tag; these renders never pull.
   --set global.observability.services.metricsAuth.tag=test-metrics-auth
   --set global.observability.thanos.image.tag=test-thanos
+  # The OpenShift install shape: the service-ca controller creates the operator
+  # metrics Secrets, so the operators serve HTTPS and their monitors render.
+  --set operator.metrics.tls.enabled=true
+  --set bmf.metrics.tls.enabled=true
   # The gate refuses an empty issuer; the render never reaches Keycloak.
   --set global.observability.keycloak.issuerUrl=https://keycloak.example.com/realms/osac
 )
@@ -495,10 +499,21 @@ require "${unlabel_obs}" 'openshift.io/cluster-monitoring-'
 reject "${unlabel_obs}" 'create namespace'
 reject "${unlabel_obs}" 'delete namespace'
 # Disabling observability removes the scrapes and their Prometheus RBAC, but the
-# operators keep serving HTTPS metrics on 8443 with the service-CA certificate.
-require "${disabled}" '--metrics-bind-address=:8443'
-require "${disabled}" 'serving-cert-secret-name: osac-operator-metrics-tls'
-require "${disabled}" 'serving-cert-secret-name: bmf-operator-metrics-tls'
+# operators keep serving HTTPS metrics on 8443 whenever the platform provides
+# the service-ca Secret. That flag is independent of the observability switch,
+# so render the disabled shape with it on and check both operators.
+disabled_tls="${TMP_DIR}/disabled-tls.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" \
+  --set operator.metrics.tls.enabled=true \
+  --set bmf.metrics.tls.enabled=true >"${disabled_tls}"
+require "${disabled_tls}" '--metrics-bind-address=:8443'
+require "${disabled_tls}" 'serving-cert-secret-name: osac-operator-metrics-tls'
+require "${disabled_tls}" 'serving-cert-secret-name: bmf-operator-metrics-tls'
+# Without it the operators start over plain HTTP rather than waiting forever
+# for a Secret a cluster without the service-ca controller never creates.
+require "${disabled}" '--metrics-bind-address=:8080'
+reject "${disabled}" 'serving-cert-secret-name: osac-operator-metrics-tls'
+reject "${disabled}" 'serving-cert-secret-name: bmf-operator-metrics-tls'
 reject "${disabled}" 'name: osac-operator-metrics-reader-prometheus'
 reject "${disabled}" 'name: bmf-operator-metrics-reader-prometheus'
 

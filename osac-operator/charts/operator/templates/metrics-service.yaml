@@ -3,15 +3,17 @@ kind: Service
 metadata:
   name: {{ include "osac-operator.fullname" . }}-metrics
   namespace: {{ .Release.Namespace }}
+  {{- if .Values.metrics.tls.enabled }}
   annotations:
     service.beta.openshift.io/serving-cert-secret-name: {{ include "osac-operator.fullname" . }}-metrics-tls
+  {{- end }}
   labels:
     {{- include "osac-operator.labels" . | nindent 4 }}
 spec:
   ports:
-  - name: https
-    port: 8443
+  - name: {{ if .Values.metrics.tls.enabled }}https{{ else }}http{{ end }}
+    port: {{ if .Values.metrics.tls.enabled }}8443{{ else }}8080{{ end }}
     protocol: TCP
-    targetPort: 8443
+    targetPort: {{ if .Values.metrics.tls.enabled }}8443{{ else }}8080{{ end }}
   selector:
     {{- include "osac-operator.selectorLabels" . | nindent 4 }}

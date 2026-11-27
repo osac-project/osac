@@ -804,6 +804,25 @@
       "type": "object",
       "description": "OSAC Operator configuration",
       "properties": {
+        "metrics": {
+          "type": "object",
+          "description": "Metrics endpoint of the operator",
+          "properties": {
+            "tls": {
+              "type": "object",
+              "description": "Serve /metrics over the service-CA certificate. Only a cluster with the service-ca controller creates the Secret; the installer enables this on OpenShift and leaves it off on kind.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Serve HTTPS on 8443 from the service-CA Secret instead of plain HTTP on 8080"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "fabricDomainInventory": {
           "type": "object",
           "description": "Admin-managed map of exact Netris hostnames to BareMetalInstanceType ID strings. Creates osac-fabric-domain-inventory in the operator networking (release) namespace only when nonempty. No credentials or template configuration.",
@@ -2558,6 +2577,25 @@
       "type": "object",
       "description": "Bare Metal Fulfillment Operator configuration",
       "properties": {
+        "metrics": {
+          "type": "object",
+          "description": "Metrics endpoint of the operator",
+          "properties": {
+            "tls": {
+              "type": "object",
+              "description": "Serve /metrics over the service-CA certificate. Only a cluster with the service-ca controller creates the Secret; the installer enables this on OpenShift and leaves it off on kind.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Serve HTTPS on 8443 from the service-CA Secret instead of plain HTTP on 8080"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "image": {
           "type": "object",
           "properties": {

@@ -530,7 +530,9 @@ func (r *ClusterOrderReconciler) guestClusterClient(
 	}
 	data := secret.Data["kubeconfig"]
 	if len(data) == 0 {
-		return nil, false, false, fmt.Errorf("secret %s/%s has no kubeconfig data", secret.Namespace, secret.Name)
+		// Treat an unpublished payload like an unpublished Secret. The endpoint
+		// lifecycle keeps its existing poll until the guest API is usable.
+		return nil, false, false, nil
 	}
 	config, err := clientcmd.RESTConfigFromKubeConfig(data)
 	if err != nil {

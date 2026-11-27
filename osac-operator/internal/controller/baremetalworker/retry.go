@@ -200,7 +200,9 @@ func (r *Reconciler) workerRecheckDeadline(workers []v1alpha1.WorkerStatus, now 
 		case w.Phase == workerPhaseFailed && w.BareMetalInstance.ID != "":
 			// Provider cleanup is still pending; recheck its completion.
 			consider(teardownRequeueInterval)
-		case w.Phase == workerPhaseFailed && w.NextRetryTime != nil:
+		case w.Phase == workerPhaseFailed && w.NextRetryTime != nil && w.NextRetryTime.After(now):
+			// A retry already due when creation was evaluated waits on its prerequisite,
+			// not a new one-second timer for the same expired deadline.
 			consider(time.Until(w.NextRetryTime.Time))
 		case w.Phase == workerPhaseProvisioning, w.Phase == workerPhaseWaitingForAgent, w.Phase == workerPhaseBinding:
 			consider(agentRequeueInterval)

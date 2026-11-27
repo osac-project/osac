@@ -134,7 +134,7 @@ func (r *Reconciler) resolveWorkerCreationInputs(
 // unrelated event. A prerequisite wait/error is reported without created so the
 // caller can still converge teardown, Agents and NodePool replicas.
 func (r *Reconciler) reconcileWorkerCreation(
-	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster, observed *workerObservation, infra infraEnvEvidence,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster, observed *workerObservation, infra infraEnvEvidence, infraWait ctrl.Result,
 ) (bool, ctrl.Result, error) {
 	if _, prev := selectDueSlot(co, time.Now()); prev == nil && !workerCreationDue(co) {
 		res, err := r.refreshWorkerReadiness(ctx, co, infra)
@@ -143,6 +143,9 @@ func (r *Reconciler) reconcileWorkerCreation(
 		}
 		res, err = r.reconcileDueWorkerCreation(ctx, co, cluster, workerCreationInputs{}, observed)
 		return false, res, err
+	}
+	if !infraWait.IsZero() {
+		return false, infraWait, nil
 	}
 	expected := co.DeepCopy()
 	inputs, res, err := r.resolveWorkerCreationInputs(ctx, co, infra)

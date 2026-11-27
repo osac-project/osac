@@ -81,7 +81,7 @@ func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.Cluster
 		return r.rejectWorkerIdentity(co, err.Error())
 	}
 	if bmi == nil {
-		return fmt.Errorf("worker %s BMI reservation absence is unconfirmed", w.Name)
+		return fmt.Errorf("%w: worker %s BMI reservation absence is unconfirmed", errWorkerRecoveryPending, w.Name)
 	}
 	candidate := *w
 	candidate.BareMetalInstance.ID = bmi.GetId()
@@ -90,7 +90,7 @@ func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.Cluster
 		return err
 	}
 	if state.absent {
-		return fmt.Errorf("worker %s BMI vanished during name recovery", w.Name)
+		return fmt.Errorf("%w: worker %s BMI vanished during name recovery", errWorkerRecoveryPending, w.Name)
 	}
 	w.BareMetalInstance.ID = candidate.BareMetalInstance.ID
 	return nil
@@ -136,17 +136,23 @@ func (r *Reconciler) cleanupAgent(ctx context.Context, co *v1alpha1.ClusterOrder
 // parser's silent omission rules for a destructive decision.
 func validateCleanupInventory(agent *unstructured.Unstructured) error {
 	interfaces, found, err := unstructured.NestedSlice(agent.Object, "status", "inventory", "interfaces")
-	if err != nil || !found || len(interfaces) == 0 {
-		return fmt.Errorf("cleanup Agent %s inventory is unavailable or malformed", agent.GetName())
+	if err != nil {
+		return fmt.Errorf("cleanup Agent %s inventory is malformed", agent.GetName())
+	}
+	if !found || len(interfaces) == 0 {
+		return fmt.Errorf("%w: cleanup Agent %s has no inventory interfaces", errWorkerRecoveryPending, agent.GetName())
 	}
 	for _, raw := range interfaces {
 		iface, ok := raw.(map[string]interface{})
 		if !ok {
 			return fmt.Errorf("cleanup Agent %s has a malformed inventory interface", agent.GetName())
 		}
-		mac, ok := iface["macAddress"].(string)
-		if !ok || mac == "" {
-			return fmt.Errorf("cleanup Agent %s inventory interface has no MAC", agent.GetName())
+		mac, found, err := unstructured.NestedString(iface, "macAddress")
+		if err != nil {
+			return fmt.Errorf("cleanup Agent %s inventory interface has a malformed MAC", agent.GetName())
+		}
+		if !found || mac == "" {
+			return fmt.Errorf("%w: cleanup Agent %s inventory interface has no MAC", errWorkerRecoveryPending, agent.GetName())
 		}
 	}
 	return nil

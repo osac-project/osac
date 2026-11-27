@@ -23,9 +23,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -45,7 +47,7 @@ type stubWorkerSecretsClient struct {
 func (s *stubWorkerSecretsClient) Get(_ context.Context, in *privatev1.SecretsGetRequest, _ ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
 	s.requests = append(s.requests, in.GetId())
 	if s.err != nil {
-		return nil, status.Error(codes.NotFound, s.err.Error())
+		return nil, s.err
 	}
 	return privatev1.SecretsGetResponse_builder{
 		Object: privatev1.Secret_builder{
@@ -113,7 +115,7 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			r, _, co, cluster := sshFlowHarness(
 				privatev1.SecretReference_builder{Id: "missing-key"}.Build(),
 				&v1alpha1.FulfillmentSecretReference{ID: "missing-key"})
-			r.SetSecretsClient(&stubWorkerSecretsClient{err: errors.New("ssh key secret 'missing-key' not found")})
+			r.SetSecretsClient(&stubWorkerSecretsClient{err: status.Error(codes.NotFound, "missing-key not found")})
 
 			_, err := r.resolveClusterSSHAuthorizedKey(context.Background(), co, cluster)
 			Expect(err).To(MatchError(ContainSubstring("missing-key")))
@@ -203,17 +205,22 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 
 	Describe("createMissingInfraEnv", func() {
 		It("holds InfraEnv creation with a recoverable condition when the Secret is missing", func() {
-			r, _, co, cluster := sshFlowHarness(
+			r, _, co, _ := sshFlowHarness(
 				privatev1.SecretReference_builder{Id: "missing-key"}.Build(),
 				&v1alpha1.FulfillmentSecretReference{ID: "missing-key"})
-			r.SetSecretsClient(&stubWorkerSecretsClient{err: errors.New("ssh key secret 'missing-key' not found")})
+			secrets := &stubWorkerSecretsClient{err: status.Error(codes.NotFound, "missing-key not found")}
+			r.SetSecretsClient(secrets)
 			// The pull secret must resolve so the SSH key is the only blocker.
 			co.Spec.PullSecret = `{"auths":{}}`
 
-			evidence, result, _, err := r.createMissingInfraEnv(context.Background(), co, cluster)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(evidence.err).To(MatchError(ContainSubstring("missing-key")))
-			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			ctx := context.Background()
+			co.Finalizers = []string{bmWorkerFinalizer}
+			Expect(r.Update(ctx, co)).To(Succeed())
+			for range 2 {
+				result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(Equal(sshKeyResolutionRetry))
+			}
 
 			// The condition is persisted on the stored order; read it back.
 			stored := &v1alpha1.ClusterOrder{}
@@ -224,6 +231,17 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			Expect(cond.Reason).To(Equal(v1alpha1.ReasonSSHKeyResolutionPending))
 			Expect(cond.Message).To(ContainSubstring("missing-key"))
 			Expect(cond.Message).NotTo(ContainSubstring(sshFlowKeyMaterial))
+
+			secrets.err = status.Error(codes.PermissionDenied, "read denied")
+			res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+			Expect(res.IsZero()).To(BeTrue())
+
+			secrets.err = nil // An existing Secret still has no key data.
+			r.Client = &bmiConflictClient{Client: r.Client, beforePatch: func() {}}
+			res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+			Expect(apierrors.IsConflict(err)).To(BeTrue(), "must not swallow a failed pending-condition write")
+			Expect(res.IsZero()).To(BeTrue())
 		})
 
 		It("creates the InfraEnv with the resolved key when the Secret resolves", func() {

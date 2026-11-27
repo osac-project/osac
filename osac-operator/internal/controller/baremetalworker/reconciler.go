@@ -15,11 +15,9 @@ package baremetalworker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
-	"time"
 
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -124,7 +122,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !co.DeletionTimestamp.IsZero() {
 		res, err := r.handleVerifiedClusterDeletion(ctx, co)
 		if err != nil {
-			return r.handleFulfillmentError(ctx, co, err)
+			return r.handleWorkerError(ctx, co, err)
 		}
 		return res, nil
 	}
@@ -139,7 +137,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	cluster, err := r.authoritativeWorkerCluster(ctx, co)
 	if err != nil {
-		return r.handleFulfillmentError(ctx, co, err)
+		return r.handleWorkerError(ctx, co, err)
 	}
 
 	// Refresh the worker gauges from the full ClusterOrder set at the end of every
@@ -154,11 +152,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	res, err := r.reconcileWorkers(ctx, co, cluster)
-	if errors.Is(err, errWorkerObservationChanged) {
-		return ctrl.Result{RequeueAfter: time.Second}, nil
-	}
 	if err != nil {
-		return r.handleFulfillmentError(ctx, co, err)
+		return r.handleWorkerError(ctx, co, err)
 	}
 	return res, nil
 }

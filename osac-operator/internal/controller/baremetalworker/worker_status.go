@@ -41,6 +41,7 @@ const (
 )
 
 var errWorkerObservationChanged = errors.New("worker observation changed; reconcile again")
+var errWorkerRecoveryPending = errors.New("worker recovery pending")
 
 // patchStatusFromBase applies a single optimistic status patch. The caller must
 // have obtained base from an authoritative read before making its observation or
@@ -162,13 +163,15 @@ func (r *Reconciler) checkCurrentCapacityPlan(ctx context.Context, expected *v1a
 	return nil
 }
 
-// handleFulfillmentError is the single orchestration boundary for fulfillment
-// availability evidence. Callers return the adapter's wrapped error unchanged;
-// this boundary persists the order-scoped condition exactly once and applies the
-// one bounded unavailable delay. A condition-write failure is surfaced instead
-// of pretending the outage was recorded, and every non-availability error keeps
-// its own caller policy (authoritative absence, ownership, retry, ...).
-func (r *Reconciler) handleFulfillmentError(ctx context.Context, co *v1alpha1.ClusterOrder, err error) (ctrl.Result, error) {
+// handleWorkerError applies the same retry policy during convergence and deletion.
+func (r *Reconciler) handleWorkerError(ctx context.Context, co *v1alpha1.ClusterOrder, err error) (ctrl.Result, error) {
+	if errors.Is(err, errWorkerObservationChanged) {
+		return workerBoundaryRequeue(), nil
+	}
+	if errors.Is(err, errWorkerRecoveryPending) {
+		ctrllog.FromContext(ctx).Info("waiting for worker recovery evidence", "reason", err.Error())
+		return ctrl.Result{RequeueAfter: teardownRequeueInterval}, nil
+	}
 	if !errors.Is(err, ErrFulfillmentServiceUnavailable) {
 		return ctrl.Result{}, err
 	}

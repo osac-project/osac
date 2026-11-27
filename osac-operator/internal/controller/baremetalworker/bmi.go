@@ -103,6 +103,9 @@ func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrde
 		// List snapshot. Verify this incarnation's current ownership/liveness.
 		id := bmi.GetId()
 		bmi, err = r.fulfillment.GetBareMetalInstance(ctx, id)
+		if status.Code(err) == codes.NotFound {
+			return nil, fmt.Errorf("%w: BMI %s vanished during verification", errWorkerRecoveryPending, name)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("verifying recovered BMI %s: %w", name, err)
 		}
@@ -115,7 +118,7 @@ func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrde
 		}
 		return bmi, nil
 	}
-	return nil, fmt.Errorf("BMI %s returned AlreadyExists but not found in re-list", name)
+	return nil, fmt.Errorf("%w: BMI %s returned AlreadyExists but not found in re-list", errWorkerRecoveryPending, name)
 }
 
 func (r *Reconciler) buildBMICreateRequest(
@@ -208,7 +211,7 @@ func (r *Reconciler) resolveNodeSetInstanceType(
 // recorded IDs and finalization still need to observe deleting resources.
 func checkBMIRecoveryCandidate(bmi *privatev1.BareMetalInstance) error {
 	if bmiDeleting(bmi) {
-		return fmt.Errorf("BMI %s is deleting; cannot recover a created worker", bmi.GetId())
+		return fmt.Errorf("%w: BMI %s is deleting; cannot recover a created worker", errWorkerRecoveryPending, bmi.GetId())
 	}
 	return nil
 }

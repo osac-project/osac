@@ -95,7 +95,11 @@ CAAS_OVERLAY: dict[str, Any] = {
         "networking": {"fabricManager": "agentless_net"},
     },
     "operator": {
-        "aap": {"url": AAP_API_URL, "templatePrefix": "pr2100c1"},
+        "aap": {
+            "url": AAP_API_URL,
+            "organization": "pr2100c1",
+            "templatePrefix": "pr2100c1",
+        },
         "controllers": {"computeInstance": False},
         "ignition": {"trustIngressCA": True},
     },
@@ -222,6 +226,10 @@ def arg_of(doc: dict[str, Any], container: str, flag: str) -> str:
     raise AssertionError(f"{flag} is not passed to the {container} container")
 
 
+def command_text(doc: dict[str, Any], container: str) -> str:
+    return "\n".join(container_of(doc, container).get("command", []))
+
+
 def check_vmaas_suite_key_is_byte_identical() -> None:
     """The VMaaS suite key restates the profile default, so it renders the same."""
     def normalized(manifest: str) -> str:
@@ -291,8 +299,9 @@ def check_bmaas_overlay() -> None:
 
 
 def check_caas_overlay() -> None:
-    docs = docs_of(render_raw(fill_template(CAAS_OVERLAY, "pr2100c1")))
-    check_bmf_wiring(docs, "pr2100c1")
+    run_id = "pr2100c1"
+    docs = docs_of(render_raw(fill_template(CAAS_OVERLAY, run_id)))
+    check_bmf_wiring(docs, run_id)
 
     require(docs, "Job", "seed-cluster-versions")
 
@@ -323,6 +332,19 @@ def check_caas_overlay() -> None:
     )
     assert (
         config["HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY"] == "SingleReplica"
+    )
+
+    # The run's AAP organization and template prefix: the cluster-order
+    # templates exist only as <run id>-create-hosted-cluster and
+    # <run id>-delete-hosted-cluster in that organization, and the publish
+    # hook looks its own template up by name first. Unset, both fall back to
+    # the outer install's shared "osac" organization and templates.
+    assert env_of(operator, "manager", "OSAC_AAP_ORGANIZATION") == run_id
+    assert env_of(operator, "manager", "OSAC_AAP_TEMPLATE_PREFIX") == run_id
+    publish = require(docs, "Job", "osac-publish-templates")
+    assert env_of(publish, "publish-templates", "OSAC_AAP_TEMPLATE_PREFIX") == run_id
+    assert f'TEMPLATE_NAME="{run_id}-publish-templates"' in command_text(
+        publish, "publish-templates"
     )
 
 

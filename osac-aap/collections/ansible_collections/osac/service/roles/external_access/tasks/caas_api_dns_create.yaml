@@ -7,7 +7,10 @@
 # resolve yet. The ingress record is published by caas_ingress_create.yaml,
 # before worker readiness, using the caller's reserved address.
 - name: Get kube-apiserver service
+  # The kube-apiserver Service lives in the hosted cluster's namespace on the
+  # outer cluster; AAP job pods reach only the hub API.
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: v1
     kind: Service
     namespace: "{{ external_access_namespace }}-{{ external_access_name }}"

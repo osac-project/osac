@@ -93,6 +93,16 @@ def test_cluster_working_namespace_lists_outer_namespaces() -> None:
     assert_kubeconfig(SERVICE / "cluster_working_namespace" / "tasks" / "main.yml", frozenset())
 
 
+def test_external_access_reads_the_kube_apiserver_service_on_the_outer_cluster() -> None:
+    """The kube-apiserver Service sits in the hosted cluster's namespace on the
+    outer cluster, which the AAP job pod cannot read through its hub
+    service account."""
+    assert_kubeconfig(
+        SERVICE / "external_access" / "tasks" / "caas_api_dns_create.yaml",
+        frozenset(),
+    )
+
+
 def test_cluster_infra_splits_hub_orders_from_outer_agents() -> None:
     """BareMetalPool and BareMetalInstance are OSAC CRs in POD_NAMESPACE
     (hub objects); Agents live in the outer cluster's agent namespace."""

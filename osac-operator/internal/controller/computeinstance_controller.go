@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -868,22 +869,28 @@ func computeInstanceConfigApplied(instance *v1alpha1.ComputeInstance) bool {
 // (VMaaS design, Network status and address discovery).
 func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, instance *v1alpha1.ComputeInstance,
 	na *v1alpha1.NetworkAttachment, kv *kubevirtv1.VirtualMachine) (ctrl.Result, error) {
-	enabled := r.provisioningEnabled()
-	failed := na != nil && networkAttachmentFailed(na)
-	oldAddress := instance.Status.IPAddress
-
 	vmi, err := r.runningVMI(ctx, instance, kv)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	result, err := r.reconcileIPStatus(ctx, instance, na, vmi)
+	if err != nil {
+		return result, err
+	}
 	ifaceName := vmNetworkTenant
-	if !enabled {
+	if !r.provisioningEnabled() {
 		ifaceName = vmNetworkDefault
 	}
-	instance.Status.MACAddresses = nil
-	if mac := vmiInterfaceMAC(vmi, ifaceName); mac != "" {
-		instance.Status.MACAddresses = []string{mac}
-	}
+	instance.Status.Interfaces = observedVMIInterfaces(vmi, ifaceName, instance.Status.IPAddress)
+	return result, nil
+}
+
+// reconcileIPStatus accepts the VM address and maintains the existing IP and readiness projections.
+func (r *ComputeInstanceReconciler) reconcileIPStatus(ctx context.Context, instance *v1alpha1.ComputeInstance,
+	na *v1alpha1.NetworkAttachment, vmi *kubevirtv1.VirtualMachineInstance) (ctrl.Result, error) {
+	enabled := r.provisioningEnabled()
+	failed := na != nil && networkAttachmentFailed(na)
+	oldAddress := instance.Status.IPAddress
 	if vmi == nil {
 		instance.Status.ComputeNetworkAttachmentStatuses = nil
 		instance.SetIPAddress("")
@@ -1036,20 +1043,26 @@ func (r *ComputeInstanceReconciler) subnetOverlayCIDRs(ctx context.Context, subn
 	return list.Items[0].Status.IPAM.OverlayIPv4CIDRs, nil
 }
 
-// vmiInterfaceMAC returns the canonical MAC of the named VM interface, not a guest-only interface.
-func vmiInterfaceMAC(vmi *kubevirtv1.VirtualMachineInstance, name string) string {
+// observedVMIInterfaces reports the OSAC-managed interface, excluding guest-only interfaces.
+// Pair the accepted IP with the MAC from the same status entry. Before an IP is accepted,
+// a MAC alone is still useful to consumers.
+func observedVMIInterfaces(vmi *kubevirtv1.VirtualMachineInstance, name, ip string) []v1alpha1.ComputeInstanceInterfaceStatus {
 	if vmi == nil || !vmi.DeletionTimestamp.IsZero() {
-		return ""
+		return nil
 	}
 	for _, iface := range vmi.Status.Interfaces {
-		if iface.Name != name {
+		if iface.Name != name || (ip != "" && iface.IP != ip && !slices.Contains(iface.IPs, ip)) {
 			continue
 		}
+		status := v1alpha1.ComputeInstanceInterfaceStatus{Name: name, IPAddress: ip}
 		if mac, err := net.ParseMAC(iface.MAC); err == nil && len(mac) == 6 {
-			return mac.String()
+			status.MACAddress = mac.String()
+		}
+		if status.IPAddress != "" || status.MACAddress != "" {
+			return []v1alpha1.ComputeInstanceInterfaceStatus{status}
 		}
 	}
-	return ""
+	return nil
 }
 
 // firstIPv4OfInterface returns the first canonical IPv4 address of the VMI

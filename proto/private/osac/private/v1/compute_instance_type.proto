@@ -327,9 +327,23 @@ message ComputeInstanceStatus {
   // The system removes this field when provisioning succeeds, is cancelled for deletion, or starts for a new configuration.
   optional ComputeInstanceProvisioningFailure last_provisioning_failure = 13;
 
-  // Guest-facing MACs of the running VM's OSAC-managed interfaces, observed by the system.
-  // May be populated before IP discovery. Empty when no MACs are observed or during deletion.
-  repeated string mac_addresses = 14 [(cleanapi.field).private = true];
+  // Observed addresses on the running VM's OSAC-managed interfaces.
+  // A MAC can be reported before IP discovery. The list is empty during deletion.
+  repeated ComputeInstanceInterfaceStatus interfaces = 14 [(cleanapi.field).private = true];
+}
+
+// Observed addresses for one guest-facing VM interface.
+message ComputeInstanceInterfaceStatus {
+  option (cleanapi.message).private = true;
+
+  // Interface name from the VMI network definition.
+  string name = 1;
+
+  // IPv4 address accepted by the ComputeInstance controller, if known.
+  string ip_address = 2;
+
+  // Canonical guest-facing MAC reported by the VMI, if known.
+  string mac_address = 3;
 }
 
 // Describes the latest system-observed provisioning failure.

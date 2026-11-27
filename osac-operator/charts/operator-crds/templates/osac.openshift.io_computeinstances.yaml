@@ -381,6 +381,29 @@ spec:
                   ExternalIPAddress is the external IP address attached to this instance via an ExternalIPAttachment.
                   Populated when an ExternalIPAttachment in state "Ready" references this ComputeInstance.
                 type: string
+              interfaces:
+                description: Interfaces reports the running VMI's OSAC-managed interfaces,
+                  independent of attachment readiness.
+                items:
+                  description: ComputeInstanceInterfaceStatus reports addresses observed
+                    on one guest-facing VMI interface.
+                  properties:
+                    ipAddress:
+                      description: IPAddress is the IPv4 address accepted by the ComputeInstance
+                        controller, if known.
+                      type: string
+                    macAddress:
+                      description: MACAddress is the canonical guest-facing MAC reported
+                        by the VMI, if known.
+                      type: string
+                    name:
+                      description: Name is the interface name from the VMI network
+                        definition.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               ipAddress:
                 description: |-
                   IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
@@ -448,13 +471,6 @@ spec:
                   It will be empty if no restart has been performed yet.
                 format: date-time
                 type: string
-              macAddresses:
-                description: |-
-                  MACAddresses lists observed guest-facing MACs of the running VMI's OSAC-managed interfaces.
-                  Entries can appear before IP discovery; the list is empty when no MAC is observed.
-                items:
-                  type: string
-                type: array
               phase:
                 description: Phase provides a single-value overview of the state of
                   the ComputeInstance

@@ -1285,7 +1285,7 @@ ifneq ($(strip $(JUNIT_REPORT_DIR)),)
 endif
 ifeq ($(SUITE),fulfillment)
 ifeq ($(MCP_TEST_ENABLED),true)
-	python3 scripts/prepare-mcp-scope-regression.py $(KIND_CLUSTER_NAME)
+	KUBECONFIG="$$KIND_KUBECONFIG" python3 scripts/prepare-mcp-scope-regression.py $(KIND_CLUSTER_NAME)
 	$(MAKE) install-infra PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS)
 endif
 endif

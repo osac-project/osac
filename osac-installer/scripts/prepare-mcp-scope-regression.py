@@ -98,14 +98,16 @@ def port_forward() -> tuple[subprocess.Popen[bytes], str]:
     raise RuntimeError("timed out connecting to Keycloak through the local Kind port-forward")
 
 
-def remove_scope(keycloak_url: str, username: str, password: str) -> None:
+def remove_scope(keycloak_url: str, username: str, password: str) -> bool:
     token = reconciler.get_admin_token(keycloak_url, username, password)
     scopes = reconciler.admin_request(keycloak_url, token, "GET", "/admin/realms/osac/client-scopes")
     if not isinstance(scopes, list):
         raise RuntimeError("Keycloak did not return the osac realm's client scopes")
     scope = next((item for item in scopes if item.get("name") == "osac-api"), None)
-    if scope is None or not scope.get("id"):
-        raise RuntimeError("the local Kind realm already lacks osac-api; install-infra must be run before this test")
+    if scope is None:
+        return False
+    if not scope.get("id"):
+        raise RuntimeError("Keycloak returned the osac-api client scope without an ID")
 
     mappers_path = f"/admin/realms/osac/client-scopes/{quote(scope['id'], safe='')}/protocol-mappers/models"
     mappers = reconciler.admin_request(keycloak_url, token, "GET", mappers_path)
@@ -125,6 +127,7 @@ def remove_scope(keycloak_url: str, username: str, password: str) -> None:
     remaining = reconciler.admin_request(keycloak_url, token, "GET", "/admin/realms/osac/client-scopes")
     if any(item.get("name") == "osac-api" for item in remaining):
         raise RuntimeError("Keycloak did not remove osac-api; refusing to run a false-positive regression test")
+    return True
 
 
 def main() -> int:
@@ -136,7 +139,7 @@ def main() -> int:
         verify_local_kind_context(sys.argv[1])
         username, password = credentials()
         process, keycloak_url = port_forward()
-        remove_scope(keycloak_url, username, password)
+        removed_scope = remove_scope(keycloak_url, username, password)
     except (RuntimeError, KeyError, OSError, json.JSONDecodeError) as error:
         print(f"ERROR: MCP scope regression setup failed: {error}", file=sys.stderr)
         return 1
@@ -144,7 +147,10 @@ def main() -> int:
         if process is not None:
             process.terminate()
             process.wait(timeout=5)
-    print("Removed osac-api from the local Kind realm; the next install-infra hook must recreate it")
+    if removed_scope:
+        print("Removed osac-api from the local Kind realm; the next install-infra hook must recreate it")
+    else:
+        print("osac-api is already absent; the next install-infra hook must recreate it")
     return 0
 
 

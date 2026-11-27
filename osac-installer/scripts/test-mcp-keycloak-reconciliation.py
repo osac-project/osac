@@ -22,6 +22,11 @@ SPEC = importlib.util.spec_from_file_location("mcp_reconciler", RECONCILER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 RECONCILER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RECONCILER)
+PREPARATION_PATH = INSTALLER / "scripts/prepare-mcp-scope-regression.py"
+PREPARATION_SPEC = importlib.util.spec_from_file_location("mcp_scope_preparation", PREPARATION_PATH)
+assert PREPARATION_SPEC is not None and PREPARATION_SPEC.loader is not None
+PREPARATION = importlib.util.module_from_spec(PREPARATION_SPEC)
+PREPARATION_SPEC.loader.exec_module(PREPARATION)
 
 API_CLIENT_IDS = ("osac-cli", "osac-ui", "osac-admin", "osac-ui-backend", "osac-csi-driver")
 
@@ -249,7 +254,24 @@ class KeycloakReconciliationTest(unittest.TestCase):
         self.assertEqual(server.client_creates, 1)
         exchange_client = next(item for item in server.clients if item["clientId"] == "https://mcp.example.test/")
         self.assertEqual(exchange_client["defaultClientScopeIds"], ["scope-osac-api"])
+        self.assertEqual(exchange_client["clientAuthenticatorType"], "client-secret")
         self.assert_api_clients_have_scope(server)
+
+    def test_existing_exchange_client_authenticator_is_repaired(self) -> None:
+        server, keycloak_url = self.start_keycloak()
+        exchange_client = next(item for item in server.clients if item["clientId"] == "https://mcp.example.test/")
+        exchange_client["clientAuthenticatorType"] = "client-jwt"
+
+        self.reconcile(keycloak_url)
+
+        self.assertEqual(exchange_client["clientAuthenticatorType"], "client-secret")
+
+    def test_scope_regression_preparation_can_resume_when_scope_is_absent(self) -> None:
+        with (
+            patch.object(PREPARATION.reconciler, "get_admin_token", return_value="token"),
+            patch.object(PREPARATION.reconciler, "admin_request", return_value=[]),
+        ):
+            self.assertFalse(PREPARATION.remove_scope("https://keycloak.test", "admin", "password"))
 
     def test_scope_only_installation_restores_api_client_assignments(self) -> None:
         server, keycloak_url = self.start_keycloak()

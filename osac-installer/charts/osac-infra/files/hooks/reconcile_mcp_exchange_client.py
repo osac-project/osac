@@ -327,6 +327,7 @@ def _ensure_exchange_client(
         "enabled": True,
         "protocol": "openid-connect",
         "publicClient": False,
+        "clientAuthenticatorType": "client-secret",
         "secret": exchange_secret,
         "standardFlowEnabled": False,
         "directAccessGrantsEnabled": False,

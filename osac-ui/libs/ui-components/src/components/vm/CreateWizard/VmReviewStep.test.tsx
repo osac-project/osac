@@ -34,8 +34,8 @@ describe('VmReviewStep — Storage section', () => {
     });
 
     expect(await screen.findByText('Storage')).toBeInTheDocument();
-    expect(screen.getByText('40 GB, balanced')).toBeInTheDocument();
-    expect(screen.getByText('100 GB, fast')).toBeInTheDocument();
+    expect(screen.getByText('40 GiB, balanced')).toBeInTheDocument();
+    expect(screen.getByText('100 GiB, fast')).toBeInTheDocument();
   });
 
   it('falls back to the raw tier value when no tier matches', async () => {
@@ -46,7 +46,7 @@ describe('VmReviewStep — Storage section', () => {
       },
     });
 
-    expect(await screen.findByText('40 GB, unknown-tier')).toBeInTheDocument();
+    expect(await screen.findByText('40 GiB, unknown-tier')).toBeInTheDocument();
   });
 
   it('no longer lists the boot disk under the Configuration section', async () => {

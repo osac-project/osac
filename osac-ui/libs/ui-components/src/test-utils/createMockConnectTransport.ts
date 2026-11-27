@@ -85,6 +85,8 @@ import {
   SelfSubjectAccessReviewsCreateResponseSchema,
   ServiceTier,
   Subnet,
+  SubnetsCreateRequest,
+  SubnetsCreateResponse,
   SubnetsDeleteRequest,
   SubnetsDeleteResponse,
   SubnetsGetRequest,
@@ -357,6 +359,32 @@ const matchesNameContainsFilter = (
   }
   const search = JSON.parse(searchLiteral) as string;
   return (name ?? '').includes(search);
+};
+
+const matchesMetadataProjectFilter = (
+  filter: string | undefined,
+  project: string | undefined,
+): boolean => {
+  if (!filter?.includes('this.metadata.project')) {
+    return true;
+  }
+  const inMatch = filter.match(/this\.metadata\.project in (\[[^\]]*\])/);
+  if (inMatch) {
+    return (JSON.parse(inMatch[1]) as string[]).includes(project ?? '');
+  }
+  const equalityMatch = filter.match(/this\.metadata\.project == ("(?:\\.|[^"\\])*")/);
+  return equalityMatch ? JSON.parse(equalityMatch[1]) === (project ?? '') : true;
+};
+
+/** The `osac.openshift.io/default` label filter shared by the tenant default queries. */
+const matchesDefaultLabelFilter = (
+  filter: string | undefined,
+  labels: Record<string, string> | undefined,
+): boolean => {
+  if (!filter?.includes('osac.openshift.io/default')) {
+    return true;
+  }
+  return labels?.['osac.openshift.io/default'] === 'true';
 };
 
 const matchesStatusStateInFilter = (
@@ -675,6 +703,9 @@ export type MockTransportOverrides = {
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
   onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet } | Promise<{ object?: Subnet }>;
   onSubnetList?: (req: unknown) => void;
+  onSubnetCreate?: (
+    req: SubnetsCreateRequest,
+  ) => SubnetsCreateResponse | Promise<SubnetsCreateResponse>;
   onVirtualNetworkGet?: (
     req: VirtualNetworksGetRequest,
   ) => { object?: VirtualNetwork } | Promise<{ object?: VirtualNetwork }>;
@@ -980,7 +1011,10 @@ export const createMockConnectTransport = (
           const items = subnets.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name) &&
+              matchesMetadataProjectFilter(req.filter, item.metadata?.project) &&
+              matchesDefaultLabelFilter(req.filter, item.metadata?.labels),
           );
           return { items, size: items.length, total: items.length };
         },
@@ -991,6 +1025,17 @@ export const createMockConnectTransport = (
           return {
             object: subnets.find((i) => i.id === req.id),
           };
+        },
+        create: async (req) => {
+          if (overrides.onSubnetCreate) {
+            return overrides.onSubnetCreate(req);
+          }
+          const created = {
+            ...req.object,
+            id: req.object?.id || `subnet-${subnets.length + 1}`,
+          } as Subnet;
+          subnets.push(created);
+          return { object: created };
         },
         delete: async (req) => {
           if (overrides.onSubnetDelete) {

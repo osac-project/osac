@@ -6,6 +6,7 @@ import { ExternalIpPoolsPage, ExternalIpsPage } from '../../locators/external_ip
 import { InstanceTypesMainPage } from '../../locators/instance_types';
 import { MainPage } from '../../locators/main_page';
 import { StorageBackendsPage, StorageTiersPage } from '../../locators/storage';
+import { SubnetsPage } from '../../locators/subnets';
 import { TenantsMainPage } from '../../locators/tenants';
 
 export type MainPageOption = Exclude<keyof typeof MainPage, 'navigation'>;
@@ -26,6 +27,7 @@ const parentByNestedOption: Partial<Record<MainPageOption, ExpandableMainPageOpt
   externalIpPools: 'infrastructure',
   diskImages: 'infrastructure',
   virtualNetworks: 'networking',
+  subnets: 'networking',
   securityGroups: 'networking',
   externalIps: 'networking',
 };
@@ -120,4 +122,11 @@ export const openExternalIpPoolsPage = async (page: Page): Promise<void> => {
   await openMainPageOption(page, 'externalIpPools');
 
   await expect(page.getByRole(...ExternalIpPoolsPage.pageTitle)).toBeVisible();
+};
+
+/** Open Networking > Subnets and verify the page title. */
+export const openSubnetsPage = async (page: Page): Promise<void> => {
+  await openMainPageOption(page, 'subnets');
+
+  await expect(page.getByRole(...SubnetsPage.pageTitle)).toBeVisible();
 };

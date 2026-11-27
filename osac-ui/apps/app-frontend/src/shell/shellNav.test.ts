@@ -122,6 +122,12 @@ describe('navRowsForRole', () => {
         },
         {
           kind: 'link',
+          id: 'subnets',
+          label: 'Subnets',
+          path: '/networking/subnets',
+        },
+        {
+          kind: 'link',
           id: 'security-groups',
           label: 'Security groups',
           path: '/networking/security-groups',

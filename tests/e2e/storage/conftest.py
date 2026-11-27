@@ -9,6 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from tests.e2e.core.helpers import registered_ssh_key_secret
+from tests.e2e.core.k8s_client import impersonation_args
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, run_unchecked
 
@@ -39,18 +40,18 @@ def _storage_controller_configured(namespace: str) -> bool:
     Checks two sources: direct env vars on the operator deployment
     and envFrom secrets (e.g. osac-config) that may inject the var at runtime.
     """
-    output, rc = run_unchecked(
+    operator_args = [
         "kubectl",
-        "--as",
-        "system:admin",
+        *impersonation_args(),
         "get",
         "deployment",
         "-n",
         namespace,
         "-l",
         "control-plane=controller-manager",
-        "-o",
-        "jsonpath={.items[*].spec.template.spec.containers[*].env[*].name}",
+    ]
+    output, rc = run_unchecked(
+        *operator_args, "-o", "jsonpath={.items[*].spec.template.spec.containers[*].env[*].name}"
     )
     if rc == 0 and (
         "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE" in output or "OSAC_ENABLE_STORAGE_CONTROLLER" in output
@@ -59,23 +60,13 @@ def _storage_controller_configured(namespace: str) -> bool:
 
     # Check envFrom secrets for the storage env var
     secret_names, rc = run_unchecked(
-        "kubectl",
-        "--as",
-        "system:admin",
-        "get",
-        "deployment",
-        "-n",
-        namespace,
-        "-l",
-        "control-plane=controller-manager",
-        "-o",
-        "jsonpath={.items[*].spec.template.spec.containers[*].envFrom[*].secretRef.name}",
+        *operator_args, "-o", "jsonpath={.items[*].spec.template.spec.containers[*].envFrom[*].secretRef.name}"
     )
     if rc != 0:
         return False
     for secret_name in secret_names.strip().split():
         data_keys, rc = run_unchecked(
-            "kubectl", "--as", "system:admin", "get", "secret", secret_name, "-n", namespace, "-o", "jsonpath={.data}"
+            "kubectl", *impersonation_args(), "get", "secret", secret_name, "-n", namespace, "-o", "jsonpath={.data}"
         )
         if rc == 0 and "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE" in data_keys:
             return True

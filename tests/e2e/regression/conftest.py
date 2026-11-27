@@ -14,7 +14,7 @@ import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import wait_for_tenant_deletion
-from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.k8s_client import K8sClient, impersonation_args
 from tests.e2e.core.keycloak_admin import delete_user_by_username, get_admin_token, keycloak_admin_request
 from tests.e2e.core.runner import env, poll_until, run_unchecked
 from tests.e2e.core.wait_kinds import WaitResourceKind
@@ -112,7 +112,7 @@ def _wait_private_absent(
 
 def _namespace_absent(name: str) -> bool:
     """Return True when kubectl reports the tenant namespace is NotFound."""
-    combined, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", name)
+    combined, rc = run_unchecked("kubectl", *impersonation_args(), "get", "ns", name)
     if rc == 0:
         return False
     return "NotFound" in combined

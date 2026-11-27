@@ -13,6 +13,7 @@ import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import fulfillment_users_for_username
+from tests.e2e.core.k8s_client import impersonation_args
 from tests.e2e.core.keycloak_admin import (
     get_admin_token,
     keycloak_admin_request,
@@ -224,7 +225,7 @@ def _user_listed(grpc: GRPCClient, *, username: str, tenant_name: str) -> bool:
 
 def _namespace_json(name: str) -> dict[str, Any]:
     """Return the Kubernetes Namespace object as JSON."""
-    raw, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", name, "-o", "json")
+    raw, rc = run_unchecked("kubectl", *impersonation_args(), "get", "ns", name, "-o", "json")
     assert rc == 0, f"namespace {name} not found: {raw}"
     data = json.loads(raw)
     assert isinstance(data, dict)
@@ -299,7 +300,7 @@ def test_tenant_onboarding_demo1_milestone_02(
 
     def _ns_active() -> str:
         """Return the tenant namespace phase, or empty if it is not ready yet."""
-        raw, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", tenant_name, "-o", "json")
+        raw, rc = run_unchecked("kubectl", *impersonation_args(), "get", "ns", tenant_name, "-o", "json")
         if rc != 0:
             return ""
         try:

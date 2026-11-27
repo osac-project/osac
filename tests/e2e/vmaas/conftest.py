@@ -38,6 +38,12 @@ DEFAULT_DISK_IMAGE_SOURCE_REF: str = "quay.io/containerdisks/fedora:41"
 
 @pytest.fixture(scope="session")
 def k8s_virt_client(namespace: str) -> K8sClient:
+    """Kubernetes client for the cluster where VirtualMachines actually land.
+
+    OSAC_VM_KUBECONFIG identifies it explicitly; in a vcluster run the hub is
+    the vcluster and the VMs land on the outer cluster, so this is the outer
+    kubeconfig while OSAC_HUB_KUBECONFIG (or KUBECONFIG) is the vcluster one.
+    """
     vm_kubeconfig: str = os.environ["OSAC_VM_KUBECONFIG"]
     return K8sClient(namespace=namespace, kubeconfig=vm_kubeconfig)
 

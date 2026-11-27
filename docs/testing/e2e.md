@@ -7,6 +7,24 @@ and skip conditions live in `tests/e2e/conftest.py` and the suite directories.
 Read both before extending or claiming coverage. Pytest collection proves
 import/selection readiness only, not deployed helper or lifecycle correctness.
 
+## Connection overrides
+
+The fixtures read the deployment they target from the environment, so the same
+suites run against a single OpenShift cluster and against a vcluster run (the
+hub is a vcluster API while VMs, AAP, Keycloak and the databases stay on the
+outer cluster):
+
+| Variable | Meaning |
+|---|---|
+| `KUBECONFIG` or `OSAC_HUB_KUBECONFIG` | Hub kubeconfig. `OSAC_HUB_KUBECONFIG` wins; without either, the current context is used. Point it at the vcluster API for a vcluster run. |
+| `OSAC_VM_KUBECONFIG` | Kubeconfig of the cluster where VirtualMachines and VMIs land (the outer cluster in a vcluster run). Required by the VMaaS and networking suites. |
+| `OSAC_IMPERSONATE_USER` | User kubectl impersonates, default `system:admin`. Set it to an empty value for a vanilla Kubernetes hub (a vcluster), which rejects impersonation, so the kubeconfig identity is used. |
+| `OSAC_NAMESPACE` | Install namespace. Default `osac-devel`; a vcluster run installs into `osac`. |
+| `OSAC_CLUSTER_DOMAIN` | Outer cluster domain. Required for a vcluster run because a vcluster has no `ingresses.config.openshift.io` to read. |
+| `OSAC_FULFILLMENT_ADDRESS`, `OSAC_FULFILLMENT_PRIVATE_ADDRESS` | `<host>:443` overrides when the derived `fulfillment-api-<namespace>.<domain>` names do not match. |
+| `OSAC_KEYCLOAK_URL`, `OSAC_KEYCLOAK_REALM`, `OSAC_KEYCLOAK_CLIENT_ID` | Keycloak endpoint, realm and CLI client. The realm defaults to `osac`; a vcluster run uses the run name (for example `demoav1`). |
+| `METERING_ADAPTER_URL` | Base URL of the metering echo adapter. If unset, the suite exposes a Route on the hub, which a vcluster cannot do; set it to the run's published adapter route. |
+
 ## Suite boundaries
 
 | Suite (by directory/role) | Real | Faked or omitted |

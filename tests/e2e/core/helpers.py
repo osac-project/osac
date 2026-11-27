@@ -1418,7 +1418,7 @@ def _force_cleanup_agentcluster_finalizers(*, k8s: K8sClient, name: str) -> None
     hc_ns = f"{k8s.namespace}-{name}"
     cp_ns = f"{hc_ns}-{name}"
     finalizer = "agentclustercapi-provider.agent-install.openshift.io/deprovision"
-    base_args = [*k8s._base(), "--as", "system:admin"]
+    base_args = k8s.base_args()
     output, rc = run_unchecked(
         *base_args,
         "get",
@@ -1460,7 +1460,7 @@ def _force_cleanup_agent_labels(*, k8s: K8sClient, name: str) -> None:
     agent_ns = "hardware-inventory"
     clusterorder_label = "osac.openshift.io/clusterorder"
     clusterdeployment_ns_label = "agent-install.openshift.io/clusterdeployment-namespace"
-    base_args = [*k8s._base(), "--as", "system:admin"]
+    base_args = k8s.base_args()
     output, rc = run_unchecked(
         *base_args,
         "get",
@@ -1489,7 +1489,7 @@ def _force_cleanup_agent_labels(*, k8s: K8sClient, name: str) -> None:
 def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> None:
     cp_ns = f"{k8s.namespace}-{name}-{name}"
     hook = "pre-terminate.delete.hook.machine.cluster.x-k8s.io/agentmachine"
-    base_args = [*k8s._base(), "--as", "system:admin"]
+    base_args = k8s.base_args()
     output, rc = run_unchecked(
         *base_args, "get", "machines.cluster.x-k8s.io", "-n", cp_ns, "-o", "jsonpath={.items[*].metadata.name}"
     )

@@ -8,6 +8,7 @@ import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import assert_grpc_rejected
+from tests.e2e.core.k8s_client import impersonation_args
 from tests.e2e.core.runner import CommandFailed, CommandTimedOut, run, run_unchecked
 
 pytestmark = pytest.mark.sanity
@@ -88,8 +89,7 @@ def test_shared_infrastructure_always_available(private_grpc: GRPCClient) -> Non
 def test_disabled_service_controllers_not_running(namespace: str) -> None:
     pods_json = run(
         "kubectl",
-        "--as",
-        "system:admin",
+        *impersonation_args(),
         "get",
         "pods",
         "-n",
@@ -113,8 +113,7 @@ def test_disabled_service_controllers_not_running(namespace: str) -> None:
 
     bmf_json = run(
         "kubectl",
-        "--as",
-        "system:admin",
+        *impersonation_args(),
         "get",
         "pods",
         "-n",

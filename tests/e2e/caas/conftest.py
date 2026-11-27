@@ -9,7 +9,7 @@ import pytest
 
 from tests.e2e.core import failure_snapshot
 from tests.e2e.core.helpers import registered_ssh_key_secret
-from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.k8s_client import K8sClient, service_account_token_args
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
 
@@ -36,7 +36,9 @@ def cli(namespace: str, fulfillment_address: str, service_account: str, jwt_cli_
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=f"oc create token -n {shlex.quote(namespace)} {shlex.quote(service_account)} --as system:admin",
+        token_script=shlex.join(
+            ["oc", "create", "token", *service_account_token_args(namespace=namespace, service_account=service_account)]
+        ),
         namespace=namespace,
     )
     yield instance

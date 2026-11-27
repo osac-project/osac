@@ -1,5 +1,24 @@
 # AAP Configuration
 
+AAP workers read runtime configuration from their instance-group environment.
+The storage provider also accepts explicit Ansible variables when invoked directly.
+
+## Block StorageClass filesystem type
+
+New AAP-created native VAST, LVMS/TopoLVM, and direct Trident block StorageClasses
+use `ext4` by default. Set `OSAC_STORAGE_BLOCK_FSTYPE` in the storage worker
+environment, or pass `storage_provider_block_fstype` to Ansible. The explicit
+variable takes precedence. The value must be a nonempty string supported by the
+target driver and is passed unchanged, without trimming or an allowlist.
+
+Only new native block classes consume this setting. Changing it does not change
+the filesystem settings on existing classes or migrate data. NFS, classes that
+use the OSAC CSI driver (including optional local CSI classes), and teardown do
+not consume it.
+
+For deployment configuration, see the
+[installer Helm example](../../osac-installer/docs/aap-configuration.md#block-storageclass-filesystem-type).
+
 ## Hosted cluster DNS
 
 The CaaS endpoint workflow publishes API and ingress records under

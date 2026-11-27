@@ -1572,6 +1572,11 @@
                     "STORAGE_SNAPSHOTS_ENABLED": {
                       "type": "string",
                       "description": "Enable storage snapshots"
+                    },
+                    "OSAC_STORAGE_BLOCK_FSTYPE": {
+                      "type": "string",
+                      "default": "ext4",
+                      "description": "Filesystem type for new native VAST, LVMS/TopoLVM, and direct Trident block StorageClasses. OSAC CSI File-policy classes do not consume this setting. Passed unchanged; must be nonempty when consumed."
                     }
                   },
                   "additionalProperties": false

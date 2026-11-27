@@ -90,6 +90,13 @@
   register: _netapp_sc_checks
   no_log: true
 
+- name: Resolve filesystem type for missing NetApp block StorageClasses
+  ansible.builtin.include_role:
+    name: osac.service.storage_provider
+    tasks_from: resolve_block_fstype
+  when: >-
+    _netapp_expected_sc_names | difference(_netapp_sc_checks.resources | map(attribute='metadata.name') | list) | length > 0
+
 - name: Verify TridentBackendConfig CRD is installed on the target cluster
   when: _netapp_dedicated_backend_ids | length > 0
   kubernetes.core.k8s_info:
@@ -144,7 +151,9 @@
       {% set sc_name = sc.metadata.name -%}
       {% if sc_name in _netapp_expected_sc_selectors
             and (_netapp_expected_sc_selectors[sc_name] | length > 0)
-            and ((sc.parameters | default({}, true)) == {'backendType': 'ontap-san', 'selector': _netapp_expected_sc_selectors[sc_name]}) -%}
+            and ((sc.parameters | default({}, true)) ==
+                 ({'backendType': 'ontap-san', 'selector': _netapp_expected_sc_selectors[sc_name]}
+                  | osac.service.storage_class_parameters([sc], sc_name))) -%}
       {% set _ = matching_sc_names.append(sc_name) -%}
       {% endif -%}
       {% endfor -%}

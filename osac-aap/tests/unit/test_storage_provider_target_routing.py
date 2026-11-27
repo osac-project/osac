@@ -8,27 +8,7 @@ from pathlib import Path
 
 import pytest
 
-OSAC_AAP = Path(__file__).resolve().parents[2]
-RECORDER = """
-import json
-import os
-from ansible.module_utils.basic import AnsibleModule
-
-module = AnsibleModule(argument_spec={
-    "kubeconfig": {"type": "str"},
-    "context": {"type": "str"},
-    "host": {"type": "str"},
-    "validate_certs": {"type": "bool", "default": True},
-    "api_version": {"type": "str"},
-    "kind": {"type": "str"},
-    "label_selectors": {"type": "list", "elements": "str"},
-    "state": {"type": "str"},
-    "definition": {"type": "dict"},
-})
-with open(os.environ["OSAC_ROUTING_CAPTURE"], "a") as capture:
-    capture.write(json.dumps(module.params) + "\\n")
-module.exit_json(changed=False, resources=[])
-"""
+from .storage_runner import FIXTURES, OSAC_AAP, run_tasks
 
 
 # Stateful Kubernetes module doubles for the native CSI target-routing test.
@@ -186,10 +166,6 @@ def run_native_csi_dispatch(tmp_path: Path) -> list[dict[str, object]]:
 
 
 def run_dispatches(tmp_path, targets, remote_env="", provider="lvms", module_options=None):
-    modules = tmp_path / "ansible_collections/kubernetes/core/plugins/modules"
-    modules.mkdir(parents=True)
-    for name in ("k8s", "k8s_info"):
-        (modules / f"{name}.py").write_text(RECORDER)
     role = tmp_path / "ansible_collections/osac/templates/roles/routing_fixture_storage/tasks"
     role.mkdir(parents=True)
     (role.parents[1] / "lvms_storage").symlink_to(
@@ -205,7 +181,7 @@ def run_dispatches(tmp_path, targets, remote_env="", provider="lvms", module_opt
         }},
     ]))
     tasks = []
-    for target in targets:
+    for index, target in enumerate(targets):
         tasks.append(
             {
                 "name": "Dispatch tenant StorageClasses",
@@ -214,7 +190,7 @@ def run_dispatches(tmp_path, targets, remote_env="", provider="lvms", module_opt
                     "storage_provider_action": "ensure_storage_class",
                     "storage_provider_tiers": [
                         {
-                            "name": "fast",
+                            "name": f"fast-{index}",
                             "protocol": "block",
                             "provider": provider,
                             "backend_id": f"{provider}-backend-1",
@@ -224,44 +200,12 @@ def run_dispatches(tmp_path, targets, remote_env="", provider="lvms", module_opt
                 },
             }
         )
-    playbook = tmp_path / "routing.json"
-    playbook.write_text(
-        json.dumps(
-            [{
-                "name": "Exercise sequential provider dispatch",
-                "hosts": "localhost",
-                "gather_facts": False,
-                "vars": {
-                    "ansible_connection": "local",
-                    "ansible_python_interpreter": sys.executable,
-                    "tenant_name": "routing-test",
-                    "tenant_namespace": "osac-tenants",
-                },
-                "tasks": tasks,
-            }]
-        )
-    )
-    capture = tmp_path / "calls.jsonl"
-    environment = {
-        **os.environ,
-        "ANSIBLE_CONFIG": str(OSAC_AAP / "ansible.cfg"),
-        "ANSIBLE_COLLECTIONS_PATH": f"{tmp_path}:{OSAC_AAP / 'collections'}:{OSAC_AAP / 'vendor'}",
-        "ANSIBLE_FORCE_COLOR": "false",
-        "ANSIBLE_STDOUT_CALLBACK": "default",
-        "OSAC_ROUTING_CAPTURE": str(capture),
-        "OSAC_REMOTE_CLUSTER_KUBECONFIG": remote_env,
-    }
-    result = subprocess.run(
-        ["ansible-playbook", "-i", "localhost,", str(playbook)],
-        cwd=OSAC_AAP,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=90,
-        check=False,
+    result, calls = run_tasks(
+        tmp_path, tasks, {"tenant_name": "routing-test"},
+        environment={"OSAC_REMOTE_CLUSTER_KUBECONFIG": remote_env},
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    return [json.loads(line) for line in capture.read_text().splitlines()]
+    return calls
 
 
 @pytest.mark.parametrize("insecure", [False, True])
@@ -303,23 +247,7 @@ def test_sequential_target_and_tls_state(tmp_path, provider):
 @pytest.mark.parametrize("provider", ["lvms", "routing-fixture"])
 def test_empty_target_preserves_environment_fallback(tmp_path, provider):
     calls = run_dispatches(tmp_path, [{"storage_provider_target_kubeconfig": ""}], provider=provider)
-    result = subprocess.run(
-        [sys.executable, "-c", """
-import json
-import sys
-sys.path.insert(0, sys.argv[1])
-from ansible_collections.kubernetes.core.plugins.module_utils.k8s.client import _create_auth_spec
-print(json.dumps([_create_auth_spec(kubeconfig=call["kubeconfig"])["kubeconfig"]
-                  for call in json.loads(sys.argv[2])]))
-""", str(OSAC_AAP / "vendor"), json.dumps(calls)],
-        env={**os.environ, "K8S_AUTH_KUBECONFIG": "/fixture/environment-default"},
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(result.stdout) == ["/fixture/environment-default"] * 2
+    assert [auth["kubeconfig"] for auth in resolve_auth(calls)] == ["/fixture/environment-default"] * 2
 
 
 @pytest.mark.parametrize("options", [
@@ -342,15 +270,7 @@ def test_empty_target_preserves_explicit_auth_options(tmp_path, options):
 
 def resolve_auth(calls):
     result = subprocess.run(
-        [sys.executable, "-c", """
-import json
-import sys
-sys.path.insert(0, sys.argv[1])
-from ansible_collections.kubernetes.core.plugins.module_utils.k8s.client import _create_auth_spec
-auths = [_create_auth_spec(**call) for call in json.loads(sys.argv[2])]
-print(json.dumps([{key: auth.get(key) for key in ("kubeconfig", "context", "host", "verify_ssl")}
-                  for auth in auths]))
-""", str(OSAC_AAP / "vendor"), json.dumps(calls)],
+        [sys.executable, str(FIXTURES / "resolve_auth.py"), str(OSAC_AAP / "vendor"), json.dumps(calls)],
         env={**os.environ, "K8S_AUTH_KUBECONFIG": "/fixture/environment-default",
              "K8S_AUTH_CONTEXT": "environment-context",
              "K8S_AUTH_HOST": "https://environment.invalid:6443"},

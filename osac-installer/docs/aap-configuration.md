@@ -22,6 +22,27 @@ networking jobs. They are not selected through a `NETWORK_CLASS` environment
 variable. See [shared CaaS endpoint lifecycle](network-backend.md#shared-caas-endpoint-lifecycle)
 for the endpoint flow and upgrade guidance.
 
+## Block StorageClass filesystem type
+
+Set the storage worker environment through Helm:
+
+```yaml
+aap:
+  instanceGroups:
+    storageFulfillment:
+      enabled: true
+      config:
+        OSAC_STORAGE_BLOCK_FSTYPE: "ext4"
+```
+
+The default for new native VAST, LVMS/TopoLVM, and direct Trident block classes
+is `ext4`; OSAC CSI File-policy classes do not consume this setting.
+An empty Helm value is omitted, leaving the worker default
+in effect. An explicitly empty worker environment value is rejected when a new
+block class consumes it. See the canonical
+[AAP filesystem configuration](../../osac-aap/docs/aap-configuration.md#block-storageclass-filesystem-type)
+for override precedence, provider coverage, and existing-class behavior.
+
 ## How It Works
 
 Instance group ConfigMaps and Secrets are managed by the osac-aap subchart

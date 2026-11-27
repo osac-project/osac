@@ -232,7 +232,9 @@
           {% set _desired = {'backendType': 'ontap-san',
                              'selector': _sel,
                              'storagePools': (_bname | replace('.', '\\.')) ~ ':.*'} -%}
-          {% set _ = desired_map.update({item.name: _desired}) -%}
+          {% set _sc_name = 'netapp-' ~ _assignment_key ~ '-' ~ ((item.name | hash('sha256'))[:16] | lower) -%}
+          {% set _ = desired_map.update({item.name: _desired | osac.service.storage_class_parameters(
+               _netapp_sc_checks.resources, _sc_name, _storage_provider_block_parameters | default({}))}) -%}
           {% endfor -%}
           {{ desired_map }}
       when: _netapp_is_shared_tbc | bool
@@ -438,6 +440,20 @@
         )
       no_log: true
 
+    - name: Build desired Dedicated-SVM StorageClass parameters per tier
+      ansible.builtin.set_fact:
+        _netapp_dedicated_sc_desired_params: >-
+          {% set desired_map = {} -%}
+          {% for item in _backend_tiers -%}
+          {% set _sc_name = 'netapp-' ~ _assignment_key ~ '-' ~ ((item.name | hash('sha256'))[:16] | lower) -%}
+          {% set _desired = {'backendType': 'ontap-san', 'selector': 'osac_backend=' ~ _tbc_name ~ ';tier=' ~ item.name} -%}
+          {% set _ = desired_map.update({item.name: _desired | osac.service.storage_class_parameters(
+               _netapp_sc_checks.resources, _sc_name, _storage_provider_block_parameters | default({}))}) -%}
+          {% endfor -%}
+          {{ desired_map }}
+      when: not (_netapp_is_shared_tbc | bool)
+      no_log: true
+
     - name: Identify existing Dedicated-SVM StorageClasses with changed immutable parameters
       ansible.builtin.set_fact:
         _netapp_stale_dedicated_sc_names: >-
@@ -445,7 +461,7 @@
           {% for item in _backend_tiers -%}
           {% set _sc_name = 'netapp-' ~ _assignment_key ~ '-' ~ ((item.name | hash('sha256'))[:16] | lower) -%}
           {% set _existing = (_netapp_sc_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _sc_name) | list -%}
-          {% set _desired = {'backendType': 'ontap-san', 'selector': 'osac_backend=' ~ _tbc_name ~ ';tier=' ~ item.name} -%}
+          {% set _desired = _netapp_dedicated_sc_desired_params[item.name] -%}
           {% if (_existing | length > 0) and ((_existing[0].parameters | default({}, true)) != _desired) -%}
           {% set _ = stale.append(_sc_name) -%}
           {% endif -%}
@@ -481,9 +497,7 @@
               osac.openshift.io/storage-protocol: block
               osac.openshift.io/storage-provider: netapp
           provisioner: csi.trident.netapp.io
-          parameters:
-            backendType: ontap-san
-            selector: "osac_backend={{ _tbc_name }};tier={{ item.name }}"
+          parameters: "{{ _netapp_dedicated_sc_desired_params[item.name] }}"
           reclaimPolicy: Delete
           volumeBindingMode: WaitForFirstConsumer
       loop: "{{ _backend_tiers if not (_netapp_is_shared_tbc | bool) else [] }}"

@@ -1,6 +1,7 @@
 """Unit and contract tests for the netapp_storage provider role."""
 
 import base64
+import importlib.util
 import json
 import os
 import re
@@ -14,6 +15,10 @@ from ansible.parsing.dataloader import DataLoader  # type: ignore[import-not-fou
 from ansible.template import Templar  # type: ignore[import-not-found]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+FILTER_PATH = REPO_ROOT / "collections/ansible_collections/osac/service/plugins/filter/storage_class_parameters.py"
+FILTER_SPEC = importlib.util.spec_from_file_location("storage_class_parameters", FILTER_PATH)
+STORAGE_CLASS_FILTER = importlib.util.module_from_spec(FILTER_SPEC)
+FILTER_SPEC.loader.exec_module(STORAGE_CLASS_FILTER)
 
 
 class _Redacted(str):
@@ -60,6 +65,7 @@ def _find_task(tasks: list[dict], name: str) -> dict:
 def _render(expression, variables: dict):
     """Render a Jinja expression or data structure using Ansible's Templar."""
     templar = Templar(loader=DataLoader(), variables=variables)
+    templar.environment.filters["osac.service.storage_class_parameters"] = STORAGE_CLASS_FILTER.storage_class_parameters
     return templar.template(expression)
 
 
@@ -195,9 +201,14 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
 
     # 2. Render Dedicated-SVM StorageClass parameters and stale Dedicated-SVM SC detection.
     sc_task = _find_task(block_tasks, "Create the per-tier StorageClasses")
+    desired_task = _find_task(block_tasks, "Build desired Dedicated-SVM StorageClass parameters per tier")
+    desired = _render(desired_task["ansible.builtin.set_fact"]["_netapp_dedicated_sc_desired_params"], {
+        "_tbc_name": "netapp-0000000000000001", "_assignment_key": "0000000000000001",
+        "_backend_tiers": [{"name": "gold"}], "_netapp_sc_checks": {"resources": []},
+    })
     dedicated_sc_params = _render(
         sc_task["kubernetes.core.k8s"]["definition"]["parameters"],
-        {"_tbc_name": "netapp-0000000000000001", "item": {"name": "gold"}},
+        {"_netapp_dedicated_sc_desired_params": desired, "item": {"name": "gold"}},
     )
     assert dedicated_sc_params == {
         "backendType": "ontap-san",
@@ -219,6 +230,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
             stale_ded_expr,
             {
                 "_assignment_key": "0000000000000001",
+                "_netapp_dedicated_sc_desired_params": desired,
                 "_tbc_name": "netapp-0000000000000001",
                 "_backend_tiers": [{"name": "gold"}],
                 "_netapp_sc_checks": {
@@ -234,6 +246,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         stale_ded_expr,
         {
             "_assignment_key": "0000000000000001",
+            "_netapp_dedicated_sc_desired_params": desired,
             "_tbc_name": "netapp-0000000000000001",
             "_backend_tiers": [{"name": "gold"}],
             "_netapp_sc_checks": {
@@ -278,6 +291,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
             "_assignment_key": "0000000000000001",
             "_backend_tiers": [shared_tier],
             "_netapp_profile_backend_names": {"gold-prof": "trident.shared-san.01"},
+            "_netapp_sc_checks": {"resources": []},
         },
     )
     rendered_shared_with_bname = _render(
@@ -298,6 +312,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
             "_assignment_key": "0000000000000001",
             "_backend_tiers": [shared_tier],
             "_netapp_profile_backend_names": {"gold-prof": ""},
+            "_netapp_sc_checks": {"resources": []},
         },
     )["gold"]
     assert (

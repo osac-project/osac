@@ -28,6 +28,34 @@ import (
 )
 
 var _ = Describe("Filter translator", func() {
+	Describe("Shared query contract", func() {
+		var translator *FilterTranslator
+
+		BeforeEach(func() {
+			var err error
+			translator, err = NewFilterTranslator().SetLogger(logger).
+				SetDescriptor((*testsv1.Object)(nil).ProtoReflect().Descriptor()).Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		DescribeTable("Rejects statically non-Boolean filters",
+			func(ctx context.Context, filter string) {
+				actual, err := translator.Translate(ctx, filter)
+				Expect(err).To(BeAssignableToTypeOf(&ErrValidation{}))
+				Expect(err.Error()).To(ContainSubstring("filter must return a Boolean"))
+				Expect(actual).To(BeEmpty())
+			},
+			Entry("string that PostgreSQL could parse as true", `"true"`),
+			Entry("string field", `this.id`),
+			Entry("arithmetic", `this.my_int32 + 1`),
+			Entry("array length", `this.my_string_list.size()`),
+			Entry("timestamp", `now`),
+			Entry("map entry", `this.metadata.labels['team']`),
+			Entry("message", `this.status`),
+			Entry("null", `null`),
+		)
+	})
+
 	Describe("Construction", func() {
 		It("Fails without a descriptor", func() {
 			_, err := NewFilterTranslator().
@@ -298,7 +326,12 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Check presence of nested boolean field",
 				`has(this.spec.spec_bool)`,
-				`data->'spec' ? 'spec_bool'`,
+				`coalesce(data->'spec' ? 'spec_bool', false)`,
+			),
+			Entry(
+				"Check presence of deeply nested field",
+				`has(this.spec.spec_msg.my_string)`,
+				`coalesce(data->'spec'->'spec_msg' ? 'my_string', false)`,
 			),
 			Entry(
 				"String starts with",
@@ -403,7 +436,22 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Double-quoted string with backslash from %q",
 				`this.id == "path\\to\\thing"`,
-				`id = 'path\\to\\thing'`,
+				`id = e'path\\to\\thing'`,
+			),
+			Entry(
+				"LIKE backslash and wildcards retain both escape layers",
+				`this.my_string.startsWith("path\\%_tail")`,
+				`data->>'my_string' like e'path\\\\\\%\\_tail%'`,
+			),
+			Entry(
+				"LIKE wildcards stay literal when a quote requires SQL escapes",
+				`this.my_string.contains("it's%_tail")`,
+				`data->>'my_string' like e'%it\'s\\%\\_tail%'`,
+			),
+			Entry(
+				"LIKE non-ASCII characters are escaped",
+				`this.my_string.contains("café")`,
+				`data->>'my_string' like e'%caf\u00e9%'`,
 			),
 			Entry(
 				"Double-quoted string with CEL injection attempt from %q",

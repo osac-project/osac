@@ -50,13 +50,19 @@ func TestSanity(t *testing.T) {
 
 	vc := fulfillment.NewVolumeStub(backendName, "nfs")
 
+	// The node plugin routes on backend and protocol; the stub reports "nfs".
 	vendorSockets := map[string]string{
-		backendName: vendorSocket,
+		backendName + "/nfs": vendorSocket,
 	}
 	// The controller proxies publish/unpublish to the same fake vendor, which
 	// serves the CSI controller service on this socket alongside the node service.
 	vendorControllers := map[string]string{
 		backendName: vendorSocket,
+	}
+
+	routesDir := filepath.Join(tmpDir, "routes")
+	if err := os.Mkdir(routesDir, 0o700); err != nil {
+		t.Fatalf("creating routes directory: %v", err)
 	}
 
 	d, err := driver.NewDriver(
@@ -68,6 +74,7 @@ func TestSanity(t *testing.T) {
 		vc,
 		vendorSockets,
 		vendorControllers,
+		driver.WithNodeStateDir(routesDir),
 	)
 	if err != nil {
 		t.Fatalf("creating driver: %v", err)

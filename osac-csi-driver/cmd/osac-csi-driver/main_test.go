@@ -116,6 +116,20 @@ func TestValidateFulfillmentFlags(t *testing.T) {
 	})
 }
 
+func TestValidateFlagsNodeOnly(t *testing.T) {
+	t.Run("node-only needs no fulfillment endpoint or stub", func(t *testing.T) {
+		if err := validateFlags(true, "", "", false, "", "", "", false); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("without node-only the endpoint or stub is still required", func(t *testing.T) {
+		if err := validateFlags(false, "", "", false, "", "", "", false); err == nil {
+			t.Fatal("expected error without an endpoint or --allow-stub")
+		}
+	})
+}
+
 func TestBuildTokenURL(t *testing.T) {
 	t.Run("without trailing slash", func(t *testing.T) {
 		got, err := buildTokenURL("https://keycloak.example.com/realms/myrealm")

@@ -31,18 +31,46 @@ type Driver struct {
 	node       csi.NodeServer
 }
 
+type driverOptions struct {
+	nodeStateDir string
+	nodeOnly     bool
+}
+
+// DriverOption configures a Driver.
+type DriverOption func(*driverOptions)
+
+// WithNodeStateDir keeps node volume routes as files under dir, which must
+// exist, so that they survive a restart. Without it routes are kept in
+// memory.
+func WithNodeStateDir(dir string) DriverOption {
+	return func(o *driverOptions) { o.nodeStateDir = dir }
+}
+
+// WithNodeOnly serves only the Identity and Node services. The volume client
+// is not used and may be nil.
+func WithNodeOnly() DriverOption {
+	return func(o *driverOptions) { o.nodeOnly = true }
+}
+
 // NewDriver creates a new OSAC CSI driver instance. vendorSockets maps a
 // provider to the vendor node CSI socket (used by the node plugin), and
 // vendorControllers maps a provider to the vendor CSI controller endpoint
-// (used by the controller plugin for publish/unpublish).
-func NewDriver(name, version, endpoint, nodeID, clusterID string, vc fulfillment.VolumeClient, vendorSockets, vendorControllers map[string]string) (*Driver, error) {
+// (used by the controller plugin for publish/unpublish). Keys of both maps
+// follow vendorRoute.
+func NewDriver(name, version, endpoint, nodeID, clusterID string, vc fulfillment.VolumeClient,
+	vendorSockets, vendorControllers map[string]string, opts ...DriverOption) (*Driver, error) {
+	var o driverOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	if name == "" {
 		return nil, fmt.Errorf("driver name is required")
 	}
 	if nodeID == "" {
 		return nil, fmt.Errorf("node ID is required")
 	}
-	if vc == nil {
+	if vc == nil && !o.nodeOnly {
 		return nil, fmt.Errorf("volume client is required")
 	}
 
@@ -52,15 +80,26 @@ func NewDriver(name, version, endpoint, nodeID, clusterID string, vc fulfillment
 	vendorSockets = normalizeVendorSockets(vendorSockets)
 	proxyMgr := proxy.NewManager(vendorSockets)
 
-	return &Driver{
-		name:       name,
-		version:    version,
-		nodeID:     nodeID,
-		endpoint:   endpoint,
-		identity:   NewIdentityServer(name, version),
-		controller: NewControllerServer(vc, proxyMgr, vendorControllers, clusterID),
-		node:       NewNodeServer(nodeID, proxyMgr, vendorSockets),
-	}, nil
+	routes := newMemoryRouteStore()
+	if o.nodeStateDir != "" {
+		routes = newFileRouteStore(o.nodeStateDir)
+	}
+
+	identity := NewIdentityServer(name, version)
+	identity.nodeOnly = o.nodeOnly
+
+	d := &Driver{
+		name:     name,
+		version:  version,
+		nodeID:   nodeID,
+		endpoint: endpoint,
+		identity: identity,
+		node:     NewNodeServer(nodeID, proxyMgr, vendorSockets, WithRouteStore(routes)),
+	}
+	if !o.nodeOnly {
+		d.controller = NewControllerServer(vc, proxyMgr, vendorControllers, clusterID)
+	}
+	return d, nil
 }
 
 // Run starts the gRPC server and listens for CSI requests.
@@ -104,7 +143,9 @@ func (d *Driver) RunWithContext(ctx context.Context) error {
 	)
 
 	csi.RegisterIdentityServer(d.srv, d.identity)
-	csi.RegisterControllerServer(d.srv, d.controller)
+	if d.controller != nil {
+		csi.RegisterControllerServer(d.srv, d.controller)
+	}
 	csi.RegisterNodeServer(d.srv, d.node)
 
 	go func() {

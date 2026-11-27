@@ -13,6 +13,8 @@ type IdentityServer struct {
 	csi.UnimplementedIdentityServer
 	name    string
 	version string
+	// nodeOnly omits CONTROLLER_SERVICE from the plugin capabilities.
+	nodeOnly bool
 }
 
 // NewIdentityServer creates a new CSI identity server.
@@ -39,24 +41,21 @@ func (s *IdentityServer) GetPluginInfo(_ context.Context, _ *csi.GetPluginInfoRe
 // GetPluginCapabilities returns the capabilities of this CSI plugin.
 func (s *IdentityServer) GetPluginCapabilities(_ context.Context, _ *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
 	klog.Infof("GetPluginCapabilities called")
-	return &csi.GetPluginCapabilitiesResponse{
-		Capabilities: []*csi.PluginCapability{
-			{
-				Type: &csi.PluginCapability_Service_{
-					Service: &csi.PluginCapability_Service{
-						Type: csi.PluginCapability_Service_CONTROLLER_SERVICE,
-					},
-				},
-			},
-			{
-				Type: &csi.PluginCapability_Service_{
-					Service: &csi.PluginCapability_Service{
-						Type: csi.PluginCapability_Service_VOLUME_ACCESSIBILITY_CONSTRAINTS,
-					},
-				},
-			},
+	var capabilities []*csi.PluginCapability
+	if !s.nodeOnly {
+		capabilities = append(capabilities, serviceCapability(csi.PluginCapability_Service_CONTROLLER_SERVICE))
+	}
+	capabilities = append(capabilities,
+		serviceCapability(csi.PluginCapability_Service_VOLUME_ACCESSIBILITY_CONSTRAINTS))
+	return &csi.GetPluginCapabilitiesResponse{Capabilities: capabilities}, nil
+}
+
+func serviceCapability(t csi.PluginCapability_Service_Type) *csi.PluginCapability {
+	return &csi.PluginCapability{
+		Type: &csi.PluginCapability_Service_{
+			Service: &csi.PluginCapability_Service{Type: t},
 		},
-	}, nil
+	}
 }
 
 // Probe checks whether the plugin is ready to serve requests.

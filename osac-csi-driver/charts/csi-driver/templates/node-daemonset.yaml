@@ -47,6 +47,7 @@ spec:
           args:
             - "--csi-endpoint=unix:///csi/osac/csi.sock"
             - "--node-id=$(KUBE_NODE_NAME)"
+            - "--node-state-dir=/csi/osac/volumes"
             {{- if $configMapName }}
             - "--fulfillment-endpoint=$(OSAC_FULFILLMENT_ENDPOINT)"
             - "--fulfillment-issuer-url=$(OSAC_FULFILLMENT_ISSUER_URL)"

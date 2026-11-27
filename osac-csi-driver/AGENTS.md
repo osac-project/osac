@@ -15,7 +15,7 @@ Read the applicable references before changing behavior:
 
 ## Invariants
 
-- `osac.backend` is the routing key for vendor controller and node operations; preserve its meaning across both plugins.
+- `osac.backend` plus `osac.protocol` is the routing key for vendor controller and node operations; preserve its meaning across both plugins.
 - Keep fulfillment-owned create/delete lifecycle separate from vendor-proxied attach, detach, and mount operations.
 - A vendor-controller endpoint of `none` means attach and detach are intentional no-ops.
 - Fulfillment OAuth client ID, secret file, and issuer URL are required together.

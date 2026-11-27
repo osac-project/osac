@@ -86,6 +86,24 @@ type VendorCreateVolumeRequest struct {
 	// It lets asynchronous provisioners resume an in-progress operation without
 	// creating a second backend resource after a reconcile.
 	VendorContext map[string]string
+
+	// NFS carries the per-tenant, per-tier NFS settings a file volume is created
+	// with. It is required when Protocol is NFS and ignored otherwise.
+	NFS *VendorNFSParams
+}
+
+// VendorNFSParams are the backend settings an NFS volume is created under. They
+// come from the tenant's storage configuration on the hub, never from the
+// consuming cluster.
+type VendorNFSParams struct {
+	// RootExport is the export path under which the volume's directory is created.
+	RootExport string
+	// ViewPolicy is the backend view policy applied to the volume's view.
+	ViewPolicy string
+	// VipPoolFQDN is the DNS name of the virtual IP pool clients mount from.
+	VipPoolFQDN string
+	// QoSPolicy is the optional backend QoS policy for the volume.
+	QoSPolicy string
 }
 
 // VendorCreateVolumeResponse carries the vendor-assigned identifiers that the
@@ -117,8 +135,11 @@ type VendorDeleteVolumeRequest struct {
 	UID            string
 	VendorVolumeID string
 	Provider       string
-	Tenant         string
-	VendorContext  map[string]string
+	// Protocol selects the vendor controller instance that owns the volume. An
+	// empty value is treated as block, for volumes recorded before it was set.
+	Protocol      v1alpha1.VolumeProtocol
+	Tenant        string
+	VendorContext map[string]string
 }
 
 // VolumeReconciler reconciles Volume CRs created by the fulfillment-service
@@ -438,11 +459,14 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 			UID:            string(vol.UID),
 			VendorVolumeID: vol.Status.VendorVolumeID,
 			Provider:       provider,
+			Protocol:       vol.Status.Protocol,
 			Tenant:         vol.GetAnnotations()[osacTenantKey],
 			VendorContext:  vol.Status.VendorContext,
 		})
 		if err != nil {
 			log.Error(err, "vendor deprovisioning failed")
+			reason, message := deleteFailureCondition(err)
+			setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, reason, message)
 			return ctrl.Result{}, err
 		}
 		log.Info("vendor deprovisioning succeeded", "vendorVolumeID", vol.Status.VendorVolumeID)
@@ -534,6 +558,16 @@ func (r *VolumeReconciler) mapLogicalVolumeToVolume(_ context.Context, obj clien
 // Uses apimeta.SetStatusCondition which preserves LastTransitionTime when
 // the status hasn't changed, but always updates Reason and Message so
 // repeated failures reflect the latest error.
+// deleteFailureCondition maps a vendor delete error to the VendorProvisioned
+// condition reason and message. Messages are fixed text: vendor errors can
+// carry backend detail, so they stay in the operator log only.
+func deleteFailureCondition(err error) (reason, message string) {
+	if errors.Is(err, ErrVendorNFSTrashDisabled) {
+		return "VendorNFSTrashDisabled", vastNFSTrashDisabledMessage
+	}
+	return "VendorDeleteFailed", "Vendor volume deletion failed; see operator logs"
+}
+
 func setVendorProvisionedCondition(conditions *[]metav1.Condition, status metav1.ConditionStatus, reason, message string) {
 	apimeta.SetStatusCondition(conditions, metav1.Condition{
 		Type:    string(v1alpha1.VolumeConditionVendorProvisioned),

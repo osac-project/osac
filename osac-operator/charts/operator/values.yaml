@@ -75,9 +75,12 @@ controllers:
 # For non-production LVMS/dev, use the same provider key as the CSI route:
 #   vendorControllers:
 #     lvms: none
+# Keys are "<provider>" or "<provider>/<protocol>". VAST runs one controller per
+# protocol; a bare "vast" key means block.
 # Example:
 #   vendorControllers:
 #     vast: vast-csi-controller.osac-csi-backends.svc:50051
+#     vast/nfs: vast-csi-controller-nfs.osac-csi-backends.svc:50051
 vendorControllers: {}
 
 configSecret:

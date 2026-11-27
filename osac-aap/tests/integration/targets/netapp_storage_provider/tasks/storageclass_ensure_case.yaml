@@ -1,0 +1,86 @@
+---
+- name: Create a PVC referencing the existing StorageClass
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        namespace: default
+        name: "{{ _fixture_sc.metadata.name }}-claim"
+      spec:
+        storageClassName: "{{ _fixture_sc.metadata.name }}"
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
+  register: _fixture_claim
+
+- name: Exercise in-place StorageClass reconciliation with a PVC
+  block:
+    - name: Introduce drift in a managed label
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ _fixture_sc.metadata.name }}"
+            labels:
+              osac.openshift.io/storage-tier: incorrect
+      register: _drifted_sc
+
+    - name: Reconcile the requested tiers
+      block:
+        - name: Dispatch ensure_storage_class
+          ansible.builtin.include_tasks: dispatch.yaml
+          vars:
+            storage_provider_action: ensure_storage_class
+
+        - name: Require the requested class update to be compatible on success
+          ansible.builtin.assert:
+            that: not _expect_immutable_conflict
+
+      rescue:
+        - name: Require the Kubernetes parameter validation error for the conflicting class
+          ansible.builtin.assert:
+            that:
+              - _expect_immutable_conflict
+              - _fixture_sc.metadata.name in ansible_failed_result.msg
+              - >-
+                ('updates to parameters are forbidden' in ansible_failed_result.msg) or
+                ('field is immutable' in ansible_failed_result.msg)
+
+    - name: Read back the class and its claim
+      kubernetes.core.k8s_info:
+        api_version: "{{ item.apiVersion }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ item.metadata.namespace | default(omit) }}"
+      loop: "{{ [_fixture_sc, _fixture_claim.result] }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      register: _after_ensure
+
+    - name: Check class and claim identity and the atomic outcome of the patch
+      ansible.builtin.assert:
+        that:
+          - _class.metadata.uid == _fixture_sc.metadata.uid
+          - _class.parameters == _fixture_sc.parameters
+          - _class.metadata.labels['osac.openshift.io/storage-tier'] == _expected_tier_label
+          - not _expect_immutable_conflict or _class.metadata.resourceVersion == _drifted_sc.result.metadata.resourceVersion
+          - _claim.metadata.uid == _fixture_claim.result.metadata.uid
+          - _claim.spec.storageClassName == _class.metadata.name
+      vars:
+        _class: "{{ _after_ensure.results[0].resources[0] }}"
+        _claim: "{{ _after_ensure.results[1].resources[0] }}"
+        _expected_tier_label: "{{ 'incorrect' if _expect_immutable_conflict else _fixture_sc.metadata.labels['osac.openshift.io/storage-tier'] }}"
+
+  always:
+    - name: Remove the test claim before the teardown cases
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: PersistentVolumeClaim
+        namespace: default
+        name: "{{ _fixture_sc.metadata.name }}-claim"

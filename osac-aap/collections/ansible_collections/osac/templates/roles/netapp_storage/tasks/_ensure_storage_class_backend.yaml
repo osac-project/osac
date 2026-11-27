@@ -238,57 +238,6 @@
       when: _netapp_is_shared_tbc | bool
       no_log: true
 
-    - name: Identify existing Shared-TBC StorageClasses with changed immutable parameters
-      ansible.builtin.set_fact:
-        _netapp_stale_shared_sc_names: >-
-          {% set stale = [] -%}
-          {% for item in _backend_tiers -%}
-          {% set _sc_name = 'netapp-' ~ _assignment_key ~ '-' ~ ((item.name | hash('sha256'))[:16] | lower) -%}
-          {% set _existing = (_netapp_sc_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _sc_name) | list -%}
-          {% if (_existing | length > 0) and ((_existing[0].parameters | default({}, true)) != _netapp_shared_sc_desired_params[item.name]) -%}
-          {% set _ = stale.append(_sc_name) -%}
-          {% endif -%}
-          {% endfor -%}
-          {{ stale }}
-      when: _netapp_is_shared_tbc | bool
-      no_log: true
-
-    - name: Delete existing Shared-TBC StorageClasses when immutable parameters differ
-      kubernetes.core.k8s:
-        state: absent
-        api_version: storage.k8s.io/v1
-        kind: StorageClass
-        name: "{{ item }}"
-      loop: "{{ (_netapp_stale_shared_sc_names | default([])) if (_netapp_is_shared_tbc | bool) else [] }}"
-      loop_control:
-        label: "stale-storage-class"
-      when: _netapp_is_shared_tbc | bool
-      no_log: true
-
-    - name: Create the per-tier StorageClasses for shared Trident backend
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: storage.k8s.io/v1
-          kind: StorageClass
-          metadata:
-            name: "netapp-{{ _assignment_key }}-{{ (item.name | hash('sha256'))[:16] | lower }}"
-            labels:
-              app.kubernetes.io/managed-by: osac-aap
-              osac.openshift.io/tenant: "{{ tenant_name }}"
-              osac.openshift.io/storage-tier: "{{ item.name }}"
-              osac.openshift.io/storage-protocol: block
-              osac.openshift.io/storage-provider: netapp
-          provisioner: csi.trident.netapp.io
-          parameters: "{{ _netapp_shared_sc_desired_params[item.name] }}"
-          reclaimPolicy: Delete
-          volumeBindingMode: WaitForFirstConsumer
-      loop: "{{ _backend_tiers if (_netapp_is_shared_tbc | bool) else [] }}"
-      loop_control:
-        label: "storage-tier"
-      when: _netapp_is_shared_tbc | bool
-      no_log: true
-
     - name: Set runtime credentials and SVM name from operator preparation
       ansible.builtin.set_fact:
         _runtime_username: "{{ _provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.username | string | trim }}"
@@ -377,14 +326,16 @@
       loop_control:
         loop_var: _tbc_write_attempt
         label: "tbc-write-attempt"
-      when: not (_netapp_is_shared_tbc | bool)
+      when: not (_netapp_is_shared_tbc | bool) and not (_netapp_dedicated_backends_ready | bool)
 
     - name: Fail when the TridentBackendConfig could not be written
       ansible.builtin.fail:
         msg: >-
           The TridentBackendConfig was changed by another writer on every write
           attempt, so this run did not write it. Run the job again.
-      when: not (_netapp_is_shared_tbc | bool) and not (_tbc_written | default(false) | bool)
+      when: >-
+        not (_netapp_is_shared_tbc | bool) and not (_netapp_dedicated_backends_ready | bool) and
+        not (_tbc_written | default(false) | bool)
       no_log: true
 
     # Fail fast on a Failed phase or lastOperationStatus instead of burning the full retry window.
@@ -438,59 +389,49 @@
         )
       no_log: true
 
-    - name: Identify existing Dedicated-SVM StorageClasses with changed immutable parameters
-      ansible.builtin.set_fact:
-        _netapp_stale_dedicated_sc_names: >-
-          {% set stale = [] -%}
-          {% for item in _backend_tiers -%}
-          {% set _sc_name = 'netapp-' ~ _assignment_key ~ '-' ~ ((item.name | hash('sha256'))[:16] | lower) -%}
-          {% set _existing = (_netapp_sc_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _sc_name) | list -%}
-          {% set _desired = {'backendType': 'ontap-san', 'selector': 'osac_backend=' ~ _tbc_name ~ ';tier=' ~ item.name} -%}
-          {% if (_existing | length > 0) and ((_existing[0].parameters | default({}, true)) != _desired) -%}
-          {% set _ = stale.append(_sc_name) -%}
-          {% endif -%}
-          {% endfor -%}
-          {{ stale }}
-      when: not (_netapp_is_shared_tbc | bool)
-      no_log: true
-
-    - name: Delete existing Dedicated-SVM StorageClasses when immutable parameters differ
-      kubernetes.core.k8s:
-        state: absent
-        api_version: storage.k8s.io/v1
-        kind: StorageClass
-        name: "{{ item }}"
-      loop: "{{ (_netapp_stale_dedicated_sc_names | default([])) if not (_netapp_is_shared_tbc | bool) else [] }}"
-      loop_control:
-        label: "stale-dedicated-storage-class"
-      when: not (_netapp_is_shared_tbc | bool)
-      no_log: true
-
-    - name: Create the per-tier StorageClasses
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: storage.k8s.io/v1
-          kind: StorageClass
-          metadata:
-            name: "netapp-{{ _assignment_key }}-{{ (item.name | hash('sha256'))[:16] | lower }}"
-            labels:
-              app.kubernetes.io/managed-by: osac-aap
-              osac.openshift.io/tenant: "{{ tenant_name }}"
-              osac.openshift.io/storage-tier: "{{ item.name }}"
-              osac.openshift.io/storage-protocol: block
-              osac.openshift.io/storage-provider: netapp
-          provisioner: csi.trident.netapp.io
-          parameters:
-            backendType: ontap-san
-            selector: "osac_backend={{ _tbc_name }};tier={{ item.name }}"
-          reclaimPolicy: Delete
-          volumeBindingMode: WaitForFirstConsumer
-      loop: "{{ _backend_tiers if not (_netapp_is_shared_tbc | bool) else [] }}"
-      loop_control:
-        label: "storage-tier"
-      when: not (_netapp_is_shared_tbc | bool)
-      no_log: true
+    - name: Ensure StorageClasses
+      block:
+        - name: Create or update the StorageClass per tier
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: storage.k8s.io/v1
+              kind: StorageClass
+              metadata:
+                name: "{{ _tbc_name }}-{{ (item | hash('sha256'))[:16] }}"
+                labels:
+                  app.kubernetes.io/managed-by: osac-aap
+                  osac.openshift.io/tenant: "{{ tenant_name }}"
+                  osac.openshift.io/storage-tier: "{{ item }}"
+                  osac.openshift.io/storage-protocol: block
+                  osac.openshift.io/storage-provider: netapp
+              provisioner: csi.trident.netapp.io
+              parameters: "{{ _sc_parameters }}"
+              reclaimPolicy: Delete
+              volumeBindingMode: WaitForFirstConsumer
+          vars:
+            _dedicated_parameters:
+              backendType: ontap-san
+              selector: "osac_backend={{ _tbc_name }};tier={{ item }}"
+            _sc_parameters: >-
+              {{ _netapp_shared_sc_desired_params[item] if (_netapp_is_shared_tbc | bool) else _dedicated_parameters }}
+          loop: "{{ _backend_tiers | map(attribute='name') | list }}"
+          register: _netapp_sc_write
+          # Merge patch keeps unrequested parameters; require an exact match.
+          failed_when: >-
+            _netapp_sc_write is failed or
+            (_netapp_sc_write.result.parameters | default(none)) != _sc_parameters
+          no_log: true
+      rescue:
+        - name: Fail on StorageClasses that could not be updated
+          ansible.builtin.fail:
+            msg: >-
+              Kubernetes could not reconcile NetApp StorageClasses:
+              {% for write in ansible_failed_result.results | default([]) | select('failed') -%}
+              {{ _tbc_name }}-{{ (write.item | hash('sha256'))[:16] }}
+              ({{ (write.msg | default('') | regex_search('updates to [a-zA-Z]+ are forbidden|field is immutable'))
+                  or write.reason | default('requested parameters were not confirmed', true) }}){{ ', ' if not loop.last else '.' }}
+              {%- endfor %}
 
   always:
     - name: Clear credential-bearing facts
@@ -514,8 +455,7 @@
         _netapp_shared_profile_map: {}
         _netapp_referenced_profiles: []
         _netapp_shared_sc_desired_params: {}
-        _netapp_stale_shared_sc_names: []
-        _netapp_stale_dedicated_sc_names: []
+        _netapp_sc_write: {}
         _netapp_is_shared_tbc: false
         _netapp_qos_tier_names: []
         _netapp_qos_policies: {}

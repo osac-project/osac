@@ -306,6 +306,7 @@ def ensure_veth_pair(
     owner_alias: str | None = None,
 ) -> bool:
     changed = ensure_namespace(namespace)
+    stale_peer_removed = False
     host_link = run_command(
         ["ip", "-o", "link", "show", "dev", host_interface], check=False
     )
@@ -327,14 +328,18 @@ def ensure_veth_pair(
     if host_link.returncode == 0 and namespace_link.returncode != 0:
         if owner_alias is not None:
             _ensure_host_veth_owner_alias(host_interface, owner_alias)
-        run_command(["ip", "link", "delete", "dev", host_interface])
-        host_link = run_command(
-            ["ip", "-o", "link", "show", "dev", host_interface], check=False
-        )
-        changed = True
+        # Removing the stale peer can complete after the probes above, so the
+        # delete is best-effort and the verified listings decide the outcome.
+        deleted = run_command(["ip", "link", "delete", "dev", host_interface], check=False)
+        changed = changed or deleted.returncode == 0
+        if host_interface in _listed_interface_names():
+            raise NetworkCommandError("stale host uplink remains after deletion")
+        if namespace_interface in _listed_interface_names(namespace):
+            raise NetworkCommandError("stale namespace uplink remains after deletion")
+        stale_peer_removed = True
     if host_link.returncode != 0 and namespace_link.returncode == 0:
         raise NetworkCommandError("namespace uplink exists without its host peer")
-    if host_link.returncode != 0:
+    if stale_peer_removed or host_link.returncode != 0:
         run_command(
             [
                 "ip",
@@ -439,6 +444,32 @@ def ensure_ipv4_forwarding(namespace: str) -> bool:
     return True
 
 
+def _listed_namespace_names() -> set[str]:
+    namespaces = set()
+    for line in run_command(["ip", "netns", "list"]).stdout.splitlines():
+        fields = line.split()
+        if fields:
+            namespaces.add(fields[0])
+    return namespaces
+
+
+def _listed_interface_names(namespace: str | None = None) -> set[str]:
+    command = ["ip", "-j", "link", "show"]
+    if namespace is not None:
+        command = ["ip", "netns", "exec", namespace, *command]
+    output = run_command(command).stdout
+    if not output.strip():
+        raise NetworkCommandError("link listing returned no output")
+    links = parse_json_object_list(output, description="link")
+    names = set()
+    for link in links:
+        name = link.get("ifname")
+        if not isinstance(name, str) or not name:
+            raise NetworkCommandError("link JSON has an invalid interface name")
+        names.add(name)
+    return names
+
+
 def delete_uplink(namespace: str, host_interface: str) -> bool:
     changed = False
     if namespace_exists(namespace):
@@ -449,12 +480,22 @@ def delete_uplink(namespace: str, host_interface: str) -> bool:
         ["ip", "-o", "link", "show", "dev", host_interface], check=False
     )
     if host_link.returncode == 0:
-        run_command(["ip", "link", "delete", "dev", host_interface])
-        changed = True
+        # Removing the namespace can delete its veth peer asynchronously, after
+        # the probe above saw it. Treat the delete as best-effort and decide by
+        # the verified final state instead of the command's stderr.
+        deleted = run_command(
+            ["ip", "link", "delete", "dev", host_interface], check=False
+        )
+        changed = changed or deleted.returncode == 0
 
-    host_link = run_command(
-        ["ip", "-o", "link", "show", "dev", host_interface], check=False
-    )
-    if namespace_exists(namespace) or host_link.returncode == 0:
-        raise NetworkCommandError("network namespace or host uplink remains after deletion")
+    # Both listings must succeed: a failed or malformed probe is not evidence
+    # that cleanup finished, so the caller keeps its state and retries.
+    namespace_remains = namespace in _listed_namespace_names()
+    host_remains = host_interface in _listed_interface_names()
+    if namespace_remains and host_remains:
+        raise NetworkCommandError("network namespace and host uplink remain after deletion")
+    if namespace_remains:
+        raise NetworkCommandError("network namespace remains after deletion")
+    if host_remains:
+        raise NetworkCommandError("host uplink remains after deletion")
     return changed

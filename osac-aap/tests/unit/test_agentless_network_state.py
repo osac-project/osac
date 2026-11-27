@@ -898,6 +898,86 @@ def test_failed_delete_preserves_its_entry_and_peer(tmp_path, monkeypatch):
     assert get_virtual_network(store, UID_TWO) == second
 
 
+@pytest.mark.parametrize("host_link_remains", [False, True])
+def test_delete_virtual_network_converges_on_retry_after_failed_link_delete(
+    tmp_path, monkeypatch, host_link_remains
+):
+    store = store_for(tmp_path)
+    first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    second = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
+    namespace = first["namespace_name"]
+    host_link = first["uplink"]["host_interface"]
+    peer_link = second["uplink"]["host_interface"]
+    firewall_cleanup = Mock(return_value=False)
+    state = {
+        "namespace_deleted": False,
+        "host_link_probed": True,
+        "host_link_listed": host_link_remains,
+        "link_delete_attempted": False,
+    }
+
+    def run(command, check=True):
+        rc, stdout = 0, ""
+        if command == ["ip", "-j", "-d", "link", "show", "dev", host_link]:
+            if not state["host_link_probed"]:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+            stdout = json.dumps([{
+                "ifname": host_link, "flags": [], "ifalias": f"osac-vn:{UID_ONE}",
+                "linkinfo": {"info_kind": "veth"},
+            }])
+        elif command == ["ip", "netns", "exec", namespace, "true"]:
+            rc = int(state["namespace_deleted"])
+        elif command == ["ip", "netns", "delete", namespace]:
+            state["namespace_deleted"] = True
+        elif command == ["ip", "-o", "link", "show", "dev", host_link]:
+            assert state["namespace_deleted"]
+            rc = int(not state["host_link_probed"])
+        elif command == ["ip", "link", "delete", "dev", host_link]:
+            assert state["host_link_probed"]
+            state["link_delete_attempted"] = True
+            rc = 1
+        elif command == ["ip", "netns", "list"]:
+            assert state["namespace_deleted"]
+            stdout = f'{second["namespace_name"]}\n'
+        elif command == ["ip", "-j", "link", "show"]:
+            assert state["link_delete_attempted"]
+            interfaces = [peer_link] + ([host_link] if state["host_link_listed"] else [])
+            stdout = json.dumps([{"ifname": name} for name in interfaces])
+        else:
+            pytest.fail(f"unexpected command: {command}")
+        if check and rc:
+            raise agentless_net_network.NetworkCommandError("test link delete failed")
+        return subprocess.CompletedProcess(command, rc, stdout=stdout, stderr="")
+
+    # agentless_net_state imports both modules' names by value, so both command
+    # bindings must stay mocked: neither attempt may shell out to the real ip.
+    package_network = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.module_utils.agentless_net_network"
+    )
+    monkeypatch.setattr(package_network, "run_command", run)
+    monkeypatch.setattr(agentless_net_state, "run_command", run)
+    monkeypatch.setattr(agentless_net_state, "_remove_host_forwarding_isolation", firewall_cleanup)
+
+    if host_link_remains:
+        with pytest.raises(agentless_net_state.RetryableStateError, match="host uplink"):
+            delete_virtual_network(store, UID_ONE)
+        assert get_virtual_network(store, UID_ONE) == first
+        firewall_cleanup.assert_not_called()
+
+        # The peer disappears before the retry, so the next attempt converges
+        # instead of failing forever.
+        state["host_link_probed"] = False
+        state["host_link_listed"] = False
+        assert delete_virtual_network(store, UID_ONE) is True
+        assert get_virtual_network(store, UID_ONE) is None
+    else:
+        assert delete_virtual_network(store, UID_ONE) is True
+        assert get_virtual_network(store, UID_ONE) is None
+
+    firewall_cleanup.assert_called_once_with(remaining_virtual_network=True)
+    assert get_virtual_network(store, UID_TWO) == second
+
+
 def test_delete_cleans_deterministic_residue_even_when_state_entry_is_absent(
     tmp_path, monkeypatch
 ):

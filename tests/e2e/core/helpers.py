@@ -1960,37 +1960,64 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str, retries: int = _BMI_R
     )
 
 
-@dataclass(frozen=True)
-class HostRef:
-    """A provisioning host: the BMH the inventory handed over to metal3.
+def assert_bmi_lifecycle_on_running(
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    bmh_k8s: K8sClient,
+    bmi_id: str,
+    bmh_namespace: str,
+    power_cycle: bool = True,
+) -> tuple[str, str]:
+    """Assert BMH binding/provisioning on an already-RUNNING BMI.
 
-    On every inventory backend the BMI's externalHostID names the BMH once
-    a host is allocated, so the assertions below run identically on both:
-    - metal3: the pre-existing BMH.
-    - netbox: the bare-metal-fulfillment operator derives
-      ``netbox-<device-id>`` and creates it on the fly.
+    Does not create or delete the instance. Inventory exhaust calls this after all
+    claim BMIs reach RUNNING so provisioning is not blocked by interleaved checks.
+
+    ``k8s`` reads the BareMetalInstance CR on the hub; ``bmh_k8s`` reads the
+    BareMetalHost, which can live on another cluster (``k8s_bmh_client``).
+
+    Returns (bmi_cr_name, bmh_name).
     """
 
     namespace: str
     name: str
 
+    wait_for_bmh_provisioned(k8s=bmh_k8s, name=bmh_name, bmh_namespace=bmh_ns)
 
-def wait_for_host_allocated(*, k8s: K8sClient, host: HostRef, expected_image_url: str | None = None) -> None:
-    """Wait until the BMH is provisioned to a BMI and assert the allocation.
+    image_url: str = bmh_k8s.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_ns)
+    assert image_url != "", f"BMH {bmh_name} has no image URL after provisioning"
 
-    Bundles into one wait+assert pass:
-    - the BMH provisioning-state wait,
-    - the image URL (``expected_image_url`` compares exactly; ``None`` only
-      requires one to be set),
-    - consumerRef non-empty,
-    - online.
-    """
-    wait_for_bmh_provisioned(k8s=k8s, name=host.name, bmh_namespace=host.namespace)
+    consumer_ref: str = bmh_k8s.get_bmh_consumer_ref(name=bmh_name, bmh_namespace=bmh_ns)
+    assert consumer_ref != "", f"BMH {bmh_name} has no consumerRef after allocation"
 
-    image_url: str = k8s.get_bmh_image_url(name=host.name, bmh_namespace=host.namespace)
-    if expected_image_url is not None:
-        assert image_url == expected_image_url, (
-            f"BMH {host.name} image URL {image_url!r} does not match the expected {expected_image_url!r}"
+    online: str = bmh_k8s.get_bmh_online(name=bmh_name, bmh_namespace=bmh_ns)
+    assert online == "true", f"BMH {bmh_name} should be online after provisioning, got: {online}"
+
+    if power_cycle:
+        grpc.update_baremetal_instance_run_strategy(
+            bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED"
+        )
+        poll_until(
+            fn=lambda: bmh_k8s.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
+            until=lambda v: v == "false",
+            retries=60,
+            delay=5,
+            description=f"{bmh_name} powered off",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
+        )
+        grpc.update_baremetal_instance_run_strategy(
+            bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS"
+        )
+        poll_until(
+            fn=lambda: bmh_k8s.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
+            until=lambda v: v == "true",
+            retries=60,
+            delay=5,
+            description=f"{bmh_name} powered on",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
         )
     else:
         assert image_url != "", f"BMH {host.name} has no image URL after provisioning"
@@ -2095,6 +2122,12 @@ def wait_for_bmi_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
 
 
 def wait_for_bmh_provisioned(*, k8s: K8sClient, name: str, bmh_namespace: str) -> None:
+    """Wait until a BareMetalHost reaches the provisioned state.
+
+    ``k8s`` must be the BMH client (``k8s_bmh_client``): the BMH inventory is
+    not guaranteed to live on the hub's cluster.
+    """
+
     def _check() -> str:
         state: str = k8s.get_bmh_provisioning_state(name=name, bmh_namespace=bmh_namespace)
         assert state != "error", f"BMH {name} entered error state"
@@ -2112,6 +2145,12 @@ def wait_for_bmh_provisioned(*, k8s: K8sClient, name: str, bmh_namespace: str) -
 
 
 def wait_for_bmh_available(*, k8s: K8sClient, name: str, bmh_namespace: str) -> None:
+    """Wait until a BareMetalHost is available or ready for a new claim.
+
+    ``k8s`` must be the BMH client (``k8s_bmh_client``): the BMH inventory is
+    not guaranteed to live on the hub's cluster.
+    """
+
     def _check() -> str:
         state: str = k8s.get_bmh_provisioning_state(name=name, bmh_namespace=bmh_namespace)
         assert state != "error", f"BMH {name} entered error state"

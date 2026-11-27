@@ -22,6 +22,15 @@ from tests.e2e.core.osac_cli import OsacCLI
 pytestmark = [pytest.mark.regression, pytest.mark.requires_bmaas, pytest.mark.serial]
 
 
+def _inventory(k8s: K8sClient, bmh_k8s: K8sClient, bmh_namespace: str) -> tuple[set[str], dict[str, Any]]:
+    crs = k8s.list_json(resource="baremetalinstance", namespace=k8s.namespace).get("items", [])
+    hosts = bmh_k8s.list_json(resource="baremetalhost", namespace=bmh_namespace).get("items", [])
+    return (
+        {cr["metadata"]["uid"] for cr in crs},
+        {host["metadata"]["name"]: host.get("spec", {}).get("consumerRef") for host in hosts},
+    )
+
+
 def _instances_by_name(grpc: GRPCClient, name: str) -> list[dict[str, Any]]:
     try:
         return grpc.call(
@@ -35,6 +44,7 @@ def _instances_by_name(grpc: GRPCClient, name: str) -> list[dict[str, Any]]:
 def test_compatible_direct_template_provisions(
     jwt_grpc_tenant1: GRPCClient,
     k8s_hub_client: K8sClient,
+    k8s_bmh_client: K8sClient,
     bmi_template: str,
     bmi_instance_type: str,
     bmi_disk_image: str,
@@ -64,22 +74,24 @@ def test_compatible_direct_template_provisions(
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
         spec = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)["object"]["spec"]
         assert spec.get("instance_type", spec.get("instanceType", {})).get("name") == bmi_instance_type
-        bmi_cr_name, host = assert_bmi_lifecycle_on_running(
+        bmi_cr_name, bmh_name = assert_bmi_lifecycle_on_running(
             grpc=jwt_grpc_tenant1,
             k8s=k8s_hub_client,
-            inventory=inventory_backend,
+            bmh_k8s=k8s_bmh_client,
             bmi_id=bmi_id,
-            expected_image_url=BMI_DISK_IMAGE_SOURCE_REF,
+            bmh_namespace=bmh_namespace,
             power_cycle=False,
         )
+        bmh_image_url = k8s_bmh_client.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_namespace)
+        assert bmh_image_url == BMI_DISK_IMAGE_SOURCE_REF
     finally:
         bmi_cr_name = bmi_cr_name or k8s_hub_client.get_baremetal_instance_name(uuid=bmi_id, checked=False)
         jwt_grpc_tenant1.delete_baremetal_instance(bmi_id=bmi_id)
         if bmi_cr_name:
             wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr_name)
         wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
-        if host is not None:
-            inventory_backend.wait_for_released(host=host)
+        if bmh_name:
+            wait_for_bmh_available(k8s=k8s_bmh_client, name=bmh_name, bmh_namespace=bmh_namespace)
 
 
 @pytest.mark.parametrize("request_path", ["cli", "public", "private"])
@@ -92,7 +104,9 @@ def test_architecture_mismatch_has_no_side_effects(
     jwt_cli_user: OsacCLI,
     jwt_grpc_tenant1: GRPCClient,
     private_grpc: GRPCClient,
-    inventory_backend: InventoryBackend,
+    k8s_hub_client: K8sClient,
+    k8s_bmh_client: K8sClient,
+    bmh_namespace: str,
     ssh_key_secret: str,
 ) -> None:
     image_name = unique_name("e2e-bmi-arm64-image")
@@ -111,7 +125,7 @@ def test_architecture_mismatch_has_no_side_effects(
 
     request.addfinalizer(cleanup_image)
     name = unique_name("e2e-bmi-architecture-rejected")
-    before = inventory_backend.snapshot_inventory()
+    before = _inventory(k8s_hub_client, k8s_bmh_client, bmh_namespace)
     try:
         if request_path == "cli":
             with pytest.raises(subprocess.CalledProcessError) as rejected:
@@ -146,7 +160,7 @@ def test_architecture_mismatch_has_no_side_effects(
         assert "INCOMPATIBLE_DISK_IMAGE_ARCHITECTURE" in output
         assert BMI_DISK_IMAGE_SOURCE_REF not in output
         assert not _instances_by_name(private_grpc, name)
-        assert inventory_backend.snapshot_inventory() == before
+        assert _inventory(k8s_hub_client, k8s_bmh_client, bmh_namespace) == before
     finally:
         for instance in _instances_by_name(private_grpc, name):
             try:

@@ -60,6 +60,7 @@ def test_baremetal_instance_inventory_exhausted(
     cli: OsacCLI,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
+    k8s_bmh_client: K8sClient,
     catalog_item: str,
     inventory_backend: InventoryBackend,
     inventory_hosts: None,
@@ -78,7 +79,9 @@ def test_baremetal_instance_inventory_exhausted(
     5. Assert the overflow BMI recovers to RUNNING
     6. Cleanup remaining instances
     """
-    available_count: int = inventory_backend.count_available()
+    available_count: int = k8s_bmh_client.count_bmhs_by_provisioning_state(
+        bmh_namespace=bmh_namespace, states=_AVAILABLE_BMH_STATES
+    )
     assert available_count >= 1, (
         f"Need at least 1 available host to exercise inventory exhaustion; found {available_count}"
     )
@@ -97,15 +100,21 @@ def test_baremetal_instance_inventory_exhausted(
             wait_for_bmi_running(grpc=grpc, bmi_id=bmi_id)
 
         # Lifecycle checks after all claim BMIs are up (not interleaved with creates).
-        assert_bmi_lifecycle_on_running(
+        _, bmh_name = assert_bmi_lifecycle_on_running(
             grpc=grpc,
             k8s=k8s_hub_client,
-            inventory=inventory_backend,
+            bmh_k8s=k8s_bmh_client,
             bmi_id=bmi_ids[0],
-            expected_image_url=BMI_DISK_IMAGE_SOURCE_REF,
+            bmh_namespace=bmh_namespace,
+        )
+        image_url = k8s_bmh_client.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_namespace)
+        assert image_url == BMI_DISK_IMAGE_SOURCE_REF, (
+            f"BMH {bmh_name} image URL {image_url!r} does not match the CatalogItem default DiskImage"
         )
 
-        available_after_claim: int = inventory_backend.count_available()
+        available_after_claim: int = k8s_bmh_client.count_bmhs_by_provisioning_state(
+            bmh_namespace=bmh_namespace, states=_AVAILABLE_BMH_STATES
+        )
         assert available_after_claim == 0, (
             f"Expected 0 available hosts after claiming {available_count}; found {available_after_claim}"
         )
@@ -121,7 +130,9 @@ def test_baremetal_instance_inventory_exhausted(
         overflow_state: str = assert_bmi_does_not_become_running(grpc=grpc, bmi_id=overflow_id)
         assert overflow_state != "BARE_METAL_INSTANCE_STATE_RUNNING"
 
-        available_during_overflow: int = inventory_backend.count_available()
+        available_during_overflow: int = k8s_bmh_client.count_bmhs_by_provisioning_state(
+            bmh_namespace=bmh_namespace, states=_AVAILABLE_BMH_STATES
+        )
         assert available_during_overflow == 0, (
             f"Overflow BMI must not claim a host; available count={available_during_overflow}"
         )
@@ -132,7 +143,9 @@ def test_baremetal_instance_inventory_exhausted(
         bmi_ids.remove(released_id)
 
         poll_until(
-            fn=inventory_backend.count_available,
+            fn=lambda: k8s_bmh_client.count_bmhs_by_provisioning_state(
+                bmh_namespace=bmh_namespace, states=_AVAILABLE_BMH_STATES
+            ),
             until=lambda v: v >= 1,
             retries=120,
             delay=10,

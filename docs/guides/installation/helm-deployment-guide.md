@@ -712,15 +712,49 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.vtepCIDR` | Required VTEP address range, assigned with the fabric admin. |
 | `evpn.bgp.asn` | Required default node ASN, assigned with the fabric admin. |
 | `evpn.bgp.acceptPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
-| `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. |
+| `evpn.bgp.activeActive` | Optional; defaults to `false`. Set `true` to allow up to 16 eligible IPv4 paths (`as-path multipath-relax`). Numbered uplinks must provide their static `address`; the installer sets each interface's NMState `prefix-route-metric` to `100` so FRR sees equal connected-route costs. Unnumbered peers use IPv6 link-local next hops and retain node-provided route costs. |
+| `evpn.bgp.activeBackup` | Optional; defaults to `false` and is mutually exclusive with `activeActive`. Requires each node to have exactly one uplink with `role: active` and at least one with `role: backup`. When EVPN is enabled, a `permit 1` entry on each frr-k8s-managed per-neighbor IPv4 unicast inbound route-map matches remote VTEP `/32` routes and sets local preference to 200/100, and a `permit 1` entry on the backup outbound route-map prepends the node ASN three times. L2VPN EVPN route-maps apply the same preferences without prefix matching. |
+| `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. When `evpn.bgp.bfdProfile` is set, the hook also waits for BFD to report `Up` on every peer. |
 | `evpn.bgp.timeoutSeconds` | Maximum wait per BGP session. |
+| `evpn.bgp.bfdProfile` | Optional FRR-K8s BFD profile applied to every EVPN uplink peer; empty disables BFD. Underlay peers are directly connected, so BFD runs in single-hop mode (UDP 3784). |
+| `evpn.bgp.bfdReceiveInterval` | BFD receive interval in milliseconds. |
+| `evpn.bgp.bfdTransmitInterval` | BFD transmit interval in milliseconds. |
+| `evpn.bgp.bfdDetectMultiplier` | BFD detection multiplier. |
 | `evpn.nodes[].name` | Kubernetes node name from the cluster admin. Add one entry for every VMaaS node. |
 | `evpn.nodes[].vtepIP` | Unique address inside `vtepCIDR`, assigned with the fabric admin and configured on the fabric. |
 | `evpn.nodes[].asn` | Optional node ASN override, assigned by the fabric admin. Defaults to `evpn.bgp.asn`. |
 | `evpn.nodes[].uplinks[].interface` | Node interface name for a cable to a fabric leaf, supplied by the fabric admin. |
-| `evpn.nodes[].uplinks[].address` | Optional IPv4 CIDR for the uplink. Omit it when the address is already configured. The fabric admin supplies it. |
+| `evpn.nodes[].uplinks[].address` | IPv4 CIDR for a numbered uplink. It can be omitted when already configured, except in active-active mode, which needs it to set the connected-subnet route metric. The fabric admin supplies it. |
 | `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
+| `evpn.nodes[].uplinks[].unnumbered` | Set `true` to use an interface-based unnumbered BGP neighbor; omit `address` and `peerAddress`. frr-k8s generates the IPv4 unicast `<peer>-in`/`<peer>-out` maps for the interface and they carry the IPv4 policy; the generated IPv6 deny lists apply to IPv6 unicast only, so RFC 5549 IPv4 routes and their IPv6 link-local next hops are unaffected. The chart does not add IPv6 prefix-lists. |
 | `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
+| `evpn.nodes[].uplinks[].role` | `active` or `backup`; required for every uplink when `evpn.bgp.activeBackup` is enabled. |
+
+For active/backup mode, assign roles explicitly on each neighbor:
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 192.168.51.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [192.168.52.0/24]
+    activeBackup: true
+  nodes:
+    - name: worker-0
+      vtepIP: 192.168.51.1
+      uplinks:
+        - interface: ens5f0
+          address: 169.254.133.0/31
+          peerAddress: 169.254.133.1
+          peerASN: 4200300002
+          role: active
+        - interface: ens5f1
+          address: 169.254.133.2/31
+          peerAddress: 169.254.133.3
+          peerASN: 4200300003
+          role: backup
+```
 
 When the management cluster runs VMs and this procedure prepares its EVPN host
 networking, set `evpn.enabled: true` in the phase-1 values used on that cluster.
@@ -782,6 +816,314 @@ Configure Netris coordinates and credentials in
 The old expert NetworkClass block and `k8s_only` selection do not apply to
 `0.4.0`. Networking selection and the provider-provisioning switch are fixed
 at the first installation; a successful Helm render does not verify the fabric.
+
+### Unnumbered BGP and active-backup ACLs
+
+Unnumbered neighbors use the interface name instead of an address:
+`unnumbered: true` makes the chart omit `address` and `peerAddress` and passes
+`interface: <name>` to frr-k8s, which forms the session over IPv6 link-local
+addresses and exchanges IPv4 routes with RFC 5549 next hops. Unnumbered peers
+work with `activeActive`, with `activeBackup`, and with BFD. The same ACL
+layout applies:
+
+- `EVPN-REMOTE-VTEPS` is the chart-owned prefix-list built from
+  `evpn.bgp.acceptPrefixes` with `ge 32 le 32`. Its `permit 1` entry in each
+  frr-k8s `<interface>-in` route-map sets local preference 200 on the active
+  neighbor and 100 on backups.
+- The frr-k8s `<interface>-inpl-ipv4` prefix-list is the generated accept
+  filter. It stays in `permit 3` and still gates which fabric routes may be
+  accepted; the chart does not replace it.
+- The frr-k8s `<interface>-allowed-ipv4` prefix-list is the generated
+  advertise filter (the node VTEP `/32`). The backup's merged
+  `<interface>-out permit 1` prepends the node ASN three times.
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 10.200.255.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [10.200.0.0/16]
+    activeBackup: true
+    bfdProfile: evpn-underlay
+  nodes:
+    - name: worker-0
+      vtepIP: 10.200.255.1
+      uplinks:
+        - interface: ens5f0
+          role: active
+          unnumbered: true
+          peerASN: 4200300002
+        - interface: ens5f1
+          role: backup
+          unnumbered: true
+          peerASN: 4200300003
+```
+
+The resulting ACLs and merged route-maps are:
+
+```frr
+ip prefix-list EVPN-REMOTE-VTEPS seq 1 permit 10.200.0.0/16 ge 32 le 32
+ip prefix-list ens5f0-inpl-ipv4 seq 1 permit 10.200.0.0/16 le 32 ge 32
+ip prefix-list ens5f1-inpl-ipv4 seq 1 permit 10.200.0.0/16 le 32 ge 32
+!
+route-map ens5f0-in permit 1
+ description EVPN active uplink IPv4 unicast inbound
+ match ip address prefix-list EVPN-REMOTE-VTEPS
+ set local-preference 200
+exit
+route-map ens5f0-in permit 3
+ match ip address prefix-list ens5f0-inpl-ipv4
+exit
+!
+route-map ens5f1-in permit 1
+ description EVPN backup uplink IPv4 unicast inbound
+ match ip address prefix-list EVPN-REMOTE-VTEPS
+ set local-preference 100
+exit
+route-map ens5f1-in permit 3
+ match ip address prefix-list ens5f1-inpl-ipv4
+exit
+!
+route-map ens5f1-out permit 1
+ description EVPN backup uplink IPv4 unicast outbound
+ match ip address prefix-list ens5f1-allowed-ipv4
+ set as-path prepend 4209999999 4209999999 4209999999
+exit
+```
+
+Active-backup policy applies to both supported address families. IPv4 unicast
+VTEP routes get the per-prefix local preference through the merged
+`<peer>-in`/`<peer>-out` maps; L2VPN EVPN routes get the same preference through
+`EVPN-ACTIVE-IN` and `EVPN-BACKUP-IN`, and the backup prepends through
+`EVPN-BACKUP-OUT`. A node therefore prefers the active leaf for both underlay
+VTEP reachability and EVPN route selection, and falls back to the backup leaf
+when the active path is lost.
+
+### Active-active BGP
+
+`evpn.bgp.activeActive: true` adds multipath settings to the underlay BGP
+router. Use it with two or more uplinks that reach equal-cost fabric paths:
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 10.200.255.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [10.200.0.0/16]
+    activeActive: true
+    bfdProfile: evpn-underlay
+  nodes:
+    - name: worker-0
+      vtepIP: 10.200.255.1
+      uplinks:
+        - interface: ens5f0
+          address: 169.254.133.0/31
+          peerAddress: 169.254.133.1
+          peerASN: 4200300002
+        - interface: ens5f1
+          address: 169.254.133.2/31
+          peerAddress: 169.254.133.3
+          peerASN: 4200300002
+```
+
+The chart adds this to the node's underlay router:
+
+```frr
+router bgp 4209999999
+ bgp bestpath as-path multipath-relax
+ address-family ipv4 unicast
+  maximum-paths 16
+ exit-address-family
+```
+
+FRR still installs only paths that satisfy its other multipath checks, so the
+fabric must present equal-cost paths with compatible attributes. BFD is
+optional but recommended: a failing uplink is withdrawn from the multipath
+group as soon as BFD detects it.
+
+### BFD
+
+BFD is opt-in. Set `evpn.bgp.bfdProfile` to a profile name and, optionally,
+the timer values. Use a name that other FRRConfigurations on the node do not
+define, or define it with identical timers: frr-k8s merges every selected
+configuration and rejects conflicting duplicate profile names.
+
+```yaml
+evpn:
+  bgp:
+    bfdProfile: evpn-underlay
+    bfdReceiveInterval: 300
+    bfdTransmitInterval: 300
+    bfdDetectMultiplier: 3
+```
+
+For a numbered peer the resulting FRR configuration is:
+
+```frr
+neighbor 169.254.133.1 remote-as 4200300002
+neighbor 169.254.133.1 update-source 169.254.133.0
+neighbor 169.254.133.1 bfd
+neighbor 169.254.133.1 bfd profile evpn-underlay
+!
+bfd
+ profile evpn-underlay
+  receive-interval 300
+  transmit-interval 300
+  detect-multiplier 3
+```
+
+Numbered underlay peers are directly connected by construction: the chart
+assigns the peer-facing address on the uplink and uses it as the update source.
+The chart therefore does not set `ebgp-multihop`, and FRR runs single-hop BFD
+(UDP 3784). Do not configure multihop BFD on the fabric side; both peers must
+use the same BFD mode. Unnumbered peers also use single-hop BFD over the IPv6
+link-local address.
+
+When a BFD profile is set and `evpn.bgp.waitForEstablished` is true (the
+default), the configure-EVPN hook requires `bfdStatus: Up` on every peer before
+the install succeeds, in addition to `bgpStatus: Established`. If BFD never comes up, the hook exits with the peer
+entry number and the non-sensitive status values, so check the fabric side and
+the `evpn` values.
+
+### Resulting FRR configuration for active/backup
+
+frr-k8s writes its own per-neighbor `<peer>-in`/`<peer>-out` route-maps into
+`address-family ipv4 unicast` and applies them after the chart's raw block, so
+the chart merges its active/backup entries into those generated maps instead of
+attaching maps of its own. For the numbered active/backup example above the
+node ends up with this
+configuration (the OVN-managed `router bgp ... vrf` instance is omitted):
+
+```frr
+ip prefix-list 169.254.133.1-allowed-ipv4 seq 1 permit 192.168.51.1/32
+ip prefix-list 169.254.133.1-inpl-ipv4 seq 1 permit 192.168.52.0/24 ge 32 le 32
+ip prefix-list 169.254.133.3-allowed-ipv4 seq 1 permit 192.168.51.1/32
+ip prefix-list 169.254.133.3-inpl-ipv4 seq 1 permit 192.168.52.0/24 ge 32 le 32
+ip prefix-list EVPN-REMOTE-VTEPS seq 1 permit 192.168.52.0/24 ge 32 le 32
+!
+ipv6 prefix-list 169.254.133.1-allowed-ipv6 seq 1 deny any
+ipv6 prefix-list 169.254.133.1-inpl-ipv4 seq 2 deny any
+ipv6 prefix-list 169.254.133.3-allowed-ipv6 seq 1 deny any
+ipv6 prefix-list 169.254.133.3-inpl-ipv4 seq 2 deny any
+!
+route-map 169.254.133.1-out permit 1
+ match ip address prefix-list 169.254.133.1-allowed-ipv4
+exit
+!
+route-map 169.254.133.1-out permit 2
+ match ipv6 address prefix-list 169.254.133.1-allowed-ipv6
+exit
+!
+route-map 169.254.133.1-in permit 1
+ description EVPN active uplink IPv4 unicast inbound
+ match ip address prefix-list EVPN-REMOTE-VTEPS
+ set local-preference 200
+exit
+!
+route-map 169.254.133.1-in permit 3
+ match ip address prefix-list 169.254.133.1-inpl-ipv4
+exit
+!
+route-map 169.254.133.1-in permit 4
+ match ipv6 address prefix-list 169.254.133.1-inpl-ipv4
+exit
+!
+route-map 169.254.133.3-out permit 1
+ description EVPN backup uplink IPv4 unicast outbound
+ match ip address prefix-list 169.254.133.3-allowed-ipv4
+ set as-path prepend 4209999999 4209999999 4209999999
+exit
+!
+route-map 169.254.133.3-out permit 2
+ match ipv6 address prefix-list 169.254.133.3-allowed-ipv6
+exit
+!
+route-map 169.254.133.3-in permit 1
+ description EVPN backup uplink IPv4 unicast inbound
+ match ip address prefix-list EVPN-REMOTE-VTEPS
+ set local-preference 100
+exit
+!
+route-map 169.254.133.3-in permit 3
+ match ip address prefix-list 169.254.133.3-inpl-ipv4
+exit
+!
+route-map 169.254.133.3-in permit 4
+ match ipv6 address prefix-list 169.254.133.3-inpl-ipv4
+exit
+!
+route-map EVPN-ACTIVE-IN permit 10
+ description EVPN active uplink inbound
+ set local-preference 200
+exit
+!
+route-map EVPN-BACKUP-IN permit 10
+ description EVPN backup uplink inbound
+ set local-preference 100
+exit
+!
+route-map EVPN-BACKUP-OUT permit 10
+ description EVPN backup uplink outbound
+ set as-path prepend 4209999999 4209999999 4209999999
+exit
+!
+route-map EVPN-ACTIVE-OUT permit 10
+ description EVPN active uplink outbound
+exit
+!
+router bgp 4209999999
+ no bgp ebgp-requires-policy
+ no bgp default ipv4-unicast
+ bgp graceful-restart preserve-fw-state
+ no bgp network import-check
+ neighbor 169.254.133.1 remote-as 4200300002
+ neighbor 169.254.133.1 update-source 169.254.133.0
+ neighbor 169.254.133.3 remote-as 4200300003
+ neighbor 169.254.133.3 update-source 169.254.133.2
+ !
+ address-family ipv4 unicast
+  network 192.168.51.1/32
+  neighbor 169.254.133.1 activate
+  neighbor 169.254.133.1 allowas-in origin
+  neighbor 169.254.133.1 route-map 169.254.133.1-in in
+  neighbor 169.254.133.1 route-map 169.254.133.1-out out
+  neighbor 169.254.133.3 activate
+  neighbor 169.254.133.3 allowas-in origin
+  neighbor 169.254.133.3 route-map 169.254.133.3-in in
+  neighbor 169.254.133.3 route-map 169.254.133.3-out out
+ exit-address-family
+ !
+ address-family l2vpn evpn
+  neighbor 169.254.133.1 activate
+  neighbor 169.254.133.1 allowas-in origin
+  neighbor 169.254.133.1 route-map EVPN-ACTIVE-IN in
+  neighbor 169.254.133.1 route-map EVPN-ACTIVE-OUT out
+  neighbor 169.254.133.3 activate
+  neighbor 169.254.133.3 allowas-in origin
+  neighbor 169.254.133.3 route-map EVPN-BACKUP-IN in
+  neighbor 169.254.133.3 route-map EVPN-BACKUP-OUT out
+  advertise-all-vni
+ exit-address-family
+exit
+```
+
+On the inbound side, `permit 1` matches the remote VTEP `/32` routes from
+`acceptPrefixes` and sets local preference 200 or 100; every other prefix falls
+through to `permit 3`, which keeps the frr-k8s `acceptPrefixes` filter, and then
+to the implicit deny. Each additional `acceptPrefixes` entry adds another
+`inpl-ipv4` sequence, and the fabric or OVN-Kubernetes may add further accepted
+ranges such as the VTEP network. On the outbound side only `permit 1` matches,
+so the node advertises its own VTEP `/32` and the backup prepends its ASN three
+times.
+`EVPN-ACTIVE-IN`/`EVPN-BACKUP-IN` set the same preferences for every L2VPN EVPN
+route without matching a prefix. The `permit 2`/`permit 4` entries match the
+frr-k8s IPv6 deny-any lists, so they never pass an IPv6 route; the IPv6
+prefix-lists only filter IPv6 unicast and do not affect IPv4 routes or their
+RFC 5549 link-local next hops. Unnumbered peers use the same layout with the
+interface name in place of the peer address (`ens5f0-in`, `ens5f1-out`, and so
+on).
 
 ### Adding CA roots to the shared bundle at runtime
 

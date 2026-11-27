@@ -687,6 +687,21 @@ provider VNI range are fixed after setup. Include the VTEP, fabric loopback,
 and uplink ranges in `global.networking.excludedIpv4Cidrs` before installing
 OSAC ([Section 4.4.1](#441-choosing-the-networking-settings)).
 
+Agree on the BGP mode as well. In the Helm example,
+`evpn.bgp.activeActive: true` enables up to 16 eligible IPv4-unicast paths.
+Alternatively, `evpn.bgp.activeBackup: true` applies VTEP-route and L2VPN EVPN
+route preferences using exactly one uplink with `role: active` and at least one
+with `role: backup` per node. Both settings default to `false` and cannot be
+enabled together. Unnumbered uplinks are supported in either mode. Set
+`evpn.bgp.bfdProfile` to add single-hop BFD to every peer; with the default
+`waitForEstablished`, the install then waits for BFD to come up as well as for
+BGP to establish. These settings
+configure the OpenShift FRR side; the fabric administrator configures the
+corresponding leaf behavior and BFD mode. The
+[Helm Deployment Guide](helm-deployment-guide.md#evpn-host-networking-vmaas)
+contains the values plus active-active, active-backup, unnumbered, and BFD
+examples.
+
 Platform administrators own the host-network values, BGP readiness checks,
 node additions and removals, and cleanup. Follow the administrator procedure
 for your environment. For the example setup using Helm, lifecycle procedures,

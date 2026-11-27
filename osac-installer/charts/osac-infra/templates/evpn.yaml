@@ -1,4 +1,16 @@
 {{- if .Values.evpn.enabled }}
+{{- $bfdProfile := .Values.evpn.bgp.bfdProfile | default "" -}}
+{{- if $bfdProfile }}
+  {{- if or
+      (lt (int .Values.evpn.bgp.bfdReceiveInterval) 10)
+      (gt (int .Values.evpn.bgp.bfdReceiveInterval) 60000)
+      (lt (int .Values.evpn.bgp.bfdTransmitInterval) 10)
+      (gt (int .Values.evpn.bgp.bfdTransmitInterval) 60000)
+      (lt (int .Values.evpn.bgp.bfdDetectMultiplier) 2)
+      (gt (int .Values.evpn.bgp.bfdDetectMultiplier) 255) }}
+    {{- fail "EVPN BFD receive/transmit intervals must be 10..60000 ms and detect multiplier 2..255" }}
+  {{- end }}
+{{- end }}
 {{- $seenNames := dict }}
 {{- $seenVTEPs := dict }}
 {{- range $index, $node := .Values.evpn.nodes }}
@@ -10,12 +22,60 @@
     {{- fail (printf "evpn.nodes: duplicate vtepIP at index %d" $index) }}
   {{- end }}
   {{- $_ := set $seenVTEPs $node.vtepIP true }}
-  {{- $seenPeers := dict }}
-  {{- range $uplink := $node.uplinks }}
-    {{- if hasKey $seenPeers $uplink.peerAddress }}
-      {{- fail (printf "evpn.nodes: duplicate peerAddress in uplinks of node index %d" $index) }}
+  {{- if $.Values.evpn.bgp.activeBackup }}
+    {{- if lt (len $node.uplinks) 2 }}
+      {{- fail (printf "evpn.nodes: activeBackup requires at least two uplinks on node index %d" $index) }}
     {{- end }}
-    {{- $_ := set $seenPeers $uplink.peerAddress true }}
+    {{- $activeCount := 0 }}
+    {{- $backupCount := 0 }}
+    {{- range $uplinkIndex, $uplink := $node.uplinks }}
+      {{- if not (hasKey $uplink "role") }}
+        {{- fail (printf "evpn.nodes: node index %d uplink index %d must set role to active or backup when activeBackup is enabled" $index $uplinkIndex) }}
+      {{- else if eq $uplink.role "active" }}
+        {{- $activeCount = add $activeCount 1 }}
+      {{- else if eq $uplink.role "backup" }}
+        {{- $backupCount = add $backupCount 1 }}
+      {{- else }}
+        {{- fail (printf "evpn.nodes: node index %d uplink index %d role must be active or backup" $index $uplinkIndex) }}
+      {{- end }}
+    {{- end }}
+    {{- if ne $activeCount 1 }}
+      {{- fail (printf "evpn.nodes: activeBackup requires exactly one active uplink on node index %d" $index) }}
+    {{- end }}
+    {{- if lt $backupCount 1 }}
+      {{- fail (printf "evpn.nodes: activeBackup requires at least one backup uplink on node index %d" $index) }}
+    {{- end }}
+  {{- end }}
+  {{- $seenPeers := dict }}
+  {{- $seenInterfaces := dict }}
+  {{- range $uplinkIndex, $uplink := $node.uplinks }}
+    {{- if not $uplink.interface }}
+      {{- fail (printf "evpn.nodes: uplink index %d of node index %d is missing interface" $uplinkIndex $index) }}
+    {{- end }}
+    {{- if hasKey $seenInterfaces $uplink.interface }}
+      {{- fail (printf "evpn.nodes: duplicate interface in uplink index %d of node index %d" $uplinkIndex $index) }}
+    {{- end }}
+    {{- $_ := set $seenInterfaces $uplink.interface true }}
+    {{- $unnumbered := $uplink.unnumbered | default false }}
+    {{- if $unnumbered }}
+      {{- if hasKey $uplink "peerAddress" }}
+        {{- fail (printf "evpn.nodes: node index %d unnumbered uplink index %d must omit peerAddress" $index $uplinkIndex) }}
+      {{- end }}
+      {{- if hasKey $uplink "address" }}
+        {{- fail (printf "evpn.nodes: node index %d unnumbered uplink index %d must omit address" $index $uplinkIndex) }}
+      {{- end }}
+    {{- else }}
+      {{- if not $uplink.peerAddress }}
+        {{- fail (printf "evpn.nodes: node index %d numbered uplink index %d requires peerAddress" $index $uplinkIndex) }}
+      {{- end }}
+      {{- if and $.Values.evpn.bgp.activeActive (not $uplink.address) }}
+        {{- fail (printf "evpn.nodes: node index %d numbered uplink index %d requires address when activeActive is enabled" $index $uplinkIndex) }}
+      {{- end }}
+      {{- if hasKey $seenPeers $uplink.peerAddress }}
+        {{- fail (printf "evpn.nodes: duplicate peerAddress in uplinks of node index %d" $index) }}
+      {{- end }}
+      {{- $_ := set $seenPeers $uplink.peerAddress true }}
+    {{- end }}
   {{- end }}
 {{- end }}
 apiVersion: v1
@@ -30,9 +90,10 @@ data:
   settings.env: |
     CONFIGURE_CLUSTER_NETWORK={{ .Values.evpn.configureClusterNetwork }}
     WAIT_FOR_ESTABLISHED={{ .Values.evpn.bgp.waitForEstablished }}
+    WAIT_FOR_BFD={{ if $bfdProfile }}true{{ else }}false{{ end }}
     BGP_TIMEOUT_SECONDS={{ int .Values.evpn.bgp.timeoutSeconds }}
   nodes.txt: {{ $nodeNames := list }}{{- range .Values.evpn.nodes }}{{- $nodeNames = append $nodeNames .name }}{{- end }}{{ join "\n" $nodeNames | quote }}
-  peers.txt: {{ $peerLines := list }}{{- range $node := .Values.evpn.nodes }}{{- range $uplink := $node.uplinks }}{{- $peerLines = append $peerLines (printf "%s %s" $node.name $uplink.peerAddress) }}{{- end }}{{- end }}{{ join "\n" $peerLines | quote }}
+  peers.txt: {{ $peerLines := list }}{{- range $node := .Values.evpn.nodes }}{{- range $uplink := $node.uplinks }}{{- $peerID := $uplink.peerAddress | default $uplink.interface }}{{- $peerLines = append $peerLines (printf "%s %s" $node.name $peerID) }}{{- end }}{{- end }}{{ join "\n" $peerLines | quote }}
   cluster-network-patch.json: |
     {"spec":{"additionalRoutingCapabilities":{"providers":["FRR"]},"defaultNetwork":{"ovnKubernetesConfig":{"routeAdvertisements":"Enabled","gatewayConfig":{"routingViaHost":true,"ipForwarding":"Global"}}}}}
   nmstate.yaml: |
@@ -47,6 +108,13 @@ data:
     {{- if $nodeIndex }}
     ---
     {{- end }}
+    {{- $metricRoutes := list }}
+    {{- range $uplink := $node.uplinks }}
+      {{- if and $uplink.peerAddress $uplink.address }}
+        {{- $metricRoutes = append $metricRoutes (dict "destination" (printf "%s/32" $uplink.peerAddress) "interface" $uplink.interface "state" "absent") }}
+        {{- $metricRoutes = append $metricRoutes (dict "destination" $uplink.address "interface" $uplink.interface "state" "absent") }}
+      {{- end }}
+    {{- end }}
     apiVersion: nmstate.io/v1
     kind: NodeNetworkConfigurationPolicy
     metadata:
@@ -59,7 +127,17 @@ data:
       desiredState:
         interfaces:
     {{- range $uplink := $node.uplinks }}
-      {{- if $uplink.address }}
+      {{- if ($uplink.unnumbered | default false) }}
+        - name: {{ $uplink.interface | quote }}
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: false
+          ipv6:
+            enabled: true
+            dhcp: false
+            autoconf: false
+      {{- else if $uplink.address }}
       {{- $uplinkAddress := split "/" $uplink.address }}
         - name: {{ $uplink.interface | quote }}
           type: ethernet
@@ -67,11 +145,16 @@ data:
           ipv4:
             enabled: true
             dhcp: false
+            prefix-route-metric: {{ if $.Values.evpn.bgp.activeActive }}100{{ else }}-1{{ end }}
             address:
               - ip: {{ $uplinkAddress._0 | quote }}
                 prefix-length: {{ int $uplinkAddress._1 }}
           ipv6:
             enabled: false
+      {{- else if $.Values.evpn.bgp.activeActive }}
+        - name: {{ $uplink.interface | quote }}
+          type: ethernet
+          state: up
       {{- end }}
     {{- end }}
         - name: evpn-vtep0
@@ -85,6 +168,19 @@ data:
                 prefix-length: 32
           ipv6:
             enabled: false
+    {{- if $metricRoutes }}
+        routes:
+          config:
+      {{- range $route := $metricRoutes }}
+          - destination: {{ $route.destination | quote }}
+            metric: 100
+            next-hop-interface: {{ $route.interface | quote }}
+            table-id: 254
+        {{- if eq $route.state "absent" }}
+            state: absent
+        {{- end }}
+      {{- end }}
+    {{- end }}
     {{- end }}
   vtep.yaml: |
     apiVersion: k8s.ovn.org/v1
@@ -117,17 +213,28 @@ data:
         matchLabels:
           kubernetes.io/hostname: {{ $node.name | quote }}
       bgp:
+{{- if $bfdProfile }}
+        bfdProfiles:
+          - name: {{ $bfdProfile | quote }}
+            receiveInterval: {{ int $.Values.evpn.bgp.bfdReceiveInterval }}
+            transmitInterval: {{ int $.Values.evpn.bgp.bfdTransmitInterval }}
+            detectMultiplier: {{ int $.Values.evpn.bgp.bfdDetectMultiplier }}
+{{- end }}
         routers:
           - asn: {{ int64 $nodeASN }}
             prefixes:
               - {{ printf "%s/32" $node.vtepIP | quote }}
             neighbors:
     {{- range $uplink := $node.uplinks }}
-              - address: {{ $uplink.peerAddress | quote }}
+              - {{ if ($uplink.unnumbered | default false) }}interface: {{ $uplink.interface | quote }}{{ else }}address: {{ $uplink.peerAddress | quote }}{{ end }}
                 asn: {{ int64 $uplink.peerASN }}
-                ebgpMultiHop: true
+{{- if not ($uplink.unnumbered | default false) }}
                 port: 179
-    {{- if $uplink.address }}
+{{- end }}
+{{- if $bfdProfile }}
+                bfdProfile: {{ $bfdProfile | quote }}
+{{- end }}
+    {{- if and (not ($uplink.unnumbered | default false)) $uplink.address }}
     {{- $uplinkAddress := split "/" $uplink.address }}
                 sourceaddress: {{ $uplinkAddress._0 | quote }}
     {{- end }}
@@ -159,11 +266,58 @@ data:
       raw:
         priority: 5
         rawConfig: |
+{{ if $.Values.evpn.bgp.activeBackup }}
+{{ range $prefixIndex, $prefix := $.Values.evpn.bgp.acceptPrefixes }}
+          ip prefix-list EVPN-REMOTE-VTEPS seq {{ add1 $prefixIndex }} permit {{ $prefix }} ge 32 le 32
+{{ end }}
+{{ end }}
+{{ if $.Values.evpn.bgp.activeBackup }}
+          route-map EVPN-ACTIVE-IN permit 10
+            description EVPN active uplink inbound
+            set local-preference 200
+          route-map EVPN-ACTIVE-OUT permit 10
+            description EVPN active uplink outbound
+          route-map EVPN-BACKUP-IN permit 10
+            description EVPN backup uplink inbound
+            set local-preference 100
+          route-map EVPN-BACKUP-OUT permit 10
+            description EVPN backup uplink outbound
+            set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
+{{ range $uplink := $node.uplinks }}
+{{ $peerID := $uplink.peerAddress | default $uplink.interface }}
+          route-map {{ $peerID }}-in permit 1
+            description EVPN {{ if eq $uplink.role "active" }}active{{ else }}backup{{ end }} uplink IPv4 unicast inbound
+            match ip address prefix-list EVPN-REMOTE-VTEPS
+            set local-preference {{ if eq $uplink.role "active" }}200{{ else }}100{{ end }}
+{{ if eq $uplink.role "backup" }}
+          route-map {{ $peerID }}-out permit 1
+            description EVPN backup uplink IPv4 unicast outbound
+            match ip address prefix-list {{ $peerID }}-allowed-ipv4
+            set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
+{{ end }}
+{{ end }}
+{{ end }}
           router bgp {{ int64 $nodeASN }}
+{{ if $.Values.evpn.bgp.activeActive }}
+            bgp bestpath as-path multipath-relax
+{{ end }}
+{{ if $.Values.evpn.bgp.activeActive }}
+            address-family ipv4 unicast
+              maximum-paths 16
+            exit-address-family
+{{ end }}
             address-family l2vpn evpn
-    {{- range $uplink := $node.uplinks }}
-              neighbor {{ $uplink.peerAddress }} activate
-              neighbor {{ $uplink.peerAddress }} allowas-in origin
+    {{- range $uplinkIndex, $uplink := $node.uplinks }}
+{{- if $.Values.evpn.bgp.activeBackup }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map EVPN-{{ if eq $uplink.role "active" }}ACTIVE{{ else }}BACKUP{{ end }}-IN in
+{{- if eq $uplink.role "backup" }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map EVPN-BACKUP-OUT out
+{{- else }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map EVPN-ACTIVE-OUT out
+{{- end }}
+{{- end }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} activate
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} allowas-in origin
     {{- end }}
               advertise-all-vni
             exit-address-family

@@ -215,6 +215,11 @@ class ValidationDiagnosticsTests(unittest.TestCase):
             "evpn.nodes: duplicate node name at index 3",
             "evpn.nodes: duplicate vtepIP at index 4",
             "evpn.nodes: duplicate peerAddress in uplinks of node index 5",
+            "evpn.nodes: duplicate interface in uplink index 1 of node index 0",
+            "evpn.nodes: activeBackup requires exactly one active uplink"
+            " on node index 0",
+            "evpn.nodes: node index 0 uplink index 0 must set role to active"
+            " or backup when activeBackup is enabled",
         ):
             with self.subTest(text=text):
                 message = (

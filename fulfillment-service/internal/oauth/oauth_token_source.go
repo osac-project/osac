@@ -906,11 +906,14 @@ func (s *TokenSource) sendTokenForm(ctx context.Context,
 	err = s.sendForm(ctx, s.tokenEndpoint, &request, &response)
 	if err != nil {
 		if s.clientSecretFile == "" {
+			// Log only non-sensitive request metadata. Logging the whole request
+			// relies on the "!" redaction convention, which secret scanners
+			// cannot verify.
 			s.logger.ErrorContext(
 				ctx,
 				"Failed to send token form",
 				slog.String("endpoint", s.tokenEndpoint),
-				slog.Any("!request", request),
+				slog.String("grant_type", request.GrantType),
 				slog.Any("error", err),
 			)
 		}

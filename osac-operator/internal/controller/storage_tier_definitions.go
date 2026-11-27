@@ -446,7 +446,7 @@ func (s *storageCatalogSyncRunnable) Start(ctx context.Context) error {
 func storageProtocolToString(p privatev1.StorageProtocol) string {
 	switch p {
 	case privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS:
-		return "nfs"
+		return storageProtocolNFS
 	case privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK:
 		return "block"
 	case privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED:

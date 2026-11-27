@@ -167,6 +167,28 @@ var _ = Describe("VolumeFeedbackController", func() {
 			Expect(mockServer.signals).To(BeEmpty())
 		})
 
+		It("should expose retryable VAST NFS preparation feedback while Progressing", func() {
+			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+
+			message := "Waiting for valid VAST NFS tenant preparation for the selected backend."
+			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseProgressing, nil)
+			cr.Status.Conditions = []metav1.Condition{{
+				Type:    string(v1alpha1.VolumeConditionVASTNFSPreparationReady),
+				Status:  metav1.ConditionFalse,
+				Reason:  "PreparationNotReady",
+				Message: message,
+			}}
+			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: volName, Namespace: volNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal(message))
+		})
+
 		It("should sync Phase=Failed to state=FAILED", func() {
 			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING))
 

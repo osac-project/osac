@@ -534,6 +534,15 @@ var _ = Describe("parseVendorControllers", func() {
 		}))
 	})
 
+	It("accepts protocol-specific provider routes", func() {
+		m, err := parseVendorControllers("vast=vast-block.svc:50051,vast/nfs=vast-nfs.svc:50052")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(m).To(Equal(map[string]string{
+			"vast":     "vast-block.svc:50051",
+			"vast/nfs": "vast-nfs.svc:50052",
+		}))
+	})
+
 	It("skips empty pairs from trailing or doubled commas", func() {
 		m, err := parseVendorControllers("vast=vast.svc:50051,,")
 		Expect(err).ToNot(HaveOccurred())
@@ -573,7 +582,11 @@ var _ = Describe("newVendorProvisionerRegistry", func() {
 			client,
 			client,
 			"osac-system",
-			map[string]string{"vast": "vast.svc:50051", "netapp": "netapp.svc:50052"},
+			map[string]string{
+				"vast":     "vast-block.svc:50051",
+				"vast/nfs": "vast-nfs.svc:50051",
+				"netapp":   "netapp.svc:50052",
+			},
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(registry).To(HaveLen(2))
@@ -581,6 +594,33 @@ var _ = Describe("newVendorProvisionerRegistry", func() {
 		_, registered := registry["netapp"]
 		Expect(registered).To(BeTrue())
 		Expect(registry["netapp"]).To(BeNil())
+	})
+
+	It("passes protocol-specific VAST endpoints to its provisioner", func() {
+		endpoints := map[string]string{
+			"vast":     "vast-block.svc:50051",
+			"vast/nfs": "vast-nfs.svc:50052",
+			"pure":     "pure.svc:50053",
+		}
+
+		Expect(vastVendorControllerEndpoints(endpoints)).To(Equal(map[string]string{
+			"vast":     "vast-block.svc:50051",
+			"vast/nfs": "vast-nfs.svc:50052",
+		}))
+	})
+
+	It("registers VAST when only a protocol-specific controller endpoint is configured", func() {
+		client := fake.NewClientBuilder().Build()
+		registry, err := newVendorProvisionerRegistry(
+			client,
+			client,
+			"osac-system",
+			map[string]string{"vast/nfs": "vast-nfs.svc:50051"},
+		)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(registry).To(HaveLen(1))
+		Expect(registry["vast"]).To(BeAssignableToTypeOf(&controller.VastVendorProvisioner{}))
 	})
 
 	It("registers LVMS from its configured provider key", func() {

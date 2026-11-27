@@ -23,6 +23,8 @@ import (
 	"maps"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,6 +56,10 @@ const osacVolumeFinalizer = "osac.openshift.io/volume-finalizer"
 // typically lands within a second of CR creation.
 const statusStampPollInterval = 2 * time.Second
 
+// vastNFSRetryInterval is used while tenant-prepared VAST NFS configuration is
+// missing or while a CSI create outcome is uncertain.
+const vastNFSRetryInterval = 30 * time.Second
+
 // VendorProvisioner abstracts vendor storage array operations. Unlike other
 // OSAC resources that provision through AAP (RunProvisioningLifecycle), volumes
 // are provisioned by calling the vendor CSI controller directly. This interface
@@ -68,9 +74,10 @@ type VendorProvisioner interface {
 // provision a volume. Provider and Protocol are resolved by the
 // fulfillment-service before the Volume CR is created; the operator passes
 // them through to the selected implementation without re-resolving.
-// Tenant and Tier let the vendor implementation select the per-tenant
-// credentials and construct the per-tenant/per-tier vendor resource references
-// (e.g. the VAST subsystem/view name) without re-deriving them.
+// Tenant and Tier let the vendor implementation select per-tenant credentials
+// and construct per-tenant/per-tier vendor resource references (for example,
+// the VAST subsystem/view name) without re-deriving them. The endpoint-only
+// VAST NFS path also receives its resolved SecretsService config in memory.
 type VendorCreateVolumeRequest struct {
 	Name       string
 	UID        string
@@ -86,6 +93,29 @@ type VendorCreateVolumeRequest struct {
 	// It lets asynchronous provisioners resume an in-progress operation without
 	// creating a second backend resource after a reconcile.
 	VendorContext map[string]string
+
+	// NFS carries the per-tenant, per-tier NFS settings a file volume is created
+	// with. It is required when Protocol is NFS and ignored otherwise.
+	NFS *VendorNFSParams
+
+	// VASTNFSConfig carries the resolved per-tenant SecretsService input for the
+	// endpoint-only VAST NFS path. It is kept in memory and is never persisted in
+	// Volume status or forwarded to AAP or the guest cluster.
+	VASTNFSConfig *VASTNFSConfig
+}
+
+// VendorNFSParams are the backend settings an NFS volume is created under. They
+// come from the tenant's storage configuration on the hub, never from the
+// consuming cluster.
+type VendorNFSParams struct {
+	// RootExport is the export path under which the volume's directory is created.
+	RootExport string
+	// ViewPolicy is the backend view policy applied to the volume's view.
+	ViewPolicy string
+	// VipPoolFQDN is the DNS name of the virtual IP pool clients mount from.
+	VipPoolFQDN string
+	// QoSPolicy is the optional backend QoS policy for the volume.
+	QoSPolicy string
 }
 
 // VendorCreateVolumeResponse carries the vendor-assigned identifiers that the
@@ -117,8 +147,13 @@ type VendorDeleteVolumeRequest struct {
 	UID            string
 	VendorVolumeID string
 	Provider       string
-	Tenant         string
-	VendorContext  map[string]string
+	// Protocol selects the vendor controller instance that owns the volume. An
+	// empty value is treated as block, for volumes recorded before it was set.
+	Protocol      v1alpha1.VolumeProtocol
+	Tenant        string
+	VendorContext map[string]string
+	// VASTNFSConfig is freshly resolved from the tier's current backend during deletion.
+	VASTNFSConfig *VASTNFSConfig
 }
 
 // VolumeReconciler reconciles Volume CRs created by the fulfillment-service
@@ -136,6 +171,9 @@ type VolumeReconciler struct {
 	mgr                mcmanager.Manager
 	VolumeNamespace    string
 	VendorProvisioners VendorProvisionerRegistry
+	TiersClient        StorageTiersLister
+	BackendsClient     StorageBackendsClient
+	SecretsClient      VASTNFSSecretsClient
 }
 
 // NewVolumeReconciler creates a new reconciler for Volume resources. The
@@ -329,6 +367,34 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 		return ctrl.Result{}, nil
 	}
 
+	var vastNFSConfig *VASTNFSConfig
+	if isVASTNFSVolume(vol) {
+		_, config, resolveErr := resolveVASTNFSVolumeConfig(
+			ctx,
+			r.TiersClient,
+			r.BackendsClient,
+			r.SecretsClient,
+			vol.GetAnnotations()[osacTenantKey],
+			vol.Spec.StorageTier,
+		)
+		if resolveErr != nil {
+			setVASTNFSPreparationNotReady(vol)
+			vol.Status.Phase = v1alpha1.VolumePhaseProgressing
+			return ctrl.Result{RequeueAfter: vastNFSRetryInterval}, nil
+		}
+
+		apimeta.RemoveStatusCondition(&vol.Status.Conditions, string(v1alpha1.VolumeConditionVASTNFSPreparationReady))
+		if !vastNFSCreateMayHaveReachedVendor(vol) {
+			// Checkpoint intent in the existing VendorProvisioned condition before
+			// the CSI request. No new Volume status field is needed to make an
+			// interrupted create visible to deletion handling.
+			setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse,
+				"CreateStarted", "VAST NFS create may have started; the operator will retry with the same volume name.")
+			return ctrl.Result{RequeueAfter: statusStampPollInterval}, nil
+		}
+		vastNFSConfig = &config
+	}
+
 	resp, err := provisioner.CreateVolume(ctx, VendorCreateVolumeRequest{
 		Name:          vol.Name,
 		UID:           string(vol.UID),
@@ -340,8 +406,26 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 		Protocol:      vol.Status.Protocol,
 		Topology:      copyVolumeTopology(vol.Spec.Topology),
 		VendorContext: maps.Clone(vol.Status.VendorContext),
+		VASTNFSConfig: vastNFSConfig,
 	})
 	if err != nil {
+		if vastNFSConfig != nil {
+			if vastNFSCreateOutcomeUncertain(err) {
+				log.Info("VAST NFS create outcome is uncertain; retrying with the same volume identity",
+					"grpcCode", grpcstatus.Code(err).String())
+				vol.Status.Phase = v1alpha1.VolumePhaseProgressing
+				setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse,
+					"CreateOutcomeUnknown", "VAST has not returned a definitive result for this NFS volume; the operator will retry safely.")
+				return ctrl.Result{RequeueAfter: vastNFSRetryInterval}, nil
+			}
+			log.Info("VAST NFS create failed", "grpcCode", grpcstatus.Code(err).String())
+			vol.Status.Phase = v1alpha1.VolumePhaseFailed
+			now := metav1.Now()
+			vol.Status.StateTransitionTime = &now
+			setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse,
+				"ProvisioningFailed", "VAST rejected the NFS volume request; check the vendor controller logs.")
+			return ctrl.Result{}, nil
+		}
 		log.Error(err, "vendor provisioning failed")
 		vol.Status.Phase = v1alpha1.VolumePhaseFailed
 		now := metav1.Now()
@@ -355,6 +439,12 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 		return ctrl.Result{}, nil
 	}
 	if resp.VendorVolumeID == "" {
+		if vastNFSConfig != nil {
+			vol.Status.Phase = v1alpha1.VolumePhaseProgressing
+			setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse,
+				"CreateOutcomeUnknown", "VAST has not returned a volume ID for this NFS volume; the operator will retry safely.")
+			return ctrl.Result{RequeueAfter: vastNFSRetryInterval}, nil
+		}
 		return r.failProvisioning(vol, "vendor CreateVolume returned an empty volume ID")
 	}
 	if vol.Status.VendorVolumeID != "" && vol.Status.VendorVolumeID != resp.VendorVolumeID {
@@ -415,6 +505,12 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 		return ctrl.Result{}, nil
 	}
 
+	if isVASTNFSVolume(vol) && vol.Status.VendorVolumeID == "" && vastNFSCreateMayHaveReachedVendor(vol) {
+		setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse,
+			"CleanupBlocked", "Deletion is blocked because a VAST NFS create may have succeeded without returning its volume ID. Check the VAST controller and array before removing this Volume.")
+		return ctrl.Result{RequeueAfter: vastNFSRetryInterval}, nil
+	}
+
 	// A provisioned volume (VendorVolumeID set) must be deprovisioned on the
 	// vendor array before the finalizer is removed. If no provisioner is
 	// configured we refuse to remove the finalizer; otherwise the backend
@@ -433,19 +529,49 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		var vastNFSConfig *VASTNFSConfig
+		if isVASTNFSVolume(vol) {
+			_, config, resolveErr := resolveVASTNFSVolumeConfig(
+				ctx,
+				r.TiersClient,
+				r.BackendsClient,
+				r.SecretsClient,
+				vol.GetAnnotations()[osacTenantKey],
+				vol.Spec.StorageTier,
+			)
+			if resolveErr != nil {
+				setVASTNFSPreparationNotReady(vol)
+				return ctrl.Result{RequeueAfter: vastNFSRetryInterval}, nil
+			}
+			apimeta.RemoveStatusCondition(&vol.Status.Conditions, string(v1alpha1.VolumeConditionVASTNFSPreparationReady))
+			vastNFSConfig = &config
+		}
 		err = provisioner.DeleteVolume(ctx, VendorDeleteVolumeRequest{
 			Name:           vol.Name,
 			UID:            string(vol.UID),
 			VendorVolumeID: vol.Status.VendorVolumeID,
 			Provider:       provider,
+			Protocol:       vol.Status.Protocol,
 			Tenant:         vol.GetAnnotations()[osacTenantKey],
 			VendorContext:  vol.Status.VendorContext,
+			VASTNFSConfig:  vastNFSConfig,
 		})
 		if err != nil {
+			if vastNFSConfig != nil {
+				log.Info("VAST NFS delete failed; cleanup will retry", "grpcCode", grpcstatus.Code(err).String())
+				setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse,
+					"DeletionRetrying", "VAST has not confirmed NFS volume deletion; cleanup will retry.")
+				return ctrl.Result{RequeueAfter: vastNFSRetryInterval}, nil
+			}
 			log.Error(err, "vendor deprovisioning failed")
+			reason, message := deleteFailureCondition(err)
+			setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, reason, message)
 			return ctrl.Result{}, err
 		}
 		log.Info("vendor deprovisioning succeeded", "vendorVolumeID", vol.Status.VendorVolumeID)
+		if vastNFSConfig != nil {
+			setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionTrue, "Deleted", "VAST NFS volume deleted")
+		}
 	}
 
 	vol.Status.Phase = v1alpha1.VolumePhaseDeleted
@@ -453,6 +579,51 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 	vol.Status.StateTransitionTime = &now
 
 	return ctrl.Result{}, nil
+}
+
+func isVASTNFSVolume(vol *v1alpha1.Volume) bool {
+	return vol != nil && vol.Status.Provider == storageProviderVAST && vol.Status.Protocol == v1alpha1.VolumeProtocolNFS
+}
+
+func setVASTNFSPreparationNotReady(vol *v1alpha1.Volume) {
+	apimeta.SetStatusCondition(&vol.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.VolumeConditionVASTNFSPreparationReady),
+		Status:             metav1.ConditionFalse,
+		Reason:             "PreparationNotReady",
+		Message:            "Waiting for valid VAST NFS tenant preparation for the selected backend.",
+		ObservedGeneration: vol.Generation,
+	})
+}
+
+func vastNFSCreateMayHaveReachedVendor(vol *v1alpha1.Volume) bool {
+	condition := apimeta.FindStatusCondition(
+		vol.Status.Conditions, string(v1alpha1.VolumeConditionVendorProvisioned),
+	)
+	if condition == nil || condition.Status == metav1.ConditionTrue {
+		return false
+	}
+	switch condition.Reason {
+	case "CreateStarted", "CreateOutcomeUnknown", "CleanupBlocked":
+		return true
+	default:
+		return false
+	}
+}
+
+func vastNFSCreateOutcomeUncertain(err error) bool {
+	// Only a gRPC response from the CSI call represents an ambiguous remote
+	// outcome. Local validation, endpoint selection and configuration errors are
+	// ordinary Go errors and are known failures that must not be retried as if
+	// the array may already have created a share.
+	if _, ok := grpcstatus.FromError(err); !ok {
+		return false
+	}
+	switch grpcstatus.Code(err) {
+	case codes.Canceled, codes.DeadlineExceeded, codes.Internal, codes.Unknown, codes.Unavailable, codes.Aborted:
+		return true
+	default:
+		return false
+	}
 }
 
 // resolvedVolumeProvider returns the provider stamped by the fulfillment-service.
@@ -534,6 +705,16 @@ func (r *VolumeReconciler) mapLogicalVolumeToVolume(_ context.Context, obj clien
 // Uses apimeta.SetStatusCondition which preserves LastTransitionTime when
 // the status hasn't changed, but always updates Reason and Message so
 // repeated failures reflect the latest error.
+// deleteFailureCondition maps a vendor delete error to the VendorProvisioned
+// condition reason and message. Messages are fixed text: vendor errors can
+// carry backend detail, so they stay in the operator log only.
+func deleteFailureCondition(err error) (reason, message string) {
+	if errors.Is(err, ErrVendorNFSTrashDisabled) {
+		return "VendorNFSTrashDisabled", vastNFSTrashDisabledMessage
+	}
+	return "VendorDeleteFailed", "Vendor volume deletion failed; see operator logs"
+}
+
 func setVendorProvisionedCondition(conditions *[]metav1.Condition, status metav1.ConditionStatus, reason, message string) {
 	apimeta.SetStatusCondition(conditions, metav1.Condition{
 		Type:    string(v1alpha1.VolumeConditionVendorProvisioned),

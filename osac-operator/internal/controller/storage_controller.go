@@ -59,10 +59,11 @@ import (
 )
 
 const (
-	storageFinalizer        = "osac.openshift.io/storage"
-	clusterStorageFinalizer = "osac.openshift.io/cluster-storage"
-	storageControllerName   = "storage-controller"
-	cspManagedTenantValue   = "csp-managed"
+	storageFinalizer                       = "osac.openshift.io/storage"
+	clusterStorageFinalizer                = "osac.openshift.io/cluster-storage"
+	storageControllerName                  = "storage-controller"
+	cspManagedTenantValue                  = "csp-managed"
+	tenantReasonVASTNFSPreparationNotReady = "VASTNFSPreparationNotReady"
 )
 
 // StorageBackendsClient is a narrow subset of the generated privatev1.StorageBackendsClient
@@ -121,6 +122,11 @@ type StorageReconciler struct {
 	// nil, backends that rely on password_secret are skipped (see resolveTierDefinitions);
 	// backends with an inline password are unaffected.
 	SecretsClient SecretsClient
+	// VASTNFSSecretsClient resolves the tenant's VAST NFS configuration bundle.
+	// It is separate from SecretsClient because backend password resolution only
+	// needs Get, while the tenant bundle lookup requires a bounded List followed
+	// by Get.
+	VASTNFSSecretsClient VASTNFSSecretsClient
 
 	catalogMu     sync.RWMutex
 	cachedCatalog *storageCatalogSnapshot
@@ -200,6 +206,19 @@ func (r *StorageReconciler) Reconcile(ctx context.Context, req mcreconcile.Reque
 	var err error
 	if tenant.ObjectMeta.DeletionTimestamp.IsZero() {
 		res, err = r.handleUpdate(ctx, tenant)
+		// SecretsService does not provide Kubernetes watch events to this
+		// controller. Poll while delegated VAST NFS preparation is missing so a
+		// newly created or corrected bundle is observed without an unrelated
+		// catalog change.
+		if err == nil && res.RequeueAfter <= 0 {
+			condition := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			if condition != nil && condition.Status == metav1.ConditionFalse && condition.Reason == tenantReasonVASTNFSPreparationNotReady {
+				res.RequeueAfter = r.StatusPollInterval
+				if res.RequeueAfter <= 0 {
+					res.RequeueAfter = 30 * time.Second
+				}
+			}
+		}
 	} else {
 		res, err = r.handleDelete(ctx, tenant)
 	}
@@ -261,31 +280,45 @@ func (r *StorageReconciler) patchClusterOrderStorageStatus(ctx context.Context, 
 	})
 }
 
-// handleBackendReadiness evaluates Stage 1 backend readiness and updates the
-// StorageBackendReady condition. It returns (hubSecretReady, result, stop, error):
+// handleBackendReadinessWithVASTNFS evaluates backend readiness and updates
+// StorageBackendReady. It returns (hubSecretReady, result, stop, error):
 //   - hubSecretReady: whether the hub Secret exists (needed for Stage 2 retry logic)
 //   - result: ctrl.Result to return when stop is true
 //   - stop: when true, the caller should return (result, err) immediately
 //   - error: any unexpected failure
 //
-// tierDefinitions carries the resolved tier catalog from the Tier API. When
-// non-empty, the check requires hub Secrets for ALL dispatched providers (one
-// per unique TierDefinition.Provider) before declaring StorageBackendReady.
-// When nil or empty (no Tier API configured), it falls back to checking for
-// any hub Secret regardless of provider — preserving backward compatibility.
-func (r *StorageReconciler) handleBackendReadiness(ctx context.Context, tenant *v1alpha1.Tenant, tenantName string, tierDefinitions []provisioning.TierDefinition) (hubSecretReady bool, result ctrl.Result, stop bool, err error) {
-	statuses, allReady, err := r.storageBackendStatuses(ctx, tenantName, tierDefinitions)
+// tierDefinitions carries the resolved tier catalog from the Tier API.
+func (r *StorageReconciler) handleBackendReadinessWithVASTNFS(
+	ctx context.Context,
+	tenant *v1alpha1.Tenant,
+	tenantName string,
+	tierDefinitions []provisioning.TierDefinition,
+	preparations *tenantVASTNFSPreparationResolution,
+) (hubSecretReady bool, result ctrl.Result, stop bool, err error) {
+	readiness, err := r.storageBackendReadiness(ctx, tenantName, tierDefinitions, preparations)
 	if err != nil {
 		return false, ctrl.Result{}, true, err
 	}
-	tenant.Status.StorageBackends = statuses
-	hubSecretReady = allReady
-	readinessMessage := formatStorageBackendReadinessMessage(statuses, hubSecretReady)
+	tenant.Status.StorageBackends = readiness.statuses
+	hubSecretReady = readiness.hubSecretsReady
+	readinessMessage := formatStorageBackendReadinessMessage(readiness.statuses, readiness.allReady)
 
-	if hubSecretReady {
+	if readiness.allReady {
 		tenant.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
 			metav1.ConditionTrue,
 			v1alpha1.TenantReasonFound,
+			readinessMessage)
+		return true, ctrl.Result{}, false, nil
+	}
+
+	// A missing or invalid VAST NFS preparation record must hold only the NFS
+	// path. It is not repaired by the legacy backend job (which cannot create the
+	// customer-owned record), so let unrelated VMaaS/CaaS work continue while
+	// reporting backend readiness as false.
+	if hubSecretReady {
+		tenant.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+			metav1.ConditionFalse,
+			tenantReasonVASTNFSPreparationNotReady,
 			readinessMessage)
 		return true, ctrl.Result{}, false, nil
 	}
@@ -351,10 +384,20 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 	}
 
 	// Resolved once here, before Stage 1 (which can return early via
-	// handleBackendReadiness), so both Stage 2's tier-coverage validation and
+	// backend readiness), so both tier-coverage validation and
 	// every downstream AAP call in this reconcile see the same result without
 	// re-fetching.
 	ctx, osacTiers, cspTiers, skippedOSACTiers, tierErr := r.resolveTenantTierContext(ctx, tenantName)
+	vastNFSPreparations := resolveTenantVASTNFSPreparations(
+		ctx, tenantName, osacTiers, r.BackendsClient, r.VASTNFSSecretsClient,
+	)
+	vmaasTiers := tiersWithoutDelegatedVASTNFS(osacTiers, vastNFSPreparations.DelegatedBackends)
+	caasTiers := tiersWithReadyVASTNFSPreparation(osacTiers, vastNFSPreparations.UnreadyBackends)
+	vmaasCtx := withStorageCatalogForTiers(
+		ctx, vmaasTiers,
+		delegatedBackendIDsNotUsedByTiers(vmaasTiers, vastNFSPreparations.DelegatedBackends),
+	)
+	caasCtx := withStorageCatalogForTiers(ctx, caasTiers, vastNFSPreparations.DelegatedBackends)
 
 	// Handle individual ClusterOrder deletions while the Tenant is still
 	// alive. When a ClusterOrder is deleted, mapClusterOrderToTenant
@@ -393,8 +436,10 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 	}
 
 	// Stage 1: check hub Secret and route provisioning based on backend registration.
-	// stop is always true when err is non-nil (handleBackendReadiness invariant).
-	hubSecretReady, stageResult, stop, err := r.handleBackendReadiness(ctx, tenant, tenantName, osacTiers)
+	// stop is always true when err is non-nil (readiness handler invariant).
+	hubSecretReady, stageResult, stop, err := r.handleBackendReadinessWithVASTNFS(
+		ctx, tenant, tenantName, osacTiers, vastNFSPreparations,
+	)
 	if stop {
 		return stageResult, err
 	}
@@ -415,61 +460,75 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 		r.Recorder.Eventf(tenant, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
 	}
 
+	var vmaasResult ctrl.Result
+	var vmaasErr error
+	vmaasHandled := false
+	var hasMissingTiers bool
+
 	if len(scResult.resolved) == 0 {
 		reason := v1alpha1.TenantReasonNotFound
 		if len(scResult.duplicateMessages) > 0 {
 			reason = v1alpha1.TenantReasonMultipleFound
 		}
-		condMsg := r.appendMissingTierWarnings(tenant, osacTiers, nil, scResult.ambiguousTiers, scResult.conditionMessage())
+		condMsg := r.appendMissingTierWarnings(tenant, vmaasTiers, nil, scResult.ambiguousTiers, scResult.conditionMessage())
 		tenant.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
 			metav1.ConditionFalse,
 			reason,
 			condMsg)
 		tenant.Status.StorageClasses = mergeResolvedStorageClasses(cspResolved, nil)
 		r.updateTenantVMaaSStorage(tenant, clusterName, false, reason)
+		vmaasHandled = true
 		if len(scResult.duplicateMessages) == 0 && r.ClusterStorageProvider != nil {
-			return r.handleClusterStorageProvisioning(ctx, tenant, hubSecretReady)
+			vmaasResult, vmaasErr = r.handleClusterStorageProvisioning(vmaasCtx, tenant, hubSecretReady)
 		}
-		return ctrl.Result{}, nil
+	} else {
+		condMsg := r.appendMissingTierWarnings(tenant, vmaasTiers, scResult.resolved, scResult.ambiguousTiers, scResult.conditionMessage())
+
+		// hasMissingTiers drives the Stage 4 retry
+		// (handleClusterStorageProvisioning) and sets the Tenant's VMaaS
+		// ClusterStorageReady condition and its VMaaS entry in
+		// status.clusterStorage. handleCaaSUpdateWithTiers does not read it; each
+		// ClusterOrder's ClusterStorageReady is set there independently.
+		missing := missingTierNames(vmaasTiers, scResult.resolved, scResult.ambiguousTiers)
+		hasMissingTiers = len(missing) > 0
+
+		condStatus := metav1.ConditionTrue
+		vmaasReason := v1alpha1.TenantReasonFound
+		if hasMissingTiers {
+			condStatus = metav1.ConditionFalse
+			vmaasReason = v1alpha1.TenantReasonNotFound
+		}
+		tenant.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady, condStatus, vmaasReason, condMsg)
+		tenant.Status.StorageClasses = mergeResolvedStorageClasses(cspResolved, scResult.resolved)
+		r.updateTenantVMaaSStorage(tenant, clusterName, !hasMissingTiers, vmaasReason)
 	}
-
-	condMsg := r.appendMissingTierWarnings(tenant, osacTiers, scResult.resolved, scResult.ambiguousTiers, scResult.conditionMessage())
-
-	// Detect tiers that still lack a StorageClass. The hasMissingTiers
-	// flag drives the Stage 4 retry (handleClusterStorageProvisioning).
-	// When tiers are still missing, ClusterStorageReady stays False so
-	// handleCaaSUpdate (Stage 3) does not attempt to provision
-	// cluster-side storage with an incomplete tier set. This is safe
-	// because handleCaaSDelete runs BEFORE this point (line ~339),
-	// so finalizer removal on deleting ClusterOrders is never blocked.
-	missing := missingTierNames(osacTiers, scResult.resolved, scResult.ambiguousTiers)
-	hasMissingTiers := len(missing) > 0
-
-	condStatus := metav1.ConditionTrue
-	vmaasReason := v1alpha1.TenantReasonFound
-	if hasMissingTiers {
-		condStatus = metav1.ConditionFalse
-		vmaasReason = v1alpha1.TenantReasonNotFound
-	}
-	tenant.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady, condStatus, vmaasReason, condMsg)
-	tenant.Status.StorageClasses = mergeResolvedStorageClasses(cspResolved, scResult.resolved)
-	r.updateTenantVMaaSStorage(tenant, clusterName, !hasMissingTiers, vmaasReason)
 
 	if r.ClusterStorageProvider == nil {
-		return ctrl.Result{}, nil
+		return vmaasResult, vmaasErr
 	}
 
 	// Stage 3: provision cluster-side storage on CaaS clusters owned by this tenant.
-	// Runs after VMaaS (Stage 2) because CaaS requires StorageBackendReady (Stage 1)
-	// to have completed during tenant onboarding before cluster-side resources can
-	// be installed.
-	caasResult, caasErr := r.handleCaaSUpdate(ctx, tenant)
+	// With a ClusterStorageProvider configured, this stage runs when a VMaaS
+	// StorageClass resolved. When none resolved, caasBlockedWithoutVMaaSClass
+	// decides whether it runs. A failed StorageClass lookup on the VMaaS target
+	// returns before this point, so it still blocks this stage. The Tenant's
+	// ClusterStorageReady (VMaaS) and each ClusterOrder's ClusterStorageReady
+	// are independent of each other.
+	if vmaasHandled && r.caasBlockedWithoutVMaaSClass(ctx, tenant, tenantName, hubSecretReady, osacTiers, skippedOSACTiers) {
+		return vmaasResult, vmaasErr
+	}
+	caasResult, caasErr := r.handleCaaSUpdateWithTiers(
+		caasCtx, tenant, caasTiers, len(vastNFSPreparations.UnreadyBackends) > 0,
+	)
+	if vmaasHandled {
+		return combineStageResults(vmaasResult, vmaasErr, caasResult, caasErr)
+	}
 	if caasErr != nil || caasResult.RequeueAfter > 0 {
 		return caasResult, caasErr
 	}
 
 	// Poll any non-terminal class provision job to update its status.
-	// This runs after handleCaaSUpdate (Stage 3) so that CaaS cluster
+	// This runs after CaaS storage handling so that cluster
 	// lifecycle management is never blocked by VMaaS job polling.
 	latestClassJob := provisioning.FindLatestJobByType(tenant.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
 	if latestClassJob != nil && !latestClassJob.State.IsTerminal() {
@@ -479,12 +538,50 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 	}
 
 	// Stage 4: Retry provisioning for any storage tiers that failed to resolve.
-	// This runs after handleCaaSUpdate to avoid blocking cluster lifecycle.
+	// This runs after CaaS storage handling to avoid blocking cluster lifecycle.
 	if hasMissingTiers {
-		return r.handleClusterStorageProvisioning(ctx, tenant, hubSecretReady)
+		return r.handleClusterStorageProvisioning(vmaasCtx, tenant, hubSecretReady)
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// caasBlockedWithoutVMaaSClass reports whether the CaaS stage must not run when
+// no VMaaS StorageClass resolved. The stage runs only when at least one OSAC
+// tier definition resolved, no catalog tier was skipped during resolution, and
+// Stage 1 reports the storage backends ready (hubSecretReady). When it is held
+// back only by a skipped tier, it logs the tenant and emits a StorageTiersSkipped
+// Warning event.
+func (r *StorageReconciler) caasBlockedWithoutVMaaSClass(
+	ctx context.Context,
+	tenant *v1alpha1.Tenant,
+	tenantName string,
+	hubSecretReady bool,
+	osacTiers []provisioning.TierDefinition,
+	skippedOSACTiers bool,
+) bool {
+	if hubSecretReady && len(osacTiers) > 0 && skippedOSACTiers {
+		ctrllog.FromContext(ctx).Info("CaaS cluster storage is waiting: a catalog storage tier was skipped during resolution",
+			"tenant", tenantName)
+		r.Recorder.Eventf(tenant, nil, corev1.EventTypeWarning, "StorageTiersSkipped", "Provision",
+			"%s", "CaaS cluster storage is waiting: one or more storage tiers in the catalog could not be resolved; the operator log names the tier and backend")
+	}
+	return !hubSecretReady || len(osacTiers) == 0 || skippedOSACTiers
+}
+
+// combineStageResults merges the results of the VMaaS and CaaS stages when both
+// ran in one reconcile. A VMaaS error is returned with the VMaaS result;
+// otherwise a CaaS error is returned with the CaaS result; otherwise
+// RequeueAfter is the smaller positive value of the two, or zero when neither
+// is positive.
+func combineStageResults(vmaasResult ctrl.Result, vmaasErr error, caasResult ctrl.Result, caasErr error) (ctrl.Result, error) {
+	if vmaasErr != nil {
+		return vmaasResult, vmaasErr
+	}
+	if caasErr != nil {
+		return caasResult, caasErr
+	}
+	return mergeReconcileResult(mergeReconcileResult(ctrl.Result{}, vmaasResult), caasResult), nil
 }
 
 // clearOSACManagedStorageStatus clears OSAC-managed storage backend status and
@@ -506,11 +603,78 @@ func (r *StorageReconciler) canProvisionOSACStorage(ctx context.Context) bool {
 	return len(provisioning.StorageTierDefinitionsFromContext(ctx)) > 0
 }
 
-// handleCaaSUpdate provisions cluster-side storage on CaaS clusters belonging
-// to this tenant. For each Ready ClusterOrder without ClusterStorageReady=True,
-// it retrieves the kubeconfig and triggers the AAP provisioning job.
-func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alpha1.Tenant) (ctrl.Result, error) {
-	if !r.canProvisionOSACStorage(ctx) {
+func tiersWithoutDelegatedVASTNFS(
+	tiers []provisioning.TierDefinition,
+	delegatedBackends map[string]struct{},
+) []provisioning.TierDefinition {
+	filtered := make([]provisioning.TierDefinition, 0, len(tiers))
+	for _, tier := range tiers {
+		_, delegated := delegatedBackends[tier.BackendID]
+		if delegated && tier.Provider == storageProviderVAST && tier.Protocol == storageProtocolNFS {
+			continue
+		}
+		filtered = append(filtered, tier)
+	}
+	return filtered
+}
+
+func tiersWithReadyVASTNFSPreparation(
+	tiers []provisioning.TierDefinition,
+	unreadyBackends map[string]struct{},
+) []provisioning.TierDefinition {
+	filtered := make([]provisioning.TierDefinition, 0, len(tiers))
+	for _, tier := range tiers {
+		_, unready := unreadyBackends[tier.BackendID]
+		if unready && tier.Provider == storageProviderVAST && tier.Protocol == storageProtocolNFS {
+			continue
+		}
+		filtered = append(filtered, tier)
+	}
+	return filtered
+}
+
+func delegatedBackendIDsNotUsedByTiers(
+	tiers []provisioning.TierDefinition,
+	delegatedBackends map[string]struct{},
+) map[string]struct{} {
+	used := make(map[string]struct{}, len(tiers))
+	for _, tier := range tiers {
+		used[tier.BackendID] = struct{}{}
+	}
+	drop := make(map[string]struct{})
+	for backendID := range delegatedBackends {
+		if _, stillUsed := used[backendID]; !stillUsed {
+			drop[backendID] = struct{}{}
+		}
+	}
+	return drop
+}
+
+func withStorageCatalogForTiers(
+	ctx context.Context,
+	tiers []provisioning.TierDefinition,
+	dropBackendConnections map[string]struct{},
+) context.Context {
+	ctx = provisioning.WithStorageTierDefinitions(ctx, tiers)
+	connections := provisioning.StorageBackendConnectionsFromContext(ctx)
+	filtered := make(map[string]provisioning.BackendConnection, len(connections))
+	for backendID, connection := range connections {
+		if _, drop := dropBackendConnections[backendID]; !drop {
+			filtered[backendID] = connection
+		}
+	}
+	return provisioning.WithStorageBackendConnections(ctx, filtered)
+}
+
+// handleCaaSUpdateWithTiers provisions cluster-side storage on CaaS clusters
+// belonging to this tenant using the eligible tier definitions.
+func (r *StorageReconciler) handleCaaSUpdateWithTiers(
+	ctx context.Context,
+	tenant *v1alpha1.Tenant,
+	caasTiers []provisioning.TierDefinition,
+	preparationMissing bool,
+) (ctrl.Result, error) {
+	if !r.canProvisionOSACStorage(ctx) && !preparationMissing {
 		return ctrl.Result{}, nil
 	}
 	log := ctrllog.FromContext(ctx)
@@ -533,6 +697,17 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 			continue
 		}
 
+		if preparationMissing {
+			co.SetStatusCondition(
+				string(v1alpha1.ClusterOrderConditionClusterStorageReady),
+				metav1.ConditionFalse,
+				"Waiting for VAST NFS preparation in SecretsService",
+				tenantReasonVASTNFSPreparationNotReady)
+			if err := r.patchClusterOrderStorageStatus(ctx, client.ObjectKeyFromObject(co), co.Status); err != nil {
+				return ctrl.Result{}, fmt.Errorf("update ClusterOrder %s storage readiness: %w", co.Name, err)
+			}
+		}
+
 		if co.IsStatusConditionTrue(string(v1alpha1.ClusterOrderConditionClusterStorageReady)) {
 			continue
 		}
@@ -548,6 +723,13 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 			if err := r.Update(ctx, co); err != nil {
 				return ctrl.Result{}, fmt.Errorf("add storage finalizer to ClusterOrder %s: %w", co.Name, err)
 			}
+		}
+
+		if len(caasTiers) == 0 && preparationMissing {
+			// No class job can be useful until at least one tier has a complete
+			// preparation. Keep the ClusterOrder finalizer so later reconciliation
+			// can provision the class and normal teardown can remove it.
+			continue
 		}
 
 		kubeconfig, err := r.getClusterKubeconfig(ctx, co)
@@ -571,6 +753,7 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 		}
 
 		provCtx := provisioning.WithAdminKubeconfig(ctx, string(kubeconfig))
+		provCtx = provisioning.WithStorageTierDefinitions(provCtx, caasTiers)
 
 		provResult, provErr := provisioning.RunProvisioningLifecycle(provCtx, r.ClusterStorageProvider, co,
 			&provisioning.State{Jobs: &co.Status.ClusterStorageJobs},
@@ -620,7 +803,13 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 			r.Recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
 		}
 
-		if len(scResult.resolved) > 0 {
+		if preparationMissing {
+			co.SetStatusCondition(
+				string(v1alpha1.ClusterOrderConditionClusterStorageReady),
+				metav1.ConditionFalse,
+				"Waiting for VAST NFS preparation in SecretsService",
+				tenantReasonVASTNFSPreparationNotReady)
+		} else if len(scResult.resolved) > 0 {
 			co.SetStatusCondition(
 				string(v1alpha1.ClusterOrderConditionClusterStorageReady),
 				metav1.ConditionTrue,
@@ -1106,25 +1295,45 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ten
 
 // --- Helpers ---
 
-// storageBackendStatuses reports readiness for each unique backend referenced by
-// the resolved tier definitions. A TierDefinition represents the supported model
-// of one backend association per tier; multi-backend tiers are intentionally not
-// expanded here. When tier definitions are unavailable, the legacy any-Secret
-// check is retained for environments without Tier API data.
-func (r *StorageReconciler) storageBackendStatuses(ctx context.Context, tenantName string, tierDefinitions []provisioning.TierDefinition) ([]v1alpha1.StorageBackendStatus, bool, error) {
+type storageBackendReadinessResult struct {
+	statuses        []v1alpha1.StorageBackendStatus
+	allReady        bool
+	hubSecretsReady bool
+}
+
+func (r *StorageReconciler) storageBackendReadiness(
+	ctx context.Context,
+	tenantName string,
+	tierDefinitions []provisioning.TierDefinition,
+	preparations *tenantVASTNFSPreparationResolution,
+) (storageBackendReadinessResult, error) {
 	backendProviders := make(map[string]string)
+	backendNeedsHubSecret := make(map[string]bool)
+	backendNeedsVASTNFSPreparation := make(map[string]bool)
 	for _, tier := range tierDefinitions {
 		if tier.BackendID != "" && tier.Provider != "" {
 			backendProviders[tier.BackendID] = tier.Provider
+			delegated := false
+			if preparations != nil {
+				_, delegated = preparations.DelegatedBackends[tier.BackendID]
+			}
+			if delegated && tier.Provider == storageProviderVAST && tier.Protocol == storageProtocolNFS {
+				backendNeedsVASTNFSPreparation[tier.BackendID] = true
+			} else {
+				backendNeedsHubSecret[tier.BackendID] = true
+			}
 		}
 	}
 
 	backendSecrets, anySecret, err := r.hubSecretsByBackendID(ctx, tenantName)
 	if err != nil {
-		return nil, false, err
+		return storageBackendReadinessResult{}, err
 	}
 	if len(backendProviders) == 0 {
-		return nil, anySecret, nil
+		return storageBackendReadinessResult{
+			allReady:        anySecret,
+			hubSecretsReady: anySecret,
+		}, nil
 	}
 
 	backendIDs := make([]string, 0, len(backendProviders))
@@ -1135,14 +1344,50 @@ func (r *StorageReconciler) storageBackendStatuses(ctx context.Context, tenantNa
 
 	statuses := make([]v1alpha1.StorageBackendStatus, 0, len(backendIDs))
 	allReady := true
+	hubSecretsReady := true
 	for _, backendID := range backendIDs {
 		provider := backendProviders[backendID]
-		ready := backendSecrets[backendID]
-
-		message := fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", backendID, provider, tenantName)
+		needsHubSecret := backendNeedsHubSecret[backendID]
+		needsPreparation := backendNeedsVASTNFSPreparation[backendID]
+		preparationReady := !needsPreparation
+		if needsPreparation && preparations != nil {
+			_, preparationReady = preparations.Configs[backendID]
+		}
+		hubSecretReady := !needsHubSecret || backendSecrets[backendID]
+		if !hubSecretReady {
+			hubSecretsReady = false
+		}
+		ready := hubSecretReady && preparationReady
 		if !ready {
-			message = fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", backendID, provider, tenantName)
 			allReady = false
+		}
+
+		var message string
+		switch {
+		case needsHubSecret && needsPreparation:
+			hubSecretState := "not found"
+			if backendSecrets[backendID] {
+				hubSecretState = "exists"
+			}
+			preparationState := "missing or invalid"
+			if preparationReady {
+				preparationState = "ready"
+			}
+			message = fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) %s; VAST NFS preparation is %s",
+				backendID, provider, tenantName, hubSecretState, preparationState)
+		case needsHubSecret:
+			if backendSecrets[backendID] {
+				message = fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", backendID, provider, tenantName)
+			} else {
+				message = fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", backendID, provider, tenantName)
+			}
+		case needsPreparation:
+			preparationState := "missing or invalid"
+			if preparationReady {
+				preparationState = "ready"
+			}
+			message = fmt.Sprintf("VAST NFS preparation for backend %q (provider %q, tenant %q) is %s",
+				backendID, provider, tenantName, preparationState)
 		}
 		statuses = append(statuses, v1alpha1.StorageBackendStatus{
 			Name:     backendID,
@@ -1152,7 +1397,11 @@ func (r *StorageReconciler) storageBackendStatuses(ctx context.Context, tenantNa
 		})
 	}
 
-	return statuses, allReady, nil
+	return storageBackendReadinessResult{
+		statuses:        statuses,
+		allReady:        allReady,
+		hubSecretsReady: hubSecretsReady,
+	}, nil
 }
 
 // formatStorageBackendReadinessMessage summarizes backend readiness, falling
@@ -1188,9 +1437,20 @@ func formatStorageBackendReadinessMessage(statuses []v1alpha1.StorageBackendStat
 		notReadyNames = strings.Join(notReady, ", ")
 	}
 
-	message := fmt.Sprintf("Hub Secret readiness by backend: ready (%d): %s; not ready (%d): %s", len(ready), readyNames, len(notReady), notReadyNames)
+	readinessName := "Hub Secret readiness"
+	for _, backend := range statuses {
+		if strings.Contains(backend.Message, "VAST NFS preparation") {
+			readinessName = "Storage preparation readiness"
+			break
+		}
+	}
+	message := fmt.Sprintf("%s by backend: ready (%d): %s; not ready (%d): %s", readinessName, len(ready), readyNames, len(notReady), notReadyNames)
 	if len(ready) == 0 {
-		message += "; no backend Hub Secrets are ready"
+		if readinessName == "Hub Secret readiness" {
+			message += "; no backend Hub Secrets are ready"
+		} else {
+			message += "; no storage preparation is ready"
+		}
 	}
 	return message
 }

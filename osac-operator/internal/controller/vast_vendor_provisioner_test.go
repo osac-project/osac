@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -31,6 +32,8 @@ import (
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
+
+const fixtureVendorPreparedPassword = "prepared-password"
 
 // fakeCSIClient records the last request and returns canned responses/errors.
 type fakeCSIClient struct {
@@ -250,6 +253,114 @@ func TestNewVastVendorProvisionerFailFast(t *testing.T) {
 	}
 	if _, err := NewVastVendorProvisioner(reader, "osac-system", map[string]string{"vast": "x:50051"}); err != nil {
 		t.Errorf("unexpected error for valid config: %v", err)
+	}
+}
+
+func TestVastVendorProvisionerNFSUsesResolvedPreparation(t *testing.T) {
+	csiClient := &fakeCSIClient{createResp: vastNFSPreparedVendorResponse()}
+	provisioner, _ := newProvisioner(t, csiClient, nil)
+	provisioner.endpoints["vast/nfs"] = "nfs.svc:50051"
+	config := &VASTNFSConfig{
+		ManagementEndpoint: "https://vast-manager.example.com",
+		StorageTenant:      "acme-on-vast",
+		Username:           "prepared-user",
+		Password:           fixtureVendorPreparedPassword,
+		RootExport:         "/acme/claas",
+		ViewPolicy:         "acme-claas",
+		NFSAddress:         "acme-nfs.example.com",
+	}
+	req := blockCreateReq()
+	req.Name = "pvc-n"
+	req.Protocol = v1alpha1.VolumeProtocolNFS
+	req.NFS = nil
+	req.VASTNFSConfig = config
+
+	response, err := provisioner.CreateVolume(t.Context(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume with resolved preparation: %v", err)
+	}
+	if response.VendorVolumeID != "pvc-n" || csiClient.createReq == nil {
+		t.Fatal("expected the CSI driver response to be returned")
+	}
+	if csiClient.createReq.Parameters["root_export"] != config.RootExport ||
+		csiClient.createReq.Parameters["view_policy"] != config.ViewPolicy ||
+		csiClient.createReq.Parameters["vip_pool_fqdn"] != config.NFSAddress {
+		t.Fatalf("CSI parameters = %#v", csiClient.createReq.Parameters)
+	}
+	if _, exists := csiClient.createReq.Parameters["vip_pool_name"]; exists {
+		t.Fatal("MVP NFS request must use the configured FQDN, not a VIP pool name")
+	}
+	wantSecrets := map[string]string{
+		"username": "prepared-user",
+		"password": fixtureVendorPreparedPassword,
+		"endpoint": "https://vast-manager.example.com",
+		"tenant":   "acme-on-vast",
+	}
+	if !maps.Equal(csiClient.createReq.Secrets, wantSecrets) {
+		t.Fatalf("CSI secrets = %#v, want the resolved tenant credentials", csiClient.createReq.Secrets)
+	}
+}
+
+func vastNFSPreparedVendorResponse() *csi.CreateVolumeResponse {
+	return &csi.CreateVolumeResponse{Volume: &csi.Volume{
+		VolumeId: "pvc-n",
+		VolumeContext: map[string]string{
+			"root_export":   "/fixture",
+			"view_policy":   "fixture-policy",
+			"vip_pool_fqdn": "acme-nfs.example.com",
+			"protocol":      "NFS",
+		},
+	}}
+}
+
+func TestVastVendorProvisionerNFSDeleteUsesResolvedPreparation(t *testing.T) {
+	csiClient := &fakeCSIClient{}
+	provisioner, _ := newProvisioner(t, csiClient, nil)
+	provisioner.endpoints["vast/nfs"] = "nfs.svc:50051"
+	config := &VASTNFSConfig{
+		ManagementEndpoint: "https://vast-manager.example.com",
+		StorageTenant:      "acme-on-vast",
+		Username:           "prepared-user",
+		Password:           fixtureVendorPreparedPassword,
+	}
+
+	err := provisioner.DeleteVolume(t.Context(), VendorDeleteVolumeRequest{
+		Name:           "volume-1",
+		VendorVolumeID: "vast-volume-1",
+		Provider:       "vast",
+		Protocol:       v1alpha1.VolumeProtocolNFS,
+		Tenant:         "acme",
+		VASTNFSConfig:  config,
+	})
+	if err != nil {
+		t.Fatalf("DeleteVolume with resolved preparation: %v", err)
+	}
+	if csiClient.deleteReq == nil || csiClient.deleteReq.GetVolumeId() != "vast-volume-1" {
+		t.Fatal("expected DeleteVolume to use the persisted vendor volume ID")
+	}
+	wantSecrets := map[string]string{
+		"username": "prepared-user",
+		"password": fixtureVendorPreparedPassword,
+		"endpoint": "https://vast-manager.example.com",
+		"tenant":   "acme-on-vast",
+	}
+	if !maps.Equal(csiClient.deleteReq.Secrets, wantSecrets) {
+		t.Fatalf("CSI secrets = %#v, want the freshly resolved tenant credentials", csiClient.deleteReq.Secrets)
+	}
+}
+
+func TestValidateVASTNFSConfigForCreateRequiresDataFQDN(t *testing.T) {
+	config := &VASTNFSConfig{
+		ManagementEndpoint: "https://vast-manager.example.com",
+		StorageTenant:      "acme-on-vast",
+		Username:           "prepared-user",
+		Password:           fixtureVendorPreparedPassword,
+		RootExport:         "/acme/claas",
+		ViewPolicy:         "acme-claas",
+		VIPPoolName:        "pool-east",
+	}
+	if err := validateVASTNFSConfigForCreate(config); err == nil {
+		t.Fatal("expected pool-name-only configuration to be rejected")
 	}
 }
 

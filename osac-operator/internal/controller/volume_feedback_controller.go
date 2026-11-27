@@ -223,6 +223,23 @@ func syncVolumeStatusMessage(obj *v1alpha1.Volume, remote *privatev1.Volume) {
 		remote.GetStatus().SetMessage(failedProvisioningMessage(obj.Status.Conditions))
 		return
 	}
+	for i := range obj.Status.Conditions {
+		condition := obj.Status.Conditions[i]
+		if condition.Status != metav1.ConditionFalse || condition.Message == "" {
+			continue
+		}
+		if condition.Type == string(v1alpha1.VolumeConditionVASTNFSPreparationReady) {
+			remote.GetStatus().SetMessage(condition.Message)
+			return
+		}
+		if condition.Type == string(v1alpha1.VolumeConditionVendorProvisioned) {
+			switch condition.Reason {
+			case "CreateOutcomeUnknown", "CleanupBlocked", "DeletionRetrying":
+				remote.GetStatus().SetMessage(condition.Message)
+				return
+			}
+		}
+	}
 	remote.GetStatus().ClearMessage()
 }
 

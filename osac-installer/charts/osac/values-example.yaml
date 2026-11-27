@@ -128,8 +128,13 @@ operator:
     tenant: true
     networking: true
 
-  # Provider-to-endpoint map for the operator Volume controller. Node-local
-  # LVMS provisioning uses "none" because it has no vendor gRPC endpoint.
+  # Provider-route-to-endpoint map for the operator Volume controller. The
+  # current csi-backends chart creates the VAST block controller only; set
+  # vast/nfs only when its separate NFS controller service is deployed
+  # (OSAC-4262). Node-local LVMS uses "none".
+  # vendorControllers:
+  #   vast: vast-csi-controller.osac-csi-backends.svc:50051
+  #   "vast/nfs": <separately-deployed-nfs-controller-service>:50051
   vendorControllers: {}
 
   # Secret containing operator configuration overrides. Mounted as

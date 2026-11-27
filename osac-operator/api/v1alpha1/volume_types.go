@@ -105,6 +105,9 @@ const (
 	// VolumeConditionVendorProvisioned indicates whether the volume has been
 	// provisioned on the vendor storage array.
 	VolumeConditionVendorProvisioned VolumeConditionType = "VendorProvisioned"
+	// VolumeConditionVASTNFSPreparationReady indicates whether the tenant's
+	// VAST NFS preparation is available and valid for the selected backend.
+	VolumeConditionVASTNFSPreparationReady VolumeConditionType = "VASTNFSPreparationReady"
 )
 
 // VolumeStatus defines the observed state of Volume.

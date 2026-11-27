@@ -426,6 +426,26 @@ func vmNetwork(namespace, id string, enabled bool) map[string]any {
 	}
 }
 
+// ensureTargetNamespace creates the namespace hosting a ComputeInstance's
+// VirtualMachine on the target cluster when it is missing. The labels mirror
+// the ones tenant onboarding writes on the hub namespace. It never deletes:
+// the namespace is shared by every VM of the tenant.
+func ensureTargetNamespace(ctx context.Context, targetClient client.Client, namespace, tenantName string) error {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+	err := targetClient.Get(ctx, client.ObjectKeyFromObject(ns), ns)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get VM namespace %q on target cluster: %w", namespace, err)
+	}
+	ns.Labels = map[string]string{osacTenantRefLabel: tenantName}
+	if err := targetClient.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create VM namespace %q on target cluster: %w", namespace, err)
+	}
+	return nil
+}
+
 func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -487,6 +507,18 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		}
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkReady, metav1.ConditionTrue,
 			networktask.MessageNetworkingDisabled, v1alpha1.ReasonProvisioningDisabled)
+	}
+
+	// The VM namespace must exist on the target cluster before the
+	// provisioning job creates the VM's DataVolume. Tenant onboarding
+	// creates it on the hub; when the target differs from the hub (a
+	// vcluster run whose VMs land on the outer cluster) nothing else
+	// would. Create-only: tenant offboarding and run teardown own
+	// namespace removal.
+	if vmNamespace != "" {
+		if err := ensureTargetNamespace(ctx, targetClient, vmNamespace, tenant.GetName()); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {

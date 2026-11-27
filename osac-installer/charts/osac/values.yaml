@@ -387,6 +387,12 @@ aap:
         HOSTED_CLUSTER_BASE_DOMAIN: ""
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
+        # Optional and unset by default: DNS_SERVER (the resolver the DNS
+        # readiness wait queries) and the dns.rfc2136.dns settings. Set
+        # DNS_RFC2136_SERVER, DNS_RFC2136_PORT, DNS_RFC2136_PROTOCOL,
+        # DNS_RFC2136_KEY_NAME and DNS_RFC2136_KEY_ALGORITHM here, and
+        # DNS_RFC2136_KEY_SECRET under secret. See values-example.yaml and
+        # docs/dns-backend.md.
       secret:
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""

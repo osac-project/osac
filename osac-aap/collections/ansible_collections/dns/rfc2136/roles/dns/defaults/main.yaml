@@ -1,0 +1,30 @@
+---
+# RFC 2136 dynamic DNS update driver.
+#
+# The server and TSIG settings come from the cluster-fulfillment-ig ConfigMap
+# and Secret, which AAP injects into the job pods as environment variables
+# (see osac-installer/docs/dns-backend.md). Callers pass only the shared DNS
+# interface: dns_zone and the dns_record_* values.
+
+# IPv4 or IPv6 address of the primary DNS server that accepts updates.
+dns_rfc2136_server: "{{ lookup('env', 'DNS_RFC2136_SERVER') | default('', true) | trim }}"
+dns_rfc2136_port: "{{ lookup('env', 'DNS_RFC2136_PORT') | default('53', true) | trim }}"
+dns_rfc2136_protocol: >-
+  {{ lookup('env', 'DNS_RFC2136_PROTOCOL') | default('tcp', true) | trim | lower }}
+
+# TSIG key that the server allows to update the zone.
+dns_rfc2136_key_name: "{{ lookup('env', 'DNS_RFC2136_KEY_NAME') | default('', true) | trim }}"
+dns_rfc2136_key_algorithm: >-
+  {{ lookup('env', 'DNS_RFC2136_KEY_ALGORITHM') | default('hmac-sha256', true) | trim | lower }}
+# Base64-encoded TSIG secret. It arrives from the Secret only, never a ConfigMap.
+dns_rfc2136_key_secret: "{{ lookup('env', 'DNS_RFC2136_KEY_SECRET') | default('', true) | trim }}"
+
+dns_rfc2136_protocols:
+  - tcp
+  - udp
+# SHA-2 only: HMAC-MD5 and HMAC-SHA1 are weak and refused here.
+dns_rfc2136_key_algorithms:
+  - hmac-sha224
+  - hmac-sha256
+  - hmac-sha384
+  - hmac-sha512

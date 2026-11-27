@@ -1,0 +1,65 @@
+---
+- name: Validate RFC 2136 settings and record
+  ansible.builtin.include_tasks: validate.yaml
+
+- name: Refuse to replace an existing record (overwrite disabled)
+  when: not (dns_record_overwrite | default(true) | bool)
+  block:
+    - name: Check for an existing record
+      community.general.nsupdate:
+        state: absent
+        server: "{{ dns_rfc2136_server }}"
+        port: "{{ dns_rfc2136_port | int }}"
+        protocol: "{{ dns_rfc2136_protocol }}"
+        key_name: "{{ dns_rfc2136_key_name }}"
+        key_algorithm: "{{ dns_rfc2136_key_algorithm }}"
+        key_secret: "{{ dns_rfc2136_key_secret }}"
+        zone: "{{ dns_rfc2136_zone }}."
+        record: "{{ dns_rfc2136_record }}."
+        type: "{{ dns_record_type | default('A') }}"
+      # In check mode, state=absent only reports whether the record exists.
+      check_mode: true
+      register: dns_rfc2136_existing
+      ignore_errors: true  # noqa: ignore-errors
+      no_log: true
+
+    - name: Check the existing record lookup result
+      ansible.builtin.include_tasks: check_result.yaml
+      vars:
+        dns_rfc2136_result: "{{ dns_rfc2136_existing }}"
+        dns_rfc2136_ok_rcodes: [NOERROR, NXRRSET]
+
+    # In check mode, "changed" means the record exists.
+    - name: Require that the record does not exist yet
+      ansible.builtin.assert:
+        that:
+          - dns_rfc2136_existing is not changed
+        fail_msg: A DNS record already exists and dns_record_overwrite is false.
+        quiet: true
+
+- name: Create or update DNS record via RFC 2136
+  community.general.nsupdate:
+    state: present
+    server: "{{ dns_rfc2136_server }}"
+    port: "{{ dns_rfc2136_port | int }}"
+    protocol: "{{ dns_rfc2136_protocol }}"
+    key_name: "{{ dns_rfc2136_key_name }}"
+    key_algorithm: "{{ dns_rfc2136_key_algorithm }}"
+    key_secret: "{{ dns_rfc2136_key_secret }}"
+    zone: "{{ dns_rfc2136_zone }}."
+    # Absolute name: nsupdate treats a name without a final dot as relative
+    # to the zone.
+    record: "{{ dns_rfc2136_record }}."
+    type: "{{ dns_record_type | default('A') }}"
+    ttl: "{{ dns_record_ttl | default(1800) | int }}"
+    value:
+      - "{{ dns_record_value }}"
+  register: dns_rfc2136_update
+  ignore_errors: true  # noqa: ignore-errors
+  no_log: true
+
+- name: Check the create result
+  ansible.builtin.include_tasks: check_result.yaml
+  vars:
+    dns_rfc2136_result: "{{ dns_rfc2136_update }}"
+    dns_rfc2136_ok_rcodes: [NOERROR]

@@ -1549,15 +1549,66 @@
                   "properties": {
                     "DNS_CLASS": {
                       "type": "string",
-                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
+                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.rfc2136.dns manages records with RFC 2136 dynamic updates signed with a TSIG key; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
                       "enum": [
                         "dns.noop.dns",
+                        "dns.rfc2136.dns",
                         "dns.route53.dns"
                       ]
                     },
                     "DNS_ZONE": {
                       "type": "string",
-                      "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN)"
+                      "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN). With dns.rfc2136.dns, the zone configured on the DNS server."
+                    },
+                    "DNS_SERVER": {
+                      "type": "string",
+                      "maxLength": 253,
+                      "description": "IPv4 address, IPv6 address or host name of the DNS server that the readiness wait queries with an unsigned dig after records are created. When omitted, the wait uses the execution environment's resolver, or the zone's authoritative nameserver when EXTERNAL_ACCESS_DNS_WAIT_USE_AUTHORITATIVE is true.",
+                      "anyOf": [
+                        {"pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"},
+                        {"pattern": "^[0-9A-Fa-f:.]{2,45}$"},
+                        {"pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?$"}
+                      ]
+                    },
+                    "DNS_RFC2136_SERVER": {
+                      "type": "string",
+                      "description": "dns.rfc2136.dns: IPv4 or IPv6 address of the primary DNS server that accepts dynamic updates. Host names are not supported. Required with dns.rfc2136.dns.",
+                      "anyOf": [
+                        {"pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"},
+                        {"pattern": "^[0-9A-Fa-f:.]{2,45}$"}
+                      ]
+                    },
+                    "DNS_RFC2136_PORT": {
+                      "type": "string",
+                      "default": "53",
+                      "pattern": "^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
+                      "description": "dns.rfc2136.dns: DNS server port, 1-65535 (default 53 when omitted)"
+                    },
+                    "DNS_RFC2136_PROTOCOL": {
+                      "type": "string",
+                      "default": "tcp",
+                      "description": "dns.rfc2136.dns: transport for updates (default tcp when omitted)",
+                      "enum": [
+                        "tcp",
+                        "udp"
+                      ]
+                    },
+                    "DNS_RFC2136_KEY_NAME": {
+                      "type": "string",
+                      "maxLength": 253,
+                      "pattern": "^[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?(\\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*\\.?$",
+                      "description": "dns.rfc2136.dns: name of the TSIG key that the server allows to update the zone, in DNS name form. Required with dns.rfc2136.dns."
+                    },
+                    "DNS_RFC2136_KEY_ALGORITHM": {
+                      "type": "string",
+                      "default": "hmac-sha256",
+                      "description": "dns.rfc2136.dns: TSIG key algorithm (default hmac-sha256 when omitted). Only SHA-2 algorithms are accepted.",
+                      "enum": [
+                        "hmac-sha224",
+                        "hmac-sha256",
+                        "hmac-sha384",
+                        "hmac-sha512"
+                      ]
                     },
                     "SERVER_SSH_BASTION_HOST": {
                       "type": "string",
@@ -1632,6 +1683,11 @@
                       "type": "string",
                       "description": "AWS secret key for Route 53 DNS backend"
                     },
+                    "DNS_RFC2136_KEY_SECRET": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "dns.rfc2136.dns: base64-encoded TSIG key secret. Required with dns.rfc2136.dns."
+                    },
                     "SERVER_SSH_KEY": {
                       "type": "string",
                       "description": "SSH private key for server access"
@@ -1644,6 +1700,30 @@
                   "additionalProperties": false
                 }
               },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "config": {
+                        "properties": {"DNS_CLASS": {"const": "dns.rfc2136.dns"}},
+                        "required": ["DNS_CLASS"]
+                      }
+                    },
+                    "required": ["config"]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "required": ["DNS_RFC2136_SERVER", "DNS_RFC2136_KEY_NAME"]
+                      },
+                      "secret": {
+                        "required": ["DNS_RFC2136_KEY_SECRET"]
+                      }
+                    },
+                    "required": ["secret"]
+                  }
+                }
+              ],
               "additionalProperties": false
             },
             "networkFulfillment": {

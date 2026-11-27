@@ -122,7 +122,7 @@ var _ = Describe("Token", func() {
 			Expect(jweHeader["zip"]).To(Equal("DEF"))
 
 			// Serve JWKS from the sealer for verification.
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -152,7 +152,7 @@ var _ = Describe("Token", func() {
 			tokenString, _, err := sealer.Seal(ctx, "admin", audience, nil, 30*time.Second)
 			Expect(err).ToNot(HaveOccurred())
 
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -178,7 +178,7 @@ var _ = Describe("Token", func() {
 			tokenString, _, err := sealer.Seal(ctx, "jane", audience, nil, -10*time.Second)
 			Expect(err).ToNot(HaveOccurred())
 
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -203,7 +203,7 @@ var _ = Describe("Token", func() {
 			tokenString, _, err := sealer.Seal(ctx, "jane", audience, nil, 30*time.Second)
 			Expect(err).ToNot(HaveOccurred())
 
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -236,7 +236,7 @@ var _ = Describe("Token", func() {
 			wrongCertFile := filepath.Join(tmpDir, "wrong-key.crt")
 			generateLeafCert(wrongCertFile, wrongKeyFile, "wrong", testCA)
 
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -274,7 +274,7 @@ var _ = Describe("Token", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Serve JWKS from the *original* sealer (different signing key).
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -335,7 +335,7 @@ var _ = Describe("Token", func() {
 			tokenString, _, err := sealer.Seal(ctx, "jane", "aud-a", nil, 30*time.Second)
 			Expect(err).ToNot(HaveOccurred())
 
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -358,7 +358,7 @@ var _ = Describe("Token", func() {
 			tokenString, _, err := sealer.Seal(ctx, "jane", "my-service", nil, 30*time.Second)
 			Expect(err).ToNot(HaveOccurred())
 
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -416,7 +416,7 @@ var _ = Describe("Token", func() {
 				Serialize(tok)
 			Expect(err).ToNot(HaveOccurred())
 
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			// Opener configured for "aud-b" should accept this token because
@@ -560,7 +560,7 @@ var _ = Describe("Token", func() {
 
 	Describe("Opener JWKS refresh", func() {
 		It("Refreshes JWKS and succeeds when the signing key rotates", func() {
-			jwksServer, jwksCAPool := serveJWKS(sealer)
+			jwksServer, jwksCAPool, _ := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -597,8 +597,8 @@ var _ = Describe("Token", func() {
 			Expect(parsed2.Subject).To(Equal("jane"))
 		})
 
-		It("Concurrent Open calls succeed when refresh is in-flight", func() {
-			jwksServer, jwksCAPool, reqCount := serveSlowJWKS(sealer, 200*time.Millisecond)
+		It("Concurrent Open calls succeed with one JWKS refresh after rotation", func() {
+			jwksServer, jwksCAPool, reqCount := serveJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -645,8 +645,21 @@ var _ = Describe("Token", func() {
 				Expect(subs[i]).To(Equal(fmt.Sprintf("user-%d", i)))
 			}
 
-			// Build() fetches once. After rotation, singleflight coalesces
-			// all concurrent refreshes into one additional request.
+			// Cache registration and key rotation each fetch once.
+			Expect(reqCount.Load()).To(Equal(int32(2)))
+
+			// Model a caller that saw the old set but reached refreshJWKS
+			// after the first refresh finished.
+			set, err := sealer.JWKSet(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			key, ok := set.Key(0)
+			Expect(ok).To(BeTrue())
+			kid, ok := key.KeyID()
+			Expect(ok).To(BeTrue())
+			resource, err := opener.cache.LookupResource(ctx, jwksServer.URL)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = opener.refreshJWKS(ctx, kid, resource)
+			Expect(err).ToNot(HaveOccurred())
 			Expect(reqCount.Load()).To(Equal(int32(2)))
 		})
 	})
@@ -682,34 +695,12 @@ func newTestCache(serverURL string, caPool *x509.CertPool) *jwk.Cache {
 	return cache
 }
 
-// serveJWKS starts a TLS test server serving the sealer's JWKS and returns
-// the server along with a CA pool that trusts its certificate.
-func serveJWKS(sealer *Sealer) (*httptest.Server, *x509.CertPool) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		set, err := sealer.JWKSet(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(set); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}))
-	pool := x509.NewCertPool()
-	pool.AddCert(server.Certificate())
-	return server, pool
-}
-
-// serveSlowJWKS is like serveJWKS but delays the first response by the
-// given duration. Returns an atomic request counter.
-func serveSlowJWKS(sealer *Sealer, firstDelay time.Duration) (*httptest.Server, *x509.CertPool, *atomic.Int32) {
+// serveJWKS serves the sealer's JWKS over TLS and returns the server,
+// its CA pool, and a request counter.
+func serveJWKS(sealer *Sealer) (*httptest.Server, *x509.CertPool, *atomic.Int32) {
 	var reqCount atomic.Int32
-	var once sync.Once
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqCount.Add(1)
-		once.Do(func() { time.Sleep(firstDelay) })
 		set, err := sealer.JWKSet(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

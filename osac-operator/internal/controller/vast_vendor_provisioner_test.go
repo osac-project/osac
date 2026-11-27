@@ -33,6 +33,8 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
+const fixtureVendorPreparedPassword = "prepared-password"
+
 // fakeCSIClient records the last request and returns canned responses/errors.
 type fakeCSIClient struct {
 	createReq  *csi.CreateVolumeRequest
@@ -262,7 +264,7 @@ func TestVastVendorProvisionerNFSUsesResolvedPreparation(t *testing.T) {
 		ManagementEndpoint: "https://vast-manager.example.com",
 		StorageTenant:      "acme-on-vast",
 		Username:           "prepared-user",
-		Password:           "prepared-password",
+		Password:           fixtureVendorPreparedPassword,
 		RootExport:         "/acme/claas",
 		ViewPolicy:         "acme-claas",
 		NFSAddress:         "acme-nfs.example.com",
@@ -290,7 +292,7 @@ func TestVastVendorProvisionerNFSUsesResolvedPreparation(t *testing.T) {
 	}
 	wantSecrets := map[string]string{
 		"username": "prepared-user",
-		"password": "prepared-password",
+		"password": fixtureVendorPreparedPassword,
 		"endpoint": "https://vast-manager.example.com",
 		"tenant":   "acme-on-vast",
 	}
@@ -319,7 +321,7 @@ func TestVastVendorProvisionerNFSDeleteUsesResolvedPreparation(t *testing.T) {
 		ManagementEndpoint: "https://vast-manager.example.com",
 		StorageTenant:      "acme-on-vast",
 		Username:           "prepared-user",
-		Password:           "prepared-password",
+		Password:           fixtureVendorPreparedPassword,
 	}
 
 	err := provisioner.DeleteVolume(t.Context(), VendorDeleteVolumeRequest{
@@ -338,7 +340,7 @@ func TestVastVendorProvisionerNFSDeleteUsesResolvedPreparation(t *testing.T) {
 	}
 	wantSecrets := map[string]string{
 		"username": "prepared-user",
-		"password": "prepared-password",
+		"password": fixtureVendorPreparedPassword,
 		"endpoint": "https://vast-manager.example.com",
 		"tenant":   "acme-on-vast",
 	}
@@ -352,7 +354,7 @@ func TestValidateVASTNFSConfigForCreateRequiresDataFQDN(t *testing.T) {
 		ManagementEndpoint: "https://vast-manager.example.com",
 		StorageTenant:      "acme-on-vast",
 		Username:           "prepared-user",
-		Password:           "prepared-password",
+		Password:           fixtureVendorPreparedPassword,
 		RootExport:         "/acme/claas",
 		ViewPolicy:         "acme-claas",
 		VIPPoolName:        "pool-east",

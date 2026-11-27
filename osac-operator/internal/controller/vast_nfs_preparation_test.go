@@ -30,10 +30,16 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-const vastNFSPreparationFixtureBundle = "schema_version: 1\nprovider: vast\nstorage_tenant: acme-on-vast\n" +
+const fixtureVASTNFSPreparationBundle = "schema_version: 1\nprovider: vast\nstorage_tenant: acme-on-vast\n" +
 	"credentials:\n  username: fixture-user\n  password: fixture-password\n" +
 	"endpoints:\n  data: acme-nfs.example.com\n" +
 	"options:\n  root_export: /fixture\n  view_policy: fixture-policy\n"
+
+const fixtureVASTNFSPreparationVIPPoolBundle = "schema_version: 1\nprovider: vast\nstorage_tenant: acme-on-vast\n" +
+	"credentials:\n  username: fixture-user\n  password: fixture-password\n" +
+	"options:\n  root_export: /acme\n  view_policy: acme\n  vip_pool_name: pool-east\n"
+
+const fixtureLegacyBackendPassword = "legacy-password"
 
 type preparationTestBackends struct {
 	items map[string]*privatev1.StorageBackend
@@ -73,7 +79,7 @@ func (f *preparationTestSecrets) Get(_ context.Context, in *privatev1.SecretsGet
 			copy := item
 			payload := f.payload
 			if payload == "" {
-				payload = vastNFSPreparationFixtureBundle
+				payload = fixtureVASTNFSPreparationBundle
 			}
 			copy.SetData(map[string][]byte{"config.yaml": []byte(payload)})
 			return privatev1.SecretsGetResponse_builder{Object: copy}.Build(), nil
@@ -165,7 +171,7 @@ func TestResolveTenantVASTNFSPreparationsPreservesCredentialedPath(t *testing.T)
 	backend := endpointOnlyVASTBackend("backend-a", "vast-east")
 	backend.GetSpec().SetCredentials(privatev1.StorageBackendCredentials_builder{
 		Username: "legacy-admin",
-		Password: "legacy-password",
+		Password: fixtureLegacyBackendPassword,
 	}.Build())
 	backends := &preparationTestBackends{items: map[string]*privatev1.StorageBackend{"backend-a": backend}, calls: make(map[string]int)}
 	secrets := &preparationTestSecrets{items: []*privatev1.Secret{{
@@ -197,9 +203,7 @@ func TestResolveTenantVASTNFSPreparationsRequiresDataFQDN(t *testing.T) {
 		calls: make(map[string]int),
 	}
 	secrets := &preparationTestSecrets{
-		payload: "schema_version: 1\nprovider: vast\nstorage_tenant: acme-on-vast\n" +
-			"credentials:\n  username: fixture-user\n  password: fixture-password\n" +
-			"options:\n  root_export: /acme\n  view_policy: acme\n  vip_pool_name: pool-east\n",
+		payload: fixtureVASTNFSPreparationVIPPoolBundle,
 		items: []*privatev1.Secret{{
 			Id:       "secret-a",
 			Metadata: privatev1.Metadata_builder{Tenant: "system", Name: "acme--vast-east"}.Build(),
@@ -268,9 +272,7 @@ func TestResolveVASTNFSVolumeConfigRejectsVIPPoolNameOnly(t *testing.T) {
 		}.Build(),
 	}.Build()
 	secrets := &preparationTestSecrets{
-		payload: "schema_version: 1\nprovider: vast\nstorage_tenant: acme-on-vast\n" +
-			"credentials:\n  username: fixture-user\n  password: fixture-password\n" +
-			"options:\n  root_export: /acme\n  view_policy: acme\n  vip_pool_name: pool-east\n",
+		payload: fixtureVASTNFSPreparationVIPPoolBundle,
 		items: []*privatev1.Secret{{
 			Id:       "secret-a",
 			Metadata: privatev1.Metadata_builder{Tenant: "system", Name: "acme--vast-east"}.Build(),

@@ -1132,6 +1132,25 @@ printf 'new Kind credentials and unrelated context\\n'
                                  [[path] for path in expected])
                 self.assertEqual([Path(path).resolve() for path in cleanup], expected)
 
+    def test_fulfillment_compiles_before_starting_service_suite_timeout(self):
+        # Ginkgo starts its deadline before compiling. Keep cold compilation
+        # outside the main suite allowance without changing its run or filters.
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=fulfillment", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        commands = result.stdout.splitlines()
+        builds = [index for index, line in enumerate(commands) if "ginkgo build " in line]
+        runs = [index for index, line in enumerate(commands) if "ginkgo run " in line]
+        self.assertEqual(len(builds), 1, "cold compilation must precede the timed root suite")
+        self.assertEqual(len(runs), 4)
+        self.assertLess(builds[0], runs[0])
+        self.assertEqual(shlex.split(commands[builds[0]])[-3:], ["ginkgo", "build", "it"])
+        self.assertIn("--timeout 1h30m", commands[runs[0]])
+        self.assertIn("--skip 'Networking with operator|ComputeInstance storage handoff'", commands[runs[0]])
+
     def test_fulfillment_service_only_phase_runs_without_the_operator(self):
         # The service-only specs report networking and tenant status through the
         # private API in place of the operator's feedback controllers. A running

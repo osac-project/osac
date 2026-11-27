@@ -14,7 +14,7 @@ from tests.e2e.core.runner import poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.teardown import teardown_sg, teardown_subnets, teardown_vnet
 
-pytestmark = pytest.mark.sanity
+pytestmark = pytest.mark.regression
 
 
 def _wait_for_security_group_api_ready(*, grpc: GRPCClient, security_group_id: str) -> None:

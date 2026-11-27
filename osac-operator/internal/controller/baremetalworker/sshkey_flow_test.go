@@ -216,7 +216,7 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			return r, co
 		}
 
-		DescribeTable("requeues InfraEnv creation until the referenced SSH key becomes usable", func(secretErr error) {
+		DescribeTable("returns a configuration error until the referenced SSH key becomes usable", func(secretErr error, message string) {
 			ctx := context.Background()
 			r, co := setUpOrder()
 			secrets := &stubWorkerSecretsClient{err: secretErr}
@@ -226,8 +226,8 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			ieKey := client.ObjectKey{Name: assistedservice.InfraEnvName(co.Name), Namespace: co.Namespace}
 
 			result, err := r.Reconcile(ctx, req)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}))
+			Expect(err).To(MatchError(And(ContainSubstring("pending-key"), ContainSubstring(message))))
+			Expect(result.IsZero()).To(BeTrue())
 			Expect(apierrors.IsNotFound(r.Get(ctx, ieKey, ie))).To(BeTrue(), "no InfraEnv should be created without the referenced key")
 			Expect(r.Get(ctx, req.NamespacedName, co)).To(Succeed())
 			cond := conditionOfType(co, v1alpha1.ConditionInfraEnvReady)
@@ -246,8 +246,8 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			Expect(found).To(BeTrue())
 			Expect(key).To(Equal(sshFlowKeyMaterial))
 		},
-			Entry("lookup returns NotFound", status.Error(codes.NotFound, "secret not found")),
-			Entry("Secret has no public key", nil),
+			Entry("lookup returns NotFound", status.Error(codes.NotFound, "secret not found"), "not found"),
+			Entry("Secret has no public key", nil, "no public_key data"),
 		)
 
 		It("returns operational Secrets API failures for backoff", func() {

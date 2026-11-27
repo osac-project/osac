@@ -24,6 +24,8 @@ import (
 // unexpectedly large or hostile response. Discovery ignition is ~15KB in practice.
 const maxIgnitionBytes = 1 << 20 // 1 MiB
 
+var errIgnitionTooLarge = fmt.Errorf("discovery ignition response exceeds the %d-byte read limit", maxIgnitionBytes)
+
 // IgnitionFetcher is the seam the bare-metal worker reconciler uses to fetch discovery ignition
 // from an InfraEnv's boot-artifacts endpoint (assisted-service). It is separate from
 // FulfillmentClient because it targets a different service over HTTP, not the fulfillment-service
@@ -61,16 +63,17 @@ func (f *ignitionFetcher) FetchIgnition(ctx context.Context, url string) ([]byte
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxIgnitionBytes))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("fetching ignition: unexpected HTTP status %d", resp.StatusCode)
+	}
+	// Read one extra byte to distinguish a response at the limit from an
+	// oversized response whose prefix might itself be valid JSON.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxIgnitionBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading ignition body: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet := body
-		if len(snippet) > 256 {
-			snippet = snippet[:256]
-		}
-		return nil, fmt.Errorf("fetching ignition: unexpected status %d: %s", resp.StatusCode, snippet)
+	if len(body) > maxIgnitionBytes {
+		return nil, errIgnitionTooLarge
 	}
 	return body, nil
 }

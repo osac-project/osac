@@ -80,9 +80,9 @@ func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterO
 		return ctrl.Result{}, creationErr
 	}
 	if !finishRes.IsZero() {
-		return mergeWorkerWaits(infraRes, creationRes, finishRes), nil
+		return finishRes, nil
 	}
-	return mergeWorkerWaits(infraRes, creationRes, r.workerRecheckDeadline(co.Status.Workers, time.Now())), nil
+	return mergeWorkerWaits(creationRes, r.workerRecheckDeadline(co.Status.Workers, time.Now())), nil
 }
 
 // mergeWorkerWaits keeps the earliest positive recheck delay, clamped so a

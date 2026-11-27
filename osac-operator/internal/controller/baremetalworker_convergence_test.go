@@ -1735,12 +1735,12 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(ignition.Calls()).To(Equal(fetches))
 		Expect(fc.CreateCalls()).To(HaveLen(creates))
 
-		// Cleanup proceeds while the missing pull secret remains a scheduled wait.
+		// Cleanup proceeds before the reconcile surfaces the pull secret error.
 		for i := 0; i < 4 && len(fc.DeleteCalls()) == 0; i++ {
 			result, err = run()
-			Expect(err).NotTo(HaveOccurred())
 		}
-		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(err).To(MatchError(ContainSubstring("no pull secret available")))
+		Expect(result.IsZero()).To(BeTrue())
 		cond := apimeta.FindStatusCondition(getOrder().Status.Conditions, api.ConditionInfraEnvReady)
 		Expect(cond).NotTo(BeNil())
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -1846,8 +1846,8 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		creates, deletes := len(fc.CreateCalls()), len(fc.DeleteCalls())
 
 		res, err := run()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(err).To(MatchError(ContainSubstring("DiskImage missing-image")))
+		Expect(res.IsZero()).To(BeTrue())
 		latest := getOrder()
 		Expect(apimeta.IsStatusConditionTrue(latest.Status.Conditions, api.ConditionRHCOSImageNotFound)).To(BeTrue())
 		Expect(latest.Status.ReadyWorkers).To(HaveValue(Equal(int32(0))))

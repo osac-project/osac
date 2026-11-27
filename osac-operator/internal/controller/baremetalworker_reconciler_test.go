@@ -205,10 +205,16 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 
+		res, err = runReconcile("bmw-green")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}))
+		Expect(ign.Calls()).To(BeZero())
+		Expect(fc.CreateCalls()).To(BeEmpty())
+
 		// Fixture makes the discovery ignition available at the fake endpoint.
 		Expect(setWorkerIgnitionURL(ctx, "bmw-green-infraenv", testNamespace, ign.URL())).To(Succeed())
 
-		// Second reconcile: ignition fetched, InfraEnvReady=True, requeues for agent correlation.
+		// Once the URL is published, ignition is fetched and InfraEnvReady becomes true.
 		res, err = runReconcile("bmw-green")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(res.RequeueAfter).To(BeNumerically(">", 0), "requeues for agent correlation")
@@ -363,51 +369,55 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(err).To(HaveOccurred(), "an unmanaged ClusterOrder must be skipped (no InfraEnv)")
 	})
 
-	It("keeps a fixed retry for invalid discovery ignition and recovers after HTTP-only repair", func() {
-		preloadDiskImageChain()
-		const name = "bmw-invalid-ignition"
-		create(newBareMetalClusterOrder(name))
-		ign.SetContent([]byte("not-json"))
+	DescribeTable("returns an error for unusable discovery ignition and recovers after HTTP-only repair",
+		func(name, message string, configure func(*workerIgnitionEndpoint)) {
+			preloadDiskImageChain()
+			create(newBareMetalClusterOrder(name))
+			configure(ign)
 
-		_, err := runReconcile(name)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(setWorkerIgnitionURL(ctx, name+"-infraenv", testNamespace, ign.URL())).To(Succeed())
+			_, err := runReconcile(name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(setWorkerIgnitionURL(ctx, name+"-infraenv", testNamespace, ign.URL())).To(Succeed())
 
-		res, err := runReconcile(name)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}))
-		blocked := getClusterOrder(name)
-		cond := apimeta.FindStatusCondition(blocked.Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
-		Expect(cond).NotTo(BeNil())
-		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-		Expect(cond.Reason).To(Equal("IgnitionInvalid"))
-
-		// Drive successive retries without sleeping or changing any Kubernetes inputs.
-		const attempts = 20
-		for i := 1; i < attempts; i++ {
 			res, err := runReconcile(name)
-			Expect(err).NotTo(HaveOccurred(), "attempt %d", i+1)
-			Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}), "attempt %d", i+1)
-		}
-		Expect(ign.Calls()).To(Equal(attempts))
-		Expect(fc.CreateCalls()).To(BeEmpty())
-		Expect(getClusterOrder(name).ResourceVersion).To(Equal(blocked.ResourceVersion),
-			"unchanged invalid content must leave status unchanged")
+			Expect(err).To(MatchError(And(ContainSubstring("InfraEnv "+testNamespace+"/"+name+"-infraenv"), ContainSubstring(message))))
+			Expect(res.IsZero()).To(BeTrue())
+			blocked := getClusterOrder(name)
+			cond := apimeta.FindStatusCondition(blocked.Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("IgnitionInvalid"))
+			Expect(cond.Message).To(ContainSubstring(message))
 
-		// The next scheduled reconcile sees the repaired response at the same URL.
-		ign.SetContent(defaultIgnition)
-		_, err = runReconcile(name)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fc.CreateCalls()).To(HaveLen(1))
-		Expect(apimeta.IsStatusConditionTrue(
-			getClusterOrder(name).Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)).To(BeTrue())
+			res, err = runReconcile(name)
+			Expect(err).To(MatchError(ContainSubstring(message)))
+			Expect(res.IsZero()).To(BeTrue())
+			Expect(ign.Calls()).To(Equal(2))
+			Expect(fc.CreateCalls()).To(BeEmpty())
+			Expect(getClusterOrder(name).ResourceVersion).To(Equal(blocked.ResourceVersion),
+				"unchanged invalid content must leave status unchanged")
 
-		_, err = runReconcile(name)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fc.CreateCalls()).To(HaveLen(1), "recovery must not allocate a duplicate worker")
-	})
+			// The next scheduled reconcile sees the repaired response at the same URL.
+			ign.SetContent(defaultIgnition)
+			_, err = runReconcile(name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fc.CreateCalls()).To(HaveLen(1))
+			Expect(apimeta.IsStatusConditionTrue(
+				getClusterOrder(name).Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)).To(BeTrue())
 
-	It("retries a missing pull secret and creates the InfraEnv when the Secret appears", func() {
+			_, err = runReconcile(name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fc.CreateCalls()).To(HaveLen(1), "recovery must not allocate a duplicate worker")
+		},
+		Entry("malformed JSON", "bmw-invalid-ignition", "not valid JSON", func(ign *workerIgnitionEndpoint) {
+			ign.SetContent([]byte("not-json"))
+		}),
+		Entry("oversized response", "bmw-oversized-ignition", "exceeds the 1048576-byte read limit", func(ign *workerIgnitionEndpoint) {
+			ign.SetSize(1<<20 + 1)
+		}),
+	)
+
+	It("reports a missing pull secret as an error and creates the InfraEnv after repair", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-no-pull-secret")
 		co.Spec.PullSecret = ""
@@ -416,8 +426,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		ie := newInfraEnv(co.Name + "-infraenv")
 		for range 2 {
 			res, err := runReconcile(co.Name)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}))
+			Expect(err).To(MatchError(ContainSubstring("no pull secret available")))
+			Expect(res.IsZero()).To(BeTrue())
 			cond := apimeta.FindStatusCondition(getClusterOrder(co.Name).Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -441,7 +451,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(cond.Reason).To(Equal("IgnitionPending"))
 	})
 
-	DescribeTable("retries a missing image prerequisite until the Fulfillment catalog is repaired",
+	DescribeTable("returns missing image configuration as an error until the Fulfillment catalog is repaired",
 		func(name, message string, block func(*workerFulfillmentStub)) {
 			preloadDiskImageChain()
 			block(fc)
@@ -452,8 +462,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 
 			for range 2 {
 				res, err := runReconcile(name)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(res).To(Equal(reconcile.Result{RequeueAfter: 30 * time.Second}))
+				Expect(err).To(MatchError(ContainSubstring(message)))
+				Expect(res.IsZero()).To(BeTrue())
 				cond := apimeta.FindStatusCondition(getClusterOrder(name).Status.Conditions, osacv1alpha1.ConditionRHCOSImageNotFound)
 				Expect(cond).NotTo(BeNil())
 				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -812,11 +822,13 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", Label("baremetalw
 
 		co := newBareMetalClusterOrder("bmw-nodisk", map[string]string{clusterIDLabel: clusterUUID})
 		create(co)
-		makeInfraEnvReady("bmw-nodisk")
+		_, err := runReconcile(co.Name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(setWorkerIgnitionURL(ctx, co.Name+"-infraenv", testNamespace, ign.URL())).To(Succeed())
 
-		res, err := runReconcile("bmw-nodisk")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+		res, err := runReconcile(co.Name)
+		Expect(err).To(MatchError(ContainSubstring("has no disk_image reference")))
+		Expect(res.IsZero()).To(BeTrue())
 		Expect(fc.CreateCalls()).To(BeEmpty())
 
 		cond := apimeta.FindStatusCondition(
@@ -851,10 +863,12 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", Label("baremetalw
 
 		co := newBareMetalClusterOrder("bmw-clear", map[string]string{clusterIDLabel: clusterUUID})
 		create(co)
-		makeInfraEnvReady("bmw-clear")
+		_, err := runReconcile(co.Name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(setWorkerIgnitionURL(ctx, co.Name+"-infraenv", testNamespace, ign.URL())).To(Succeed())
 
-		_, err := runReconcile("bmw-clear")
-		Expect(err).ToNot(HaveOccurred())
+		_, err = runReconcile(co.Name)
+		Expect(err).To(MatchError(ContainSubstring("has no disk_image reference")))
 		cond := apimeta.FindStatusCondition(
 			getClusterOrder("bmw-clear").Status.Conditions, osacv1alpha1.ConditionRHCOSImageNotFound)
 		Expect(cond).ToNot(BeNil())
@@ -1087,7 +1101,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(netAttachments[0].GetSecurityGroups()[0].GetName()).To(Equal("sg-default"))
 	})
 
-	It("does not create catalog item or BMI when the requested BMIT is not found", func() {
+	It("reports missing instance type configuration without creating a catalog item or BMI", func() {
 		fc.AddCluster(privatev1.Cluster_builder{
 			Id:       clusterUUID,
 			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
@@ -1120,16 +1134,22 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 
 		Expect(setWorkerIgnitionURL(ctx, "bmw-bmit-missing-infraenv", testNamespace, ign.URL())).To(Succeed())
 
-		// The missing requested BMIT keeps the order on the blocked/requeue path.
-		res, err = runReconcile("bmw-bmit-missing")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+		instanceType := co.Spec.NodeRequests[0].BareMetal.InstanceType
+		res, err = runReconcile(co.Name)
+		Expect(err).To(MatchError(ContainSubstring("BareMetalInstanceType " + instanceType)))
+		Expect(res.IsZero()).To(BeTrue())
 		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
 		Expect(fc.CreateCalls()).To(BeEmpty())
-		pending := getClusterOrder("bmw-bmit-missing").Status.Workers
+		pending := getClusterOrder(co.Name).Status.Workers
 		Expect(pending).To(HaveLen(1))
 		Expect(pending[0].BareMetalInstance.ID).To(BeEmpty())
 		Expect(pending[0].Phase).To(Equal("Provisioning"))
+
+		fc.AddBareMetalInstanceType(newInstanceType(instanceType, "data-0"))
+		_, err = runReconcile(co.Name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
 	})
 
 	It("creates a BMI without a catalog item after resolving a usable BMIT", func() {

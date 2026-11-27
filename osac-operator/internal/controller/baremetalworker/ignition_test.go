@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package baremetalworker
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -70,7 +71,28 @@ var _ = Describe("IgnitionFetcher", func() {
 		Expect(string(body)).To(Equal("ignition-content"))
 	})
 
-	It("errors on a non-2xx response and includes a body snippet", func() {
+	DescribeTable("enforces the byte limit even when the prefix is a complete JSON document", func(extra []byte, wantErr bool) {
+		body := append([]byte(`{}`), bytes.Repeat([]byte(" "), maxIgnitionBytes-2)...)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(body)
+			_, _ = w.Write(extra)
+		}))
+		defer srv.Close()
+
+		got, err := NewIgnitionFetcher(nil).FetchIgnition(ctx, srv.URL)
+		if wantErr {
+			Expect(err).To(MatchError(ContainSubstring("exceeds the 1048576-byte read limit")))
+			Expect(got).To(BeNil())
+			return
+		}
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(HaveLen(maxIgnitionBytes))
+	},
+		Entry("accepts exactly the limit", []byte(nil), false),
+		Entry("rejects a byte beyond the limit", []byte("x"), true),
+	)
+
+	It("reports the HTTP status without exposing the response body", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte("boom detail"))
@@ -80,7 +102,7 @@ var _ = Describe("IgnitionFetcher", func() {
 		_, err := NewIgnitionFetcher(nil).FetchIgnition(ctx, srv.URL)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("500"))
-		Expect(err.Error()).To(ContainSubstring("boom detail"))
+		Expect(err.Error()).NotTo(ContainSubstring("boom detail"))
 	})
 
 	It("applies the per-call deadline to the request", func() {

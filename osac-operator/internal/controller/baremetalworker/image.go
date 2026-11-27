@@ -11,8 +11,6 @@ import (
 	"google.golang.org/grpc/status"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -27,48 +25,47 @@ const (
 // private API and validates the referenced DiskImage. It returns the canonical DiskImage
 // reference; fulfillment-service resolves its source URL when it materializes the provider CR.
 // It re-resolves on every reconcile so a ClusterVersion upgrade takes effect without controller
-// restart. Missing version or image catalog data blocks worker creation with a fixed
-// retry. Other lookup failures remain errors.
+// restart. Missing version or image catalog data blocks worker creation and is
+// reported in status as well as returned for error backoff.
 func (r *Reconciler) resolveDiskImage(
 	ctx context.Context, co *v1alpha1.ClusterOrder,
-) (*privatev1.DiskImageReference, ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
+) (*privatev1.DiskImageReference, error) {
 	clusterID := co.Labels[clusterOrderIDLabel]
 	if clusterID == "" {
-		log.Info("ClusterOrder missing clusterorder-uuid label, requeuing")
-		return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
+		return nil, fmt.Errorf("ClusterOrder missing %s label", clusterOrderIDLabel)
 	}
 
 	cluster, err := r.fulfillment.GetCluster(ctx, clusterID)
 	if err != nil {
-		return nil, ctrl.Result{}, fmt.Errorf("getting cluster %s: %w", clusterID, err)
+		return nil, fmt.Errorf("getting cluster %s: %w", clusterID, err)
 	}
 
 	versionID := cluster.GetSpec().GetVersion().GetId()
 	if versionID == "" {
-		return r.waitForDiskImage(ctx, co, fmt.Sprintf("cluster %s has no version reference", clusterID))
+		return nil, r.reportDiskImageConfigError(ctx, co, fmt.Errorf("cluster %s has no version reference", clusterID))
 	}
 
 	cv, err := r.fulfillment.GetClusterVersion(ctx, versionID)
-	if status.Code(err) == codes.NotFound {
-		return r.waitForDiskImage(ctx, co, fmt.Sprintf("ClusterVersion %s not found", versionID))
-	}
 	if err != nil {
-		return nil, ctrl.Result{}, fmt.Errorf("getting cluster version %s: %w", versionID, err)
+		lookupErr := fmt.Errorf("getting ClusterVersion %s: %w", versionID, err)
+		if status.Code(err) == codes.NotFound {
+			return nil, r.reportDiskImageConfigError(ctx, co, lookupErr)
+		}
+		return nil, lookupErr
 	}
 
 	diskImageKey := refKeyStr(cv.GetSpec().GetDiskImage())
 	if diskImageKey == "" {
-		return r.waitForDiskImage(ctx, co, fmt.Sprintf("ClusterVersion %s has no disk_image reference", versionID))
+		return nil, r.reportDiskImageConfigError(ctx, co, fmt.Errorf("ClusterVersion %s has no disk_image reference", versionID))
 	}
 
 	di, err := r.fulfillment.GetDiskImage(ctx, diskImageKey)
-	if status.Code(err) == codes.NotFound {
-		return r.waitForDiskImage(ctx, co, fmt.Sprintf("DiskImage %s not found", diskImageKey))
-	}
 	if err != nil {
-		return nil, ctrl.Result{}, fmt.Errorf("getting disk image %s: %w", diskImageKey, err)
+		lookupErr := fmt.Errorf("getting DiskImage %s: %w", diskImageKey, err)
+		if status.Code(err) == codes.NotFound {
+			return nil, r.reportDiskImageConfigError(ctx, co, lookupErr)
+		}
+		return nil, lookupErr
 	}
 	image := privatev1.DiskImageReference_builder{
 		Id:   di.GetId(),
@@ -78,20 +75,18 @@ func (r *Reconciler) resolveDiskImage(
 	if apimeta.IsStatusConditionTrue(co.Status.Conditions, v1alpha1.ConditionRHCOSImageNotFound) {
 		if condErr := r.setRHCOSImageNotFound(ctx, co, metav1.ConditionFalse, reasonDiskImageResolved,
 			"disk_image reference resolved"); condErr != nil {
-			return nil, ctrl.Result{}, condErr
+			return nil, condErr
 		}
 	}
 
-	return image, ctrl.Result{}, nil
+	return image, nil
 }
 
-func (r *Reconciler) waitForDiskImage(
-	ctx context.Context, co *v1alpha1.ClusterOrder, message string,
-) (*privatev1.DiskImageReference, ctrl.Result, error) {
-	if err := r.setRHCOSImageNotFound(ctx, co, metav1.ConditionTrue, reasonDiskImageNotFound, message); err != nil {
-		return nil, ctrl.Result{}, err
+func (r *Reconciler) reportDiskImageConfigError(ctx context.Context, co *v1alpha1.ClusterOrder, configErr error) error {
+	if err := r.setRHCOSImageNotFound(ctx, co, metav1.ConditionTrue, reasonDiskImageNotFound, configErr.Error()); err != nil {
+		return err
 	}
-	return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
+	return configErr
 }
 
 // refKeyStr derives the lookup key for a DiskImage reference, mirroring the ComputeInstance

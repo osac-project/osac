@@ -186,22 +186,15 @@ func (r *Reconciler) buildBMICreateRequest(
 	}.Build(), nil
 }
 
-func (r *Reconciler) resolveNodeSetInstanceType(
-	ctx context.Context, co *v1alpha1.ClusterOrder, instanceTypeName string,
-) (*privatev1.BareMetalInstanceType, ctrl.Result, error) {
+func (r *Reconciler) checkNodeSetInstanceType(ctx context.Context, instanceTypeName string) error {
 	it, err := r.fulfillment.GetBareMetalInstanceType(ctx, instanceTypeName)
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			ctrllog.FromContext(ctx).Info("BareMetalInstanceType not found, requeuing", "instanceType", instanceTypeName)
-			return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
-		}
-		return nil, ctrl.Result{}, fmt.Errorf("getting BareMetalInstanceType %s: %w", instanceTypeName, err)
+		return fmt.Errorf("getting BareMetalInstanceType %s: %w", instanceTypeName, err)
 	}
 	if it == nil {
-		ctrllog.FromContext(ctx).Info("BareMetalInstanceType is empty, requeuing", "instanceType", instanceTypeName)
-		return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
+		return fmt.Errorf("BareMetalInstanceType %s lookup returned no object", instanceTypeName)
 	}
-	return it, ctrl.Result{}, nil
+	return nil
 }
 
 // checkBMIRecoveryCandidate applies only to creation/name recovery. Existing

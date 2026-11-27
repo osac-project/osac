@@ -185,8 +185,8 @@ var _ = Describe("Worker observation read budget", func() {
 			_ = unstructured.SetNestedSlice(a.Object, []interface{}{map[string]interface{}{"macAddress": "aa"}}, "status", "inventory", "interfaces")
 			Expect(r.Create(context.Background(), a)).To(Succeed())
 			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(res).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}), "expected a wait at the pull-secret gate")
+			Expect(err).To(MatchError(ContainSubstring("no pull secret available")))
+			Expect(res.IsZero()).To(BeTrue())
 			wantGets := 0
 			if omitted {
 				wantGets = 1
@@ -428,8 +428,8 @@ var _ = It("cleans up workers without image or ignition prerequisites", func() {
 	// Cleanup proceeds on the next invocation even though the missing pull secret
 	// is still reported, and it never fetches discovery ignition.
 	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-	Expect(err).NotTo(HaveOccurred())
-	Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+	Expect(err).To(MatchError(ContainSubstring("no pull secret available")))
+	Expect(res.IsZero()).To(BeTrue())
 	Expect(r.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
 	cond := apimeta.FindStatusCondition(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)
 	Expect(cond).NotTo(BeNil())
@@ -571,8 +571,8 @@ var _ = It("persists the worker summary while creation waits for the disk image"
 	co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "ready", reasonInfraEnvReady)
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-	Expect(err).NotTo(HaveOccurred())
-	Expect(res).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}))
+	Expect(status.Code(err)).To(Equal(codes.NotFound))
+	Expect(res.IsZero()).To(BeTrue())
 	Expect(r.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
 	Expect(apimeta.IsStatusConditionTrue(co.Status.Conditions, v1alpha1.ConditionRHCOSImageNotFound)).To(BeTrue())
 	Expect(co.Status.ReadyWorkers).NotTo(BeNil(), "stale ready summary was not demoted before the create gate: %+v", co.Status)
@@ -1009,7 +1009,7 @@ var _ = Describe("Worker discovery ignition prerequisites", func() {
 		Entry("fetch timeout", context.DeadlineExceeded),
 	)
 
-	It("recovers on a fixed retry when its invalid-ignition condition updates are filtered", func() {
+	It("recovers after a reconcile error when its invalid-ignition condition updates are filtered", func() {
 		ctx := context.Background()
 		r, fc, co := workerCreationHarness()
 		r.fulfillment = &workerImageClient{workerReadClient: fc}
@@ -1018,15 +1018,16 @@ var _ = Describe("Worker discovery ignition prerequisites", func() {
 		co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "previously fetched", reasonInfraEnvReady)
 		Expect(r.Status().Update(ctx, co)).To(Succeed())
 		createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", "http://ignition.test"))
-		ignition := &ignitionFetcherStub{body: []byte("not-json")}
+		const invalidBody = "synthetic sensitive body, not JSON"
+		ignition := &ignitionFetcherStub{body: []byte(invalidBody)}
 		r.ignition = ignition
 		request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)}
 		filter := workerClusterOrderChangedPredicate()
 
 		before := co.DeepCopy()
 		res, err := r.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(res).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}))
+		Expect(err).To(MatchError(And(ContainSubstring("not valid JSON"), Not(ContainSubstring(invalidBody)))))
+		Expect(res.IsZero()).To(BeTrue())
 		Expect(r.Get(ctx, request.NamespacedName, co)).To(Succeed())
 		Expect(filter.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: co})).To(BeFalse())
 		cond := apimeta.FindStatusCondition(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)
@@ -1039,8 +1040,8 @@ var _ = Describe("Worker discovery ignition prerequisites", func() {
 		counter := &statusPatchCountingClient{Client: r.Client}
 		r.Client = counter
 		res, err = r.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(res).To(Equal(ctrl.Result{RequeueAfter: infraEnvRequeueInterval}))
+		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
+		Expect(res.IsZero()).To(BeTrue())
 		Expect(counter.patches).To(BeZero(), "unchanged blocked evidence wrote status")
 
 		// Only the external response changes; explicit calls represent scheduled retries.

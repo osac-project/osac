@@ -119,9 +119,9 @@ func (r *Reconciler) resolveWorkerCreationInputs(
 	if err != nil || !res.IsZero() {
 		return workerCreationInputs{}, res, err
 	}
-	image, res, err := r.resolveDiskImage(ctx, co)
-	if err != nil || !res.IsZero() {
-		return workerCreationInputs{}, res, err
+	image, err := r.resolveDiskImage(ctx, co)
+	if err != nil {
+		return workerCreationInputs{}, ctrl.Result{}, err
 	}
 	return workerCreationInputs{image: image, ignition: ignition}, ctrl.Result{}, nil
 }
@@ -269,9 +269,8 @@ func (r *Reconciler) createSelectedWorker(
 	nr *v1alpha1.NodeRequest, prev *v1alpha1.WorkerStatus,
 	inputs workerCreationInputs, observed *workerObservation,
 ) (ctrl.Result, error) {
-	_, res, err := r.resolveNodeSetInstanceType(ctx, co, nr.BareMetal.InstanceType)
-	if err != nil || !res.IsZero() {
-		return res, err
+	if err := r.checkNodeSetInstanceType(ctx, nr.BareMetal.InstanceType); err != nil {
+		return ctrl.Result{}, err
 	}
 	if na := co.Spec.NetworkAttachment; na != nil && na.SubnetRef != "" && nr.FabricInterface == "" {
 		return ctrl.Result{}, fmt.Errorf("node request %q has no stored fabric interface for network attachment", nr.NodeSet)
@@ -299,6 +298,8 @@ func (r *Reconciler) createSelectedWorker(
 	if err := r.recordBMICreateAttempt(ctx, co, prev); err != nil {
 		return ctrl.Result{}, err
 	}
+	var res ctrl.Result
+	var err error
 	if prev.Phase == workerPhaseFailed {
 		res, err = r.retryFailedWorker(ctx, co, cluster, nr, prev, inputs.image, string(inputs.ignition), filter)
 	} else {

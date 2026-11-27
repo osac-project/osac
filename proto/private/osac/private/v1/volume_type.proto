@@ -19,12 +19,12 @@ import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
+import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/metering_type.proto";
 import "osac/private/v1/quota_type.proto";
 import "osac/private/v1/storage_common_type.proto";
-
-option (cleanapi.file).private = true;
+import "osac/private/v1/volume_common_type.proto";
 
 // Emit the public counterpart of this type into the osac.public.v1 package. Fields marked with
 // [(cleanapi.field).private = true] below (internal routing details) are stripped from the public
@@ -70,6 +70,11 @@ enum VolumeState {
   // The volume has been fully deprovisioned from the storage backend. The record may remain visible
   // until finalizers are removed and it is archived.
   VOLUME_STATE_DELETED = 5;
+
+  // The volume record exists but the storage control plane has not started
+  // provisioning yet. This is the initial state of every volume; it moves to
+  // CREATING once the operator picks the volume up.
+  VOLUME_STATE_PENDING = 6;
 }
 
 // Represents a block storage volume managed by the OSAC storage control plane.
@@ -105,8 +110,29 @@ message Volume {
 
 // CSI-style topology segments that constrain where a volume may be
 // provisioned. Providers interpret only the segments they support.
+// Visible only through the private API.
 message VolumeTopology {
+  option (cleanapi.message).private = true;
+
   map<string, string> segments = 1;
+}
+
+// Placement of the provisioned storage for an owned volume, supplied by the
+// owner's provisioning flow when the volume is created. Visible only through
+// the private API.
+message VolumeTarget {
+  option (cleanapi.message).private = true;
+
+  // Disk key on the owning workload ("boot", "disk-1", ...).
+  string disk_key = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Namespace where the provisioned storage is created — for a ComputeInstance,
+  // the namespace its virtual machine runs in.
+  string namespace = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Deterministic name of the provisioned storage object that the owner's
+  // workload references.
+  string data_volume_name = 3 [(buf.validate.field).string.min_len = 1];
 }
 
 // Defines the desired configuration for a Volume. All fields are immutable after creation.
@@ -124,7 +150,20 @@ message VolumeSpec {
   VolumeAccessMode access_mode = 3 [(buf.validate.field).enum.defined_only = true];
 
   // Optional CSI-style topology segments supplied by the volume requester.
-  VolumeTopology topology = 4;
+  // Visible only through the private API.
+  VolumeTopology topology = 4 [(cleanapi.field).private = true];
+
+  // Owning workload of the volume. Set only through the private API; absent
+  // for volumes that no workload owns.
+  VolumeOwner owner = 5;
+
+  // Disk image the volume is provisioned from, for image-backed boot disks.
+  // Absent for blank disks. Visible only through the private API.
+  DiskImageReference disk_image = 6 [(cleanapi.field).private = true];
+
+  // Provisioning placement for owned volumes. Visible only through the
+  // private API.
+  VolumeTarget target = 7 [(cleanapi.field).private = true];
 }
 
 // Represents the current operational state of a Volume.

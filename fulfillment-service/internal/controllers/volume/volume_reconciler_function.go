@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -42,6 +43,15 @@ import (
 )
 
 const objectPrefix = "vol-"
+
+// requeueOwnerHubDelay is the retry delay used while the owning workload's
+// hub cannot be resolved yet.
+const requeueOwnerHubDelay = time.Second
+
+// errOwnerScopeMismatch signals that a volume's owner belongs to another
+// tenant or project. The condition is permanent, so the reconcile marks the
+// volume FAILED instead of requeueing.
+var errOwnerScopeMismatch = errors.New("volume owner belongs to a different tenant or project")
 
 // FunctionBuilder contains the data and logic needed to build a function that
 // reconciles volumes. It follows the same builder pattern as other reconciler
@@ -188,6 +198,10 @@ func (t *task) update(ctx context.Context) error {
 
 	hubJustSelected := t.volume.GetStatus().GetHub() == ""
 	if err := t.selectHub(ctx); err != nil {
+		if errors.Is(err, errOwnerScopeMismatch) {
+			t.setFailed(err)
+			return nil
+		}
 		return err
 	}
 	t.volume.GetStatus().SetHub(t.hubId)
@@ -261,7 +275,7 @@ func (t *task) setDefaults() {
 		t.volume.SetStatus(&privatev1.VolumeStatus{})
 	}
 	if t.volume.GetStatus().GetState() == privatev1.VolumeState_VOLUME_STATE_UNSPECIFIED {
-		t.volume.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
+		t.volume.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_PENDING)
 		t.volume.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
 	}
 }
@@ -328,21 +342,31 @@ func (t *task) delete(ctx context.Context) (err error) {
 	return controllers.RequeueAfterKubernetesDeletion("volume")
 }
 
-// selectHub assigns a hub to the volume. Unlike resources that inherit their
-// hub from a parent (e.g. NATGateway inherits from VirtualNetwork), volumes
-// are independent, so the reconciler picks a hub randomly from the available
-// hubs (same as ComputeInstance).
+// selectHub assigns a hub to the volume. A volume that carries an owner
+// inherits the hub of the owning workload — its Volume CR is co-located
+// with the owner's CR — and the reconcile fails closed while the owner's
+// hub cannot be resolved. Ownerless volumes are independent, so the
+// reconciler picks a hub randomly from the available hubs (same as
+// ComputeInstance).
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.volume.GetStatus().GetHub()
 	if t.hubId == "" {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
-		if err != nil {
-			return err
+		if owner := t.volume.GetSpec().GetOwner(); owner != nil {
+			hubId, err := t.ownerHub(ctx, owner)
+			if err != nil {
+				return err
+			}
+			t.hubId = hubId
+		} else {
+			response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
+			if err != nil {
+				return err
+			}
+			if response == nil || len(response.Items) == 0 {
+				return errors.New("no hubs available")
+			}
+			t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
 		}
-		if response == nil || len(response.Items) == 0 {
-			return errors.New("no hubs available")
-		}
-		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
 	}
 	t.r.logger.DebugContext(
 		ctx,
@@ -356,6 +380,45 @@ func (t *task) selectHub(ctx context.Context) error {
 	t.hubNamespace = hubEntry.Namespace
 	t.hubClient = hubEntry.Client
 	return nil
+}
+
+// ownerHub resolves the hub of the workload that owns the volume. It
+// returns a retryable error — the reconcile is requeued — when the owner
+// cannot be fetched or has no hub assigned yet. An owner that belongs to a
+// different tenant or project than the volume fails the reconcile
+// permanently: the mismatch never resolves on retry.
+func (t *task) ownerHub(ctx context.Context, owner *privatev1.VolumeOwner) (string, error) {
+	if t.r.computeInstancesClient == nil {
+		return "", fmt.Errorf("ComputeInstances client is required to resolve the owning workload %q", owner.GetReference())
+	}
+	response, err := t.r.computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{
+		Id: owner.GetReference(),
+	}.Build())
+	if err != nil {
+		return "", controllers.RequeueAfter(
+			fmt.Errorf("failed to get the owning compute instance %q: %w", owner.GetReference(), err),
+			requeueOwnerHubDelay,
+		)
+	}
+	instance := response.GetObject()
+	if instance.GetMetadata().GetTenant() != t.volume.GetMetadata().GetTenant() ||
+		instance.GetMetadata().GetProject() != t.volume.GetMetadata().GetProject() {
+		return "", fmt.Errorf(
+			"%w: owning compute instance %q belongs to tenant %q (project %q), but the volume belongs to tenant %q (project %q)",
+			errOwnerScopeMismatch,
+			owner.GetReference(),
+			instance.GetMetadata().GetTenant(), instance.GetMetadata().GetProject(),
+			t.volume.GetMetadata().GetTenant(), t.volume.GetMetadata().GetProject(),
+		)
+	}
+	hubId := instance.GetStatus().GetHub()
+	if hubId == "" {
+		return "", controllers.RequeueAfter(
+			fmt.Errorf("owning compute instance %q has no hub assigned", owner.GetReference()),
+			requeueOwnerHubDelay,
+		)
+	}
+	return hubId, nil
 }
 
 func (t *task) getHub(ctx context.Context) error {
@@ -453,6 +516,52 @@ func (t *task) buildSpec() osacv1alpha1.VolumeSpec {
 		SizeGiB:     t.volume.GetSpec().GetSizeGib(),
 		AccessMode:  protoAccessModeToCRD(t.volume.GetSpec().GetAccessMode()),
 		Topology:    topology,
+		Owner:       protoOwnerToCRD(t.volume.GetSpec().GetOwner()),
+		DiskImage:   protoDiskImageToCRD(t.volume.GetSpec().GetDiskImage()),
+		Target:      protoTargetToCRD(t.volume.GetSpec().GetTarget()),
+	}
+}
+
+// protoOwnerToCRD converts the proto VolumeOwner to the CRD VolumeOwner.
+func protoOwnerToCRD(source *privatev1.VolumeOwner) *osacv1alpha1.VolumeOwner {
+	if source == nil {
+		return nil
+	}
+	owner := &osacv1alpha1.VolumeOwner{
+		Reference: source.GetReference(),
+	}
+	switch source.GetType() {
+	case privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE:
+		owner.Type = osacv1alpha1.VolumeOwnerTypeComputeInstance
+	default:
+		owner.Type = ""
+	}
+	return owner
+}
+
+// protoDiskImageToCRD converts the proto DiskImageReference to the CRD
+// DiskImageReference, carrying the reference verbatim.
+func protoDiskImageToCRD(source *privatev1.DiskImageReference) *osacv1alpha1.DiskImageReference {
+	if source == nil {
+		return nil
+	}
+	return &osacv1alpha1.DiskImageReference{
+		ID:      source.GetId(),
+		Name:    source.GetName(),
+		Project: source.GetProject(),
+		Shared:  source.GetShared(),
+	}
+}
+
+// protoTargetToCRD converts the proto VolumeTarget to the CRD VolumeTarget.
+func protoTargetToCRD(source *privatev1.VolumeTarget) *osacv1alpha1.VolumeTarget {
+	if source == nil {
+		return nil
+	}
+	return &osacv1alpha1.VolumeTarget{
+		DiskKey:        source.GetDiskKey(),
+		Namespace:      source.GetNamespace(),
+		DataVolumeName: source.GetDataVolumeName(),
 	}
 }
 

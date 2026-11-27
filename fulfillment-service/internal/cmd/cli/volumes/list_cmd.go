@@ -124,7 +124,7 @@ func listAllVolumes(ctx context.Context, client publicv1.VolumesClient, filter *
 // renderVolumeTable writes a compact table of volumes to the console and returns any write error.
 func renderVolumeTable(w *terminal.Console, volumes []*publicv1.Volume) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "ID\tNAME\tSTORAGE TIER\tSIZE (GiB)\tACCESS MODE\tSTATE"); err != nil {
+	if _, err := fmt.Fprintln(writer, "ID\tNAME\tSTORAGE TIER\tSIZE (GiB)\tACCESS MODE\tSTATE\tOWNER"); err != nil {
 		return fmt.Errorf("failed to render volume table header: %w", err)
 	}
 	for _, v := range volumes {
@@ -139,8 +139,8 @@ func renderVolumeTable(w *terminal.Console, volumes []*publicv1.Volume) error {
 		sizeGib := strconv.FormatInt(v.GetSpec().GetSizeGib(), 10)
 		accessMode := strings.TrimPrefix(v.GetSpec().GetAccessMode().String(), "VOLUME_ACCESS_MODE_")
 		state := strings.TrimPrefix(v.GetStatus().GetState().String(), "VOLUME_STATE_")
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			v.GetId(), name, storageTier, sizeGib, accessMode, state); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			v.GetId(), name, storageTier, sizeGib, accessMode, state, volumeOwnerLabel(v)); err != nil {
 			return fmt.Errorf("failed to render volume table row: %w", err)
 		}
 	}

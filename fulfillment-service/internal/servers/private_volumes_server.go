@@ -197,7 +197,7 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	// CSI callers may invoke Create with a status object, but vendor_context is
 	// populated only by the operator feedback path after vendor provisioning.
 	vol.GetStatus().SetVendorContext(nil)
-	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
+	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_PENDING)
 	vol.GetStatus().SetProvider(resolved.Provider)
 	vol.GetStatus().SetProtocol(resolved.Protocol)
 
@@ -267,6 +267,14 @@ func (s *PrivateVolumesServer) validateVolumeCreate(vol *privatev1.Volume) error
 	if spec.GetAccessMode() == privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_UNSPECIFIED {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.access_mode' is required")
 	}
+	// The CRD requires diskImage.id (minLength 1), and the reconciler carries
+	// the reference verbatim — a name-only reference could never project onto
+	// a valid Volume CR. The ComputeInstance path resolves name-based
+	// references before storing them, so the ID is always present there.
+	if spec.HasDiskImage() && spec.GetDiskImage().GetId() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.disk_image.id' is required when disk_image is set")
+	}
 	return nil
 }
 
@@ -292,7 +300,10 @@ func (s *PrivateVolumesServer) Update(ctx context.Context,
 
 	// Merge the update into a clone of the existing object:
 	merged := cloneVolume(existing)
-	applyVolumeUpdate(merged, request.GetObject(), request.GetUpdateMask())
+	merged, err = s.applyVolumeUpdate(merged, request.GetObject(), request.GetUpdateMask())
+	if err != nil {
+		return
+	}
 
 	// Validate immutable fields:
 	err = validateVolumeImmutability(merged, existing)
@@ -312,51 +323,41 @@ func cloneVolume(v *privatev1.Volume) *privatev1.Volume {
 	return proto.Clone(v).(*privatev1.Volume)
 }
 
-// applyVolumeUpdate applies the update fields onto the base object, respecting the field mask.
+// applyVolumeUpdate applies the update fields onto the merged object, respecting the field mask.
 // If no mask is provided, all fields from the update are applied.
 // Field mask paths use the spec/status prefix (e.g., "spec.storage_tier", "status.state") per API conventions.
-func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMask) {
+// Mask application uses the generic path compiler shared with the generic update layer, so
+// exact paths and nested sub-field paths are handled uniformly: the requested values reach
+// validateVolumeImmutability, which rejects changed immutable fields and accepts repeats of
+// stored values.
+func (s *PrivateVolumesServer) applyVolumeUpdate(
+	merged, update *privatev1.Volume,
+	mask *fieldmaskpb.FieldMask,
+) (*privatev1.Volume, error) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
-		proto.Merge(base, update)
-		return
+		proto.Merge(merged, update)
+		return merged, nil
 	}
-	for _, path := range mask.GetPaths() {
-		switch path {
-		case "spec.storage_tier":
-			base.GetSpec().SetStorageTier(update.GetSpec().GetStorageTier())
-		case "spec.size_gib":
-			base.GetSpec().SetSizeGib(update.GetSpec().GetSizeGib())
-		case "spec.access_mode":
-			base.GetSpec().SetAccessMode(update.GetSpec().GetAccessMode())
-		case "spec.topology":
-			if topology := update.GetSpec().GetTopology(); topology != nil {
-				base.GetSpec().SetTopology(proto.Clone(topology).(*privatev1.VolumeTopology))
-			} else {
-				base.GetSpec().SetTopology(nil)
-			}
-		case "spec.topology.segments":
-			if base.GetSpec().GetTopology() == nil {
-				base.GetSpec().SetTopology(&privatev1.VolumeTopology{})
-			}
-			src := update.GetSpec().GetTopology().GetSegments()
-			dst := make(map[string]string, len(src))
-			for k, v := range src {
-				dst[k] = v
-			}
-			base.GetSpec().GetTopology().SetSegments(dst)
-		case "status.provider":
-			base.GetStatus().SetProvider(update.GetStatus().GetProvider())
-		case "status.protocol":
-			base.GetStatus().SetProtocol(update.GetStatus().GetProtocol())
-		default:
-			// Unknown paths are handled by the generic update layer.
+	fieldPaths, err := s.generic.compilePaths(mask.GetPaths())
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid update mask: %s", err)
+	}
+	for _, fieldPath := range fieldPaths {
+		if value, ok := fieldPath.Get(update); ok {
+			fieldPath.Set(merged, value)
+		} else {
+			fieldPath.Clear(merged)
 		}
 	}
+	// Detach message and map values aliased from the request during the apply,
+	// mirroring the generic update layer's post-apply clone.
+	return cloneVolume(merged), nil
 }
 
 // validateVolumeImmutability checks that immutable volume fields have not been changed.
-// storage_tier, size_gib, access_mode, provider, and protocol are immutable after creation because
-// they are provisioned directly into the vendor CSI call and cannot be modified post-creation.
+// storage_tier, size_gib, access_mode, topology, owner, disk_image, target, provider, and protocol
+// are immutable after creation because they are provisioned directly into the vendor CSI call and
+// cannot be modified post-creation.
 func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if merged.GetSpec().GetStorageTier() != existing.GetSpec().GetStorageTier() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -373,6 +374,18 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if !proto.Equal(merged.GetSpec().GetTopology(), existing.GetSpec().GetTopology()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.topology' is immutable and cannot be changed after creation")
+	}
+	if !proto.Equal(merged.GetSpec().GetOwner(), existing.GetSpec().GetOwner()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.owner' is immutable and cannot be changed after creation")
+	}
+	if !proto.Equal(merged.GetSpec().GetDiskImage(), existing.GetSpec().GetDiskImage()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.disk_image' is immutable and cannot be changed after creation")
+	}
+	if !proto.Equal(merged.GetSpec().GetTarget(), existing.GetSpec().GetTarget()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.target' is immutable and cannot be changed after creation")
 	}
 	if existing.GetStatus().GetProvider() != "" &&
 		merged.GetStatus().GetProvider() != existing.GetStatus().GetProvider() {

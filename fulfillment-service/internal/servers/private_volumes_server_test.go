@@ -179,6 +179,370 @@ var _ = Describe("Private volumes server", func() {
 			return response.GetObject()
 		}
 
+		createVolumeWithOwner := func(reference string) *privatev1.Volume {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "owned-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: reference,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
+		createVolumeWithDiskImage := func(imageID string) *privatev1.Volume {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "image-backed-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						DiskImage: privatev1.DiskImageReference_builder{
+							Id:      imageID,
+							Name:    "test-image",
+							Project: "test-project",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
+		createVolumeWithTarget := func(diskKey, namespace, dataVolumeName string) *privatev1.Volume {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "targeted-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Target: privatev1.VolumeTarget_builder{
+							DiskKey:        diskKey,
+							Namespace:      namespace,
+							DataVolumeName: dataVolumeName,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
+		Describe("applyVolumeUpdate", func() {
+			// storedVolume carries every maskable field so each spec can focus
+			// on the path under test and assert siblings are preserved.
+			storedVolume := func() *privatev1.Volume {
+				return privatev1.Volume_builder{
+					Id:       "vol-apply",
+					Metadata: privatev1.Metadata_builder{Name: "test-volume"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Topology: privatev1.VolumeTopology_builder{
+							Segments: map[string]string{"zone": "z1", "rack": "r1"},
+						}.Build(),
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-original",
+						}.Build(),
+						DiskImage: privatev1.DiskImageReference_builder{
+							Id:   "img-original",
+							Name: "rhel-10",
+						}.Build(),
+						Target: privatev1.VolumeTarget_builder{
+							DiskKey:        "boot",
+							Namespace:      "vm-ns",
+							DataVolumeName: "vm-root-disk",
+						}.Build(),
+					}.Build(),
+					Status: privatev1.VolumeStatus_builder{
+						State:    privatev1.VolumeState_VOLUME_STATE_PENDING,
+						Provider: "test-provider",
+					}.Build(),
+				}.Build()
+			}
+
+			// apply runs applyVolumeUpdate on a fresh clone of the stored volume,
+			// mirroring the Update flow. A nil paths list means no mask.
+			apply := func(update *privatev1.Volume, paths ...string) (*privatev1.Volume, error) {
+				var mask *fieldmaskpb.FieldMask
+				if paths != nil {
+					mask = &fieldmaskpb.FieldMask{Paths: paths}
+				}
+				return server.applyVolumeUpdate(cloneVolume(storedVolume()), update, mask)
+			}
+
+			It("merges the whole update when no mask is provided", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						SizeGib: 200,
+						Owner:   privatev1.VolumeOwner_builder{Reference: "ci-merged"}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetSizeGib()).To(Equal(int64(200)))
+				Expect(merged.GetSpec().GetOwner().GetReference()).To(Equal("ci-merged"))
+				// Merge semantics keep zero-value siblings from the stored object:
+				Expect(merged.GetSpec().GetOwner().GetType()).To(Equal(
+					privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE))
+				Expect(merged.GetSpec().GetStorageTier()).To(Equal("gold"))
+			})
+
+			It("applies masked scalar spec fields", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{StorageTier: "silver"}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.storage_tier")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetStorageTier()).To(Equal("silver"))
+				Expect(merged.GetSpec().GetSizeGib()).To(Equal(int64(100)))
+				Expect(merged.GetSpec().GetOwner().GetReference()).To(Equal("ci-original"))
+			})
+
+			It("applies masked status fields", func() {
+				update := privatev1.Volume_builder{
+					Status: privatev1.VolumeStatus_builder{Provider: "vast-2"}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "status.provider")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetStatus().GetProvider()).To(Equal("vast-2"))
+			})
+
+			It("replaces the owner for the exact mask path", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-other",
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.owner")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetOwner().GetReference()).To(Equal("ci-other"))
+			})
+
+			It("clears the owner for the exact mask path when the update omits it", func() {
+				update := privatev1.Volume_builder{}.Build()
+
+				merged, err := apply(update, "spec.owner")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetOwner()).To(BeNil())
+			})
+
+			It("applies a nested owner field, preserving stored siblings", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{Reference: "ci-other"}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.owner.reference")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetOwner().GetReference()).To(Equal("ci-other"))
+				Expect(merged.GetSpec().GetOwner().GetType()).To(Equal(
+					privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE))
+			})
+
+			It("clears a nested owner field when the update omits the owner", func() {
+				update := privatev1.Volume_builder{}.Build()
+
+				merged, err := apply(update, "spec.owner.reference")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetOwner()).ToNot(BeNil())
+				Expect(merged.GetSpec().GetOwner().GetReference()).To(BeEmpty())
+				Expect(merged.GetSpec().GetOwner().GetType()).To(Equal(
+					privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE))
+			})
+
+			It("applies nested disk_image and target fields, preserving stored siblings", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{Name: "fedora"}.Build(),
+						Target:    privatev1.VolumeTarget_builder{Namespace: "other-ns"}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.disk_image.name", "spec.target.namespace")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetDiskImage().GetName()).To(Equal("fedora"))
+				Expect(merged.GetSpec().GetDiskImage().GetId()).To(Equal("img-original"))
+				Expect(merged.GetSpec().GetTarget().GetNamespace()).To(Equal("other-ns"))
+				Expect(merged.GetSpec().GetTarget().GetDiskKey()).To(Equal("boot"))
+			})
+
+			It("keeps a repeated nested value equal to the stored object", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{Reference: "ci-original"}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.owner.reference")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(validateVolumeImmutability(merged, storedVolume())).To(Succeed())
+			})
+
+			It("routes a nested owner change to the immutability check", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{Reference: "ci-other"}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.owner.reference")
+				Expect(err).ToNot(HaveOccurred())
+				immutableErr := validateVolumeImmutability(merged, storedVolume())
+				Expect(immutableErr).To(HaveOccurred())
+				st, ok := status.FromError(immutableErr)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("spec.owner"))
+			})
+
+			It("routes a nested disk image change to the immutability check", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{Id: "img-other"}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.disk_image.id")
+				Expect(err).ToNot(HaveOccurred())
+				immutableErr := validateVolumeImmutability(merged, storedVolume())
+				Expect(immutableErr).To(HaveOccurred())
+				st, ok := status.FromError(immutableErr)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("spec.disk_image"))
+			})
+
+			It("replaces the whole topology for the exact mask path", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Topology: privatev1.VolumeTopology_builder{
+							Segments: map[string]string{"osac.io/node": "worker-1"},
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.topology")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetTopology().GetSegments()).To(Equal(
+					map[string]string{"osac.io/node": "worker-1"}))
+			})
+
+			It("replaces the segments map for the map mask path", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Topology: privatev1.VolumeTopology_builder{
+							Segments: map[string]string{"zone": "z9"},
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.topology.segments")
+				Expect(err).ToNot(HaveOccurred())
+				// The stored rack segment is gone: the whole map is replaced.
+				Expect(merged.GetSpec().GetTopology().GetSegments()).To(Equal(
+					map[string]string{"zone": "z9"}))
+			})
+
+			It("clears the segments map when the update omits topology", func() {
+				update := privatev1.Volume_builder{}.Build()
+
+				merged, err := apply(update, "spec.topology.segments")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetTopology().GetSegments()).To(BeEmpty())
+			})
+
+			It("sets a single segment key, preserving the other keys", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Topology: privatev1.VolumeTopology_builder{
+							Segments: map[string]string{"zone": "z9"},
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.topology.segments.zone")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetTopology().GetSegments()).To(Equal(
+					map[string]string{"zone": "z9", "rack": "r1"}))
+			})
+
+			It("creates the topology when segments are applied to a volume without one", func() {
+				noTopology := cloneVolume(storedVolume())
+				noTopology.GetSpec().SetTopology(nil)
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Topology: privatev1.VolumeTopology_builder{
+							Segments: map[string]string{"zone": "z9"},
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := server.applyVolumeUpdate(noTopology, update,
+					&fieldmaskpb.FieldMask{Paths: []string{"spec.topology.segments"}})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(merged.GetSpec().GetTopology().GetSegments()).To(Equal(
+					map[string]string{"zone": "z9"}))
+			})
+
+			It("rejects unknown mask paths", func() {
+				_, err := apply(privatev1.Volume_builder{}.Build(), "spec.nonexistent")
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("nonexistent"))
+			})
+
+			It("detaches values aliased from the request", func() {
+				update := privatev1.Volume_builder{
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-other",
+						}.Build(),
+						Topology: privatev1.VolumeTopology_builder{
+							Segments: map[string]string{"zone": "z9"},
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				merged, err := apply(update, "spec.owner", "spec.topology.segments")
+				Expect(err).ToNot(HaveOccurred())
+				update.GetSpec().GetOwner().SetReference("ci-mutated")
+				update.GetSpec().GetTopology().SetSegments(map[string]string{"zone": "mutated"})
+				Expect(merged.GetSpec().GetOwner().GetReference()).To(Equal("ci-other"))
+				Expect(merged.GetSpec().GetTopology().GetSegments()).To(Equal(
+					map[string]string{"zone": "z9"}))
+			})
+		})
+
 		It("Creates and gets a volume", func() {
 			created := createVolume()
 
@@ -188,7 +552,7 @@ var _ = Describe("Private volumes server", func() {
 			Expect(created.GetSpec().GetAccessMode()).To(Equal(
 				privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 			Expect(created.GetStatus().GetState()).To(Equal(
-				privatev1.VolumeState_VOLUME_STATE_CREATING))
+				privatev1.VolumeState_VOLUME_STATE_PENDING))
 			Expect(created.GetStatus().GetProvider()).To(Equal("test-provider"))
 
 			getResponse, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{
@@ -316,7 +680,7 @@ var _ = Describe("Private volumes server", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(proto.Equal(created.GetObject(), stored.GetObject())).To(BeTrue())
 				actual := stored.GetObject()
-				state := privatev1.VolumeState_VOLUME_STATE_CREATING
+				state := privatev1.VolumeState_VOLUME_STATE_PENDING
 				if inventory {
 					state = privatev1.VolumeState_VOLUME_STATE_AVAILABLE
 					Expect(actual.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
@@ -417,7 +781,7 @@ var _ = Describe("Private volumes server", func() {
 				stored, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{Id: response.GetObject().GetId()}.Build())
 				Expect(err).NotTo(HaveOccurred())
 				Expect(proto.Equal(stored.GetObject(), response.GetObject())).To(BeTrue())
-				state := privatev1.VolumeState_VOLUME_STATE_CREATING
+				state := privatev1.VolumeState_VOLUME_STATE_PENDING
 				if scenario == "non-system" {
 					Expect(stored.GetObject().GetMetadata().GetCreator()).To(Equal("ordinary-caller"))
 				}
@@ -470,7 +834,7 @@ var _ = Describe("Private volumes server", func() {
 			Expect(created.GetSpec().GetStorageTier()).To(Equal("gold"))
 			Expect(created.GetSpec().GetSizeGib()).To(Equal(int64(50)))
 			Expect(created.GetStatus().GetState()).To(Equal(
-				privatev1.VolumeState_VOLUME_STATE_CREATING))
+				privatev1.VolumeState_VOLUME_STATE_PENDING))
 		})
 
 		It("preserves requested topology segments", func() {
@@ -702,6 +1066,202 @@ var _ = Describe("Private volumes server", func() {
 			Expect(st.Message()).To(ContainSubstring("immutable"))
 		})
 
+		It("Rejects creation of a volume whose owner has an unspecified type", func() {
+			_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "unspecified-owner-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner: privatev1.VolumeOwner_builder{
+							Reference: "ci-01a1",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("owner"))
+		})
+
+		It("Rejects creation of a volume whose disk image has no ID", func() {
+			_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "name-only-disk-image-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						DiskImage: privatev1.DiskImageReference_builder{
+							Name:    "rhel-10",
+							Project: "test-project",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.disk_image.id"))
+		})
+
+		It("Rejects updates that change the owner", func() {
+			created := createVolumeWithOwner("ci-original")
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-other",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.owner"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
+		})
+
+		DescribeTable("Rejects masked updates that change an immutable field",
+			func(maskPath string, create func() *privatev1.Volume, changed *privatev1.VolumeSpec) {
+				created := create()
+
+				_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Id:   created.GetId(),
+						Spec: changed,
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{maskPath}},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring(maskPath))
+				Expect(st.Message()).To(ContainSubstring("immutable"))
+			},
+			Entry("owner", "spec.owner",
+				func() *privatev1.Volume { return createVolumeWithOwner("ci-original") },
+				privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-other",
+					}.Build(),
+				}.Build()),
+			Entry("disk_image", "spec.disk_image",
+				func() *privatev1.Volume { return createVolumeWithDiskImage("img-original") },
+				privatev1.VolumeSpec_builder{
+					DiskImage: privatev1.DiskImageReference_builder{Id: "img-other"}.Build(),
+				}.Build()),
+			Entry("target", "spec.target",
+				func() *privatev1.Volume { return createVolumeWithTarget("boot", "vm-ns", "vm-root-disk") },
+				privatev1.VolumeSpec_builder{
+					Target: privatev1.VolumeTarget_builder{
+						DiskKey:        "disk-1",
+						Namespace:      "vm-ns",
+						DataVolumeName: "vm-root-disk",
+					}.Build(),
+				}.Build()),
+		)
+
+		It("Allows a masked update that repeats the stored owner", func() {
+			created := createVolumeWithOwner("ci-original")
+
+			updateResponse, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-original",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.owner"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetOwner().GetReference()).To(Equal("ci-original"))
+		})
+
+		It("Rejects updates that add an owner to an ownerless volume", func() {
+			created := createVolume()
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-added",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.owner"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects updates that change the disk image", func() {
+			created := createVolumeWithDiskImage("img-original")
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{
+							Id: "img-other",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.disk_image"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects updates that change the target", func() {
+			created := createVolumeWithTarget("boot", "vm-namespace", "vm-root-disk")
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						Target: privatev1.VolumeTarget_builder{
+							DiskKey:        "disk-1",
+							Namespace:      "vm-namespace",
+							DataVolumeName: "vm-root-disk",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.target"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
+		})
+
 		It("Allows the first protocol assignment from unspecified", func() {
 			existing := privatev1.Volume_builder{
 				Status: privatev1.VolumeStatus_builder{}.Build(),
@@ -784,7 +1344,7 @@ var _ = Describe("Private volumes server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetStatus().GetState()).To(Equal(
-				privatev1.VolumeState_VOLUME_STATE_CREATING))
+				privatev1.VolumeState_VOLUME_STATE_PENDING))
 		})
 
 		Describe("Validation", func() {

@@ -93,6 +93,46 @@ var _ = Describe("volumes get", func() {
 			Expect(output).To(MatchRegexp(`Message:\s+-`))
 		})
 
+		It("should display the owner when set", func() {
+			v := publicv1.Volume_builder{
+				Id: "vol-005",
+				Spec: publicv1.VolumeSpec_builder{
+					Owner: publicv1.VolumeOwner_builder{
+						Type:      publicv1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			output := formatVolume(v)
+			Expect(output).To(ContainSubstring("Owner:"))
+			Expect(output).To(ContainSubstring("COMPUTE_INSTANCE/ci-01a1"))
+			Expect(output).NotTo(ContainSubstring("VOLUME_OWNER_TYPE_"))
+		})
+
+		It("should show '-' for owner when the volume is ownerless", func() {
+			v := publicv1.Volume_builder{
+				Id: "vol-006",
+			}.Build()
+
+			output := formatVolume(v)
+			Expect(output).To(MatchRegexp(`Owner:\s+-`))
+		})
+
+		It("should show '-' for owner when the reference is empty", func() {
+			v := publicv1.Volume_builder{
+				Id: "vol-007",
+				Spec: publicv1.VolumeSpec_builder{
+					Owner: publicv1.VolumeOwner_builder{
+						Type: publicv1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			output := formatVolume(v)
+			Expect(output).To(MatchRegexp(`Owner:\s+-`))
+		})
+
 		It("should strip VOLUME_ACCESS_MODE_ prefix from access mode", func() {
 			v := publicv1.Volume_builder{
 				Id: "vol-003",

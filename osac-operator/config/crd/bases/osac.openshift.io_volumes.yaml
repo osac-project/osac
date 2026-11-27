@@ -60,7 +60,12 @@ spec:
           metadata:
             type: object
           spec:
-            description: VolumeSpec defines the desired state of Volume.
+            description: |-
+              VolumeSpec defines the desired state of Volume. The type-level rules keep
+              the optional immutable fields' presence stable across updates: a field-level
+              self == oldSelf rule alone is skipped by the API server when the field is
+              absent from the old or the new object, so removing and re-adding the field
+              would bypass the value check.
             properties:
               accessMode:
                 allOf:
@@ -81,6 +86,55 @@ spec:
                 x-kubernetes-validations:
                 - message: accessMode is immutable
                   rule: self == oldSelf
+              diskImage:
+                description: |-
+                  DiskImage references the DiskImage catalog object the volume is
+                  provisioned from. Absent for blank disks. Immutable after creation.
+                properties:
+                  id:
+                    description: ID is the fulfillment record identifier of the DiskImage.
+                    minLength: 1
+                    type: string
+                  name:
+                    description: Name is the DiskImage name, carried for observability.
+                    type: string
+                  project:
+                    description: Project is the DiskImage project, carried for observability.
+                    type: string
+                  shared:
+                    description: |-
+                      Shared marks a shared-tenant DiskImage reference, carried verbatim
+                      from the ComputeInstance spec; it is not interpreted here — the
+                      reference resolves by ID.
+                    type: boolean
+                required:
+                - id
+                type: object
+              owner:
+                description: |-
+                  Owner identifies the fulfillment workload that owns this volume.
+                  Set only by the VMaaS provisioning path; CaaS volumes are owned by
+                  their CaaS cluster, for which a dedicated owner type is future
+                  work — today this field distinguishes VMaaS volumes only. Immutable
+                  after creation.
+                properties:
+                  reference:
+                    description: Reference is the fulfillment record identifier of
+                      the owning workload.
+                    minLength: 1
+                    type: string
+                  type:
+                    allOf:
+                    - enum:
+                      - ComputeInstance
+                    - enum:
+                      - ComputeInstance
+                    description: Type is the kind of workload that owns the volume.
+                    type: string
+                required:
+                - reference
+                - type
+                type: object
               sizeGiB:
                 description: SizeGiB is the requested storage capacity in gibibytes.
                 format: int64
@@ -98,6 +152,32 @@ spec:
                 x-kubernetes-validations:
                 - message: storageTier is immutable
                   rule: self == oldSelf
+              target:
+                description: |-
+                  Target records where an owned volume's storage is provisioned.
+                  Immutable after creation.
+                properties:
+                  dataVolumeName:
+                    description: |-
+                      DataVolumeName is the deterministic name of the provisioned storage
+                      object that the owning workload references.
+                    minLength: 1
+                    type: string
+                  diskKey:
+                    description: DiskKey is the disk key on the owning workload ("boot",
+                      "disk-1", ...).
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace where the provisioned
+                      storage is created.
+                    minLength: 1
+                    type: string
+                required:
+                - dataVolumeName
+                - diskKey
+                - namespace
+                type: object
               topology:
                 description: |-
                   Topology carries CSI-style placement constraints for this volume.
@@ -117,14 +197,24 @@ spec:
                       Keys mirror CSI topology keys; values are scheduler-resolved.
                     type: object
                 type: object
-                x-kubernetes-validations:
-                - message: topology is immutable
-                  rule: self == oldSelf
             required:
             - accessMode
             - sizeGiB
             - storageTier
             type: object
+            x-kubernetes-validations:
+            - message: topology is immutable
+              rule: has(self.topology) == has(oldSelf.topology) && (!has(self.topology)
+                || self.topology == oldSelf.topology)
+            - message: owner is immutable
+              rule: has(self.owner) == has(oldSelf.owner) && (!has(self.owner) ||
+                self.owner == oldSelf.owner)
+            - message: diskImage is immutable
+              rule: has(self.diskImage) == has(oldSelf.diskImage) && (!has(self.diskImage)
+                || self.diskImage == oldSelf.diskImage)
+            - message: target is immutable
+              rule: has(self.target) == has(oldSelf.target) && (!has(self.target)
+                || self.target == oldSelf.target)
           status:
             description: VolumeStatus defines the observed state of Volume.
             properties:

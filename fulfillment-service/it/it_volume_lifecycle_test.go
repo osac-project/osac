@@ -186,7 +186,7 @@ var _ = Describe("Volume lifecycle", func() {
 			}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		vol := getResp.GetObject()
-		Expect(vol.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
+		Expect(vol.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_PENDING))
 		Expect(vol.GetStatus().GetProvider()).To(Equal("vast"))
 		Expect(vol.GetStatus().ProtoReflect().Descriptor().Fields().ByName("backend")).To(BeNil())
 		Expect(vol.GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))

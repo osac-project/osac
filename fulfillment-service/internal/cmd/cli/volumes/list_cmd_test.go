@@ -166,6 +166,10 @@ var _ = Describe("volumes list", func() {
 						StorageTier: "gold",
 						SizeGib:     100,
 						AccessMode:  publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner: publicv1.VolumeOwner_builder{
+							Type:      publicv1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-01a1",
+						}.Build(),
 					}.Build(),
 					Status: publicv1.VolumeStatus_builder{
 						State: publicv1.VolumeState_VOLUME_STATE_AVAILABLE,
@@ -180,9 +184,11 @@ var _ = Describe("volumes list", func() {
 			Expect(output).To(ContainSubstring("SIZE (GiB)"))
 			Expect(output).To(ContainSubstring("ACCESS MODE"))
 			Expect(output).To(ContainSubstring("STATE"))
-			Expect(output).To(MatchRegexp(`vol-001\s+my-volume\s+gold\s+100\s+READ_WRITE_ONCE\s+AVAILABLE`))
+			Expect(output).To(ContainSubstring("OWNER"))
+			Expect(output).To(MatchRegexp(`vol-001\s+my-volume\s+gold\s+100\s+READ_WRITE_ONCE\s+AVAILABLE\s+COMPUTE_INSTANCE/ci-01a1`))
 			Expect(output).NotTo(ContainSubstring("VOLUME_ACCESS_MODE_"))
 			Expect(output).NotTo(ContainSubstring("VOLUME_STATE_"))
+			Expect(output).NotTo(ContainSubstring("VOLUME_OWNER_TYPE_"))
 		})
 
 		It("should show '-' for name and storage tier when empty", func() {
@@ -193,7 +199,7 @@ var _ = Describe("volumes list", func() {
 			}
 
 			output := formatVolumeTable(volumes)
-			Expect(output).To(MatchRegexp(`vol-002\s+-\s+-`))
+			Expect(output).To(MatchRegexp(`vol-002\s+-\s+-\s+0\s+UNSPECIFIED\s+UNSPECIFIED\s+-`))
 		})
 
 		It("should render one row per volume", func() {

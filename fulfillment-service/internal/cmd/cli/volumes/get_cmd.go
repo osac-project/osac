@@ -125,6 +125,7 @@ func renderVolume(w io.Writer, v *publicv1.Volume) error {
 		{"Storage Tier", storageTier},
 		{"Size (GiB)", v.GetSpec().GetSizeGib()},
 		{"Access Mode", accessMode},
+		{"Owner", volumeOwnerLabel(v)},
 		{"State", state},
 		{"Message", message},
 	}
@@ -136,6 +137,17 @@ func renderVolume(w io.Writer, v *publicv1.Volume) error {
 	}
 
 	return writer.Flush()
+}
+
+// volumeOwnerLabel renders the volume's owner as a displayable
+// "TYPE/reference" label, or "-" when no workload owns the volume.
+func volumeOwnerLabel(v *publicv1.Volume) string {
+	owner := v.GetSpec().GetOwner()
+	if owner == nil || owner.GetReference() == "" {
+		return "-"
+	}
+	ownerType := strings.TrimPrefix(owner.GetType().String(), "VOLUME_OWNER_TYPE_")
+	return fmt.Sprintf("%s/%s", ownerType, owner.GetReference())
 }
 
 const getShortHelp = `Get volume details`

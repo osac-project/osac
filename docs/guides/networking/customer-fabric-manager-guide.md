@@ -1454,9 +1454,10 @@ data:
 `data.capabilities`:
 
 - The value is comma-separated, with no spaces.
-- For a Fabric Manager in this deployment, the capability is `security_group_icmp`. A token that OSAC does not define for Fabric Managers fails the NetworkClass.
+- For a Fabric Manager in this deployment, the capabilities are `security_group_icmp` and `security_group_physical_noop`. A token that OSAC does not define for Fabric Managers fails the NetworkClass.
 - `security_group_icmp` means your `create_security_group` handles `icmp` rules. A documented no-op counts.
-- Acme declares it because its policy object enforces `icmp`. With `cudn_evpn` in the same NetworkClass, the derived result is still false ([ICMP](#icmp)).
+- `security_group_physical_noop` means your `create_security_group` and attachment binding are a documented no-op for physical ports; those ports remain unfiltered. Declare it only when that is true, and still declare `security_group_icmp` separately if you accept `icmp` rules.
+- Acme declares `security_group_icmp` because its policy object enforces `icmp`. With `cudn_evpn` in the same NetworkClass, the derived result is still false ([ICMP](#icmp)).
 - Leave the key out otherwise.
 
 Other rules:

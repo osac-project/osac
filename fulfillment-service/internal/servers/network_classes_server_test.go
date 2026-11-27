@@ -206,6 +206,28 @@ var _ = Describe("Network classes server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
+
+		It("round-trips the derived SecurityGroup capabilities", func() {
+			_, err := server.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+				Object: privatev1.NetworkClass_builder{
+					Id: object.GetId(),
+					Status: privatev1.NetworkClassStatus_builder{
+						State:                     privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+						SecurityGroupIcmp:         new(true),
+						SecurityGroupPhysicalNoop: new(true),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"status.state", "status.security_group_icmp", "status.security_group_physical_noop",
+				}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := server.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetSecurityGroupIcmp()).To(BeTrue())
+			Expect(response.GetObject().GetStatus().GetSecurityGroupPhysicalNoop()).To(BeTrue())
+		})
 	})
 
 	Describe("Delete", func() {

@@ -166,6 +166,11 @@ message NetworkClassStatus {
   // protocol icmp. Written by the operator with network_managers. Unset while the managers are not resolved, for
   // example with provider networking disabled.
   optional bool security_group_icmp = 8;
+
+  // Whether the resolved Fabric Manager declares the security_group_physical_noop capability, so physical
+  // SecurityGroup creation or attachment binding is a documented no-op. Written by the operator with
+  // network_managers. Unset while the managers are not resolved, for example with provider networking disabled.
+  optional bool security_group_physical_noop = 9;
 }
 
 // The managers of a NetworkClass as the operator resolved them from their registrations.

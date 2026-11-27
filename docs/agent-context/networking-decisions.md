@@ -230,13 +230,13 @@ as follows:
   it because NetworkPolicy cannot match ICMP; `all` includes ICMP. Netris
   declares it although its SecurityGroup tasks are no-ops. The value is derived,
   so it has no Helm value. A class whose default rules use `icmp` without the
-  capability fails resolution. The accepted contract also adds
-  `security_group_physical_noop` (Fabric only) for a documented no-op on
-  physical SecurityGroup creation or attachment binding, which leaves worker
-  traffic unfiltered. The current OSAC code does not support this capability or
-  its derived status yet. AgentlessNet declares only `security_group_icmp`, so
-  it does not meet the physical-profile capability until OSAC support and the
-  AgentlessNet registration are updated.
+  capability fails resolution. `security_group_physical_noop` (Fabric only)
+  declares a documented no-op on physical SecurityGroup creation or attachment
+  binding, which leaves physical worker traffic unfiltered. The operator records
+  `status.securityGroupPhysicalNoop` on the NetworkClass, true when the resolved
+  Fabric Manager declares it, and fulfillment copies it to
+  `status.security_group_physical_noop`. Netris and AgentlessNet declare it
+  because their physical SecurityGroup tasks are no-ops.
 - **Physical attachment concurrency and capacity:** the accepted contract
   serializes physical apply and delete jobs per Fabric Manager with a Kubernetes
   Lease. Before moving a port, `apply_network_attachment` checks DHCP capacity
@@ -282,8 +282,8 @@ as follows:
   `global.networking.provisioningEnabled: false` no networking job runs;
   the operator does not read manager registration ConfigMaps. It marks the
   NetworkClass Ready with reason `ProvisioningDisabled` and leaves
-  `status.networkManagers`, `status.networkType` and `status.securityGroupIcmp`
-  empty, and ICMP rules are stored. The configured
+  `status.networkManagers`, `status.networkType`, `status.securityGroupIcmp`
+  and `status.securityGroupPhysicalNoop` empty, and ICMP rules are stored. The configured
   manager names remain part of the NetworkClass spec but are not resolved;
   VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool and FabricDomain
   become Ready with reason `ProvisioningDisabled`; workloads create no
@@ -390,9 +390,8 @@ ExternalIPAttachment consumes the supplied ExternalIP and destination. Its
 attachment path accepts tenant VirtualNetwork destinations and rejects
 provider-management destinations. Physical apply and DHCP lease query are
 BMaaS-specific paths. SecurityGroup tasks are documented physical-policy
-no-ops, but the AgentlessNet design registers only `security_group_icmp` and
-not `security_group_physical_noop`; it therefore does not meet the accepted
-physical-profile capability.
+no-ops, and the AgentlessNet registration declares both `security_group_icmp`
+and `security_group_physical_noop`.
 
 The accepted integration design marks this implementation as under review;
 these code paths do not establish released or conformance status. Conformance

@@ -155,7 +155,8 @@ func TestNetrisRegistrationRendering(t *testing.T) {
 		Expect(configMaps).To(HaveKey(netrisManagerConfigMap))
 		Expect(configMaps[netrisManagerConfigMap].Name).To(Equal("netris"))
 		Expect(configMaps[netrisManagerConfigMap].AnsibleRole).To(Equal("osac.templates.netris"))
-		Expect(configMaps[netrisManagerConfigMap].Capabilities).To(Equal("eastWestEthernet,security_group_icmp"))
+		Expect(configMaps[netrisManagerConfigMap].Capabilities).To(
+			Equal("eastWestEthernet,security_group_icmp,security_group_physical_noop"))
 	})
 }
 
@@ -190,7 +191,8 @@ var _ = Describe("Netris registration", func() {
 				// key; the operator rejects unknown data keys.
 				ExpectWithOffset(1, cm.Data).NotTo(HaveKey("externalIPContractVersion"))
 				ExpectWithOffset(1, cm.Data["ansible_role"]).To(Equal("osac.templates.netris"))
-				ExpectWithOffset(1, cm.Data["capabilities"]).To(Equal("eastWestEthernet,security_group_icmp"))
+				ExpectWithOffset(1, cm.Data["capabilities"]).To(
+					Equal("eastWestEthernet,security_group_icmp,security_group_physical_noop"))
 			}
 			if !deployed {
 				By("the environment does not register the netris fabric manager")

@@ -23,5 +23,5 @@ data:
     networking and Ethernet east-west connectivity for bare-metal servers.
   ansible_role: osac.templates.netris
   network_types: evpn
-  capabilities: eastWestEthernet,security_group_icmp
+  capabilities: eastWestEthernet,security_group_icmp,security_group_physical_noop
 {{- end }}

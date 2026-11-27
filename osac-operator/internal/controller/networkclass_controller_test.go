@@ -54,6 +54,10 @@ var _ = Describe("NetworkClass resolution", func() {
 		cm.Data["capabilities"] = "security_group_icmp"
 		return cm
 	}
+	withPhysicalNoop := func(cm *corev1.ConfigMap) *corev1.ConfigMap {
+		cm.Data["capabilities"] = "security_group_physical_noop"
+		return cm
+	}
 	newClassWithDefaults := func(k8sManager string, mutate func(*v1alpha1.NetworkClassDefaults)) *v1alpha1.NetworkClass {
 		nc := &v1alpha1.NetworkClass{
 			ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: namespace,
@@ -119,6 +123,7 @@ var _ = Describe("NetworkClass resolution", func() {
 		Expect(nc.Status.NetworkManagers).To(BeNil())
 		Expect(nc.Status.NetworkType).To(BeEmpty())
 		Expect(nc.Status.SecurityGroupICMP).To(BeNil())
+		Expect(nc.Status.SecurityGroupPhysicalNoop).To(BeNil())
 	})
 
 	It("records security_group_icmp true when every manager declares it", func() {
@@ -151,6 +156,29 @@ var _ = Describe("NetworkClass resolution", func() {
 		Expect(*nc.Status.SecurityGroupICMP).To(BeFalse())
 	})
 
+	It("records security_group_physical_noop when the Fabric Manager declares it", func() {
+		Expect(k8sClient.Create(ctx, withPhysicalNoop(fabricRegistration()))).To(Succeed())
+		nc := resolve(newClass(""))
+		Expect(nc.Status.SecurityGroupPhysicalNoop).To(Equal(ptr.To(true)))
+		Expect(nc.Status.SecurityGroupICMP).To(Equal(ptr.To(false)))
+	})
+
+	It("records false when the Fabric Manager does not declare security_group_physical_noop", func() {
+		Expect(k8sClient.Create(ctx, fabricRegistration())).To(Succeed())
+		nc := resolve(newClass(""))
+		Expect(meta.IsStatusConditionTrue(nc.Status.Conditions, v1alpha1.NetworkConditionReady)).To(BeTrue())
+		Expect(nc.Status.SecurityGroupPhysicalNoop).NotTo(BeNil())
+		Expect(*nc.Status.SecurityGroupPhysicalNoop).To(BeFalse())
+	})
+
+	It("keeps security_group_physical_noop independent of the Kubernetes Manager", func() {
+		Expect(k8sClient.Create(ctx, withPhysicalNoop(fabricRegistration()))).To(Succeed())
+		Expect(k8sClient.Create(ctx, k8sRegistration())).To(Succeed())
+		nc := resolve(newClass("cudn_evpn"))
+		Expect(nc.Status.SecurityGroupPhysicalNoop).To(Equal(ptr.To(true)))
+		Expect(nc.Status.SecurityGroupICMP).To(Equal(ptr.To(false)))
+	})
+
 	It("fails a NetworkClass whose default rules use icmp without the capability", func() {
 		icmpDefaults := func(d *v1alpha1.NetworkClassDefaults) {
 			d.IngressRules = []v1alpha1.SecurityRule{{Protocol: v1alpha1.SecurityGroupProtocolICMP, SourceCIDR: "10.0.0.0/8"}}
@@ -163,6 +191,7 @@ var _ = Describe("NetworkClass resolution", func() {
 		Expect(ready.Message).To(Equal("default SecurityGroup rules use protocol icmp but not every " +
 			"network manager declares security_group_icmp; use protocol all"))
 		Expect(nc.Status.SecurityGroupICMP).To(BeNil())
+		Expect(nc.Status.SecurityGroupPhysicalNoop).To(BeNil())
 
 		// The same defaults resolve once the managers declare the capability.
 		Expect(k8sClient.Delete(ctx, fabricRegistration())).To(Succeed())
@@ -180,6 +209,7 @@ var _ = Describe("NetworkClass resolution", func() {
 		Expect(ready.Reason).To(Equal(v1alpha1.ReasonFailed))
 		Expect(ready.Message).To(ContainSubstring(`fabric manager "acme_fabric" matches no ConfigMap`))
 		Expect(nc.Status.SecurityGroupICMP).To(BeNil())
+		Expect(nc.Status.SecurityGroupPhysicalNoop).To(BeNil())
 
 		Expect(k8sClient.Create(ctx, fabricRegistration())).To(Succeed())
 		Expect(reconciler.notReadyNetworkClasses(ctx, nil)).To(HaveLen(1))
@@ -255,6 +285,7 @@ var _ = Describe("NetworkClass feedback", func() {
 		Expect(remote.GetStatus().GetNetworkManagers().GetKubernetes().GetAnsibleRole()).To(Equal("osac.b.k"))
 		Expect(remote.GetStatus().GetNetworkType()).To(Equal("evpn"))
 		Expect(remote.GetStatus().HasSecurityGroupIcmp()).To(BeFalse())
+		Expect(remote.GetStatus().HasSecurityGroupPhysicalNoop()).To(BeFalse())
 
 		nc.Status.SecurityGroupICMP = ptr.To(true)
 		Expect(syncNetworkClass(ctx, nc, remote)).To(Succeed())
@@ -268,6 +299,19 @@ var _ = Describe("NetworkClass feedback", func() {
 		nc.Status.SecurityGroupICMP = nil
 		Expect(syncNetworkClass(ctx, nc, remote)).To(Succeed())
 		Expect(remote.GetStatus().HasSecurityGroupIcmp()).To(BeFalse())
+
+		nc.Status.SecurityGroupPhysicalNoop = ptr.To(true)
+		Expect(syncNetworkClass(ctx, nc, remote)).To(Succeed())
+		Expect(remote.GetStatus().GetSecurityGroupPhysicalNoop()).To(BeTrue())
+
+		nc.Status.SecurityGroupPhysicalNoop = ptr.To(false)
+		Expect(syncNetworkClass(ctx, nc, remote)).To(Succeed())
+		Expect(remote.GetStatus().HasSecurityGroupPhysicalNoop()).To(BeTrue())
+		Expect(remote.GetStatus().GetSecurityGroupPhysicalNoop()).To(BeFalse())
+
+		nc.Status.SecurityGroupPhysicalNoop = nil
+		Expect(syncNetworkClass(ctx, nc, remote)).To(Succeed())
+		Expect(remote.GetStatus().HasSecurityGroupPhysicalNoop()).To(BeFalse())
 	})
 })
 

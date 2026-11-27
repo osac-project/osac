@@ -44,7 +44,9 @@ aap:
 - `fabricManager`: the `name` in the provider's Fabric Manager registration.
   There is no default. With `netris`, the installer chart renders the
   registration `osac-network-fabric-manager-netris`, which declares
-  `eastWestEthernet` and `security_group_icmp`.
+  `eastWestEthernet`, `security_group_icmp` and
+  `security_group_physical_noop`. Its physical SecurityGroup tasks are
+  documented no-ops, so bare-metal ports are not filtered by SecurityGroups.
 - `k8sManager`: the OSAC Kubernetes Manager. With `cudn_evpn`, the installer
   chart renders its registration `osac-network-k8s-manager-cudn-evpn`.
   `cudn_evpn` declares no capability, so with provider networking enabled

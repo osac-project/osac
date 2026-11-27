@@ -103,6 +103,11 @@ type NetworkClassStatus struct {
 	// security_group_icmp. Unset while the managers are not resolved.
 	// +kubebuilder:validation:Optional
 	SecurityGroupICMP *bool `json:"securityGroupIcmp,omitempty"`
+
+	// SecurityGroupPhysicalNoop is true when the resolved Fabric Manager declares
+	// security_group_physical_noop. Unset while the managers are not resolved.
+	// +kubebuilder:validation:Optional
+	SecurityGroupPhysicalNoop *bool `json:"securityGroupPhysicalNoop,omitempty"`
 }
 
 // +kubebuilder:object:root=true

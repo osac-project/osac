@@ -446,7 +446,7 @@ class ManifestsTest(unittest.TestCase):
                 ),
                 "ansible_role": "osac.templates.netris",
                 "network_types": "evpn",
-                "capabilities": "eastWestEthernet,security_group_icmp",
+                "capabilities": "eastWestEthernet,security_group_icmp,security_group_physical_noop",
             },
         )
         registrations = [
@@ -483,7 +483,7 @@ class ManifestsTest(unittest.TestCase):
             {
                 "name": "agentless_net",
                 "ansible_role": "osac.templates.agentless_net",
-                "capabilities": "security_group_icmp",
+                "capabilities": "security_group_icmp,security_group_physical_noop",
             },
         )
         registrations = [
@@ -892,7 +892,10 @@ class NetrisOverlayTest(unittest.TestCase):
                 self.assertEqual(step["address_plan"], plan)
                 self.assertIs(step["provisioning_enabled"], True)
                 netris = find(docs, "ConfigMap", "osac-network-fabric-manager-netris")["data"]
-                self.assertEqual(netris["capabilities"], "eastWestEthernet,security_group_icmp")
+                self.assertEqual(
+                    netris["capabilities"],
+                    "eastWestEthernet,security_group_icmp,security_group_physical_noop",
+                )
                 settings = find(docs, "ConfigMap", "network-fulfillment-ig")["data"]
                 self.assertEqual(settings["NETRIS_VALIDATE_CERTS"], "false")
                 if k8s_manager:

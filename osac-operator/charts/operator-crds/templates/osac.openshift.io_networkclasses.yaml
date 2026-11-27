@@ -394,6 +394,11 @@ spec:
                   SecurityGroupICMP is true when every resolved manager declares
                   security_group_icmp. Unset while the managers are not resolved.
                 type: boolean
+              securityGroupPhysicalNoop:
+                description: |-
+                  SecurityGroupPhysicalNoop is true when the resolved Fabric Manager declares
+                  security_group_physical_noop. Unset while the managers are not resolved.
+                type: boolean
             type: object
         required:
         - spec

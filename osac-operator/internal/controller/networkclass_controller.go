@@ -85,6 +85,7 @@ func (r *NetworkClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		nc.Status.NetworkManagers = nil
 		nc.Status.NetworkType = ""
 		nc.Status.SecurityGroupICMP = nil
+		nc.Status.SecurityGroupPhysicalNoop = nil
 		meta.SetStatusCondition(&nc.Status.Conditions, metav1.Condition{
 			Type: v1alpha1.NetworkConditionReady, Status: metav1.ConditionTrue,
 			Reason:  v1alpha1.ReasonProvisioningDisabled,
@@ -105,6 +106,7 @@ func (r *NetworkClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			nc.Status.NetworkManagers = nil
 			nc.Status.NetworkType = ""
 			nc.Status.SecurityGroupICMP = nil
+			nc.Status.SecurityGroupPhysicalNoop = nil
 			meta.SetStatusCondition(&nc.Status.Conditions, metav1.Condition{
 				Type: v1alpha1.NetworkConditionReady, Status: metav1.ConditionFalse,
 				Reason: v1alpha1.ReasonFailed, Message: err.Error(), ObservedGeneration: nc.Generation,
@@ -121,6 +123,7 @@ func (r *NetworkClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			nc.Status.NetworkManagers = managers
 			nc.Status.NetworkType = v1alpha1.NetworkType(resolution.NetworkType)
 			nc.Status.SecurityGroupICMP = ptr.To(resolution.SecurityGroupICMP())
+			nc.Status.SecurityGroupPhysicalNoop = ptr.To(resolution.SecurityGroupPhysicalNoop())
 			meta.SetStatusCondition(&nc.Status.Conditions, metav1.Condition{
 				Type: v1alpha1.NetworkConditionReady, Status: metav1.ConditionTrue,
 				Reason: v1alpha1.ReasonSucceeded, ObservedGeneration: nc.Generation,
@@ -224,7 +227,8 @@ func (r *NetworkClassReconciler) notReadyNetworkClasses(ctx context.Context, _ c
 
 // NetworkClassFeedbackReconciler copies the NetworkClass resolution to the
 // fulfillment record: state READY, FAILED or PENDING, message, and the
-// private network_managers, network_type and security_group_icmp capability.
+// private network_managers, network_type, security_group_icmp and
+// security_group_physical_noop capabilities.
 type NetworkClassFeedbackReconciler struct {
 	bridge              *feedback.Bridge[*v1alpha1.NetworkClass, *privatev1.NetworkClass]
 	networkingNamespace string
@@ -261,6 +265,7 @@ func NewNetworkClassFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.Clie
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					feedbackStatusStatePath, feedbackStatusMessagePath,
 					"status.network_managers", "status.network_type", "status.security_group_icmp",
+					"status.security_group_physical_noop",
 				}},
 			}.Build())
 			return err
@@ -325,6 +330,11 @@ func syncNetworkClass(_ context.Context, obj *v1alpha1.NetworkClass, remote *pri
 		status.ClearSecurityGroupIcmp()
 	} else {
 		status.SetSecurityGroupIcmp(*obj.Status.SecurityGroupICMP)
+	}
+	if obj.Status.SecurityGroupPhysicalNoop == nil {
+		status.ClearSecurityGroupPhysicalNoop()
+	} else {
+		status.SetSecurityGroupPhysicalNoop(*obj.Status.SecurityGroupPhysicalNoop)
 	}
 	return nil
 }

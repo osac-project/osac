@@ -113,6 +113,14 @@ var _ = Describe("Resolve (TC-REG-01)", func() {
 		Expect(res.Kubernetes.HasCapability(networkmanager.CapabilitySecurityGroupICMP)).To(BeTrue())
 	})
 
+	It("accepts security_group_physical_noop on a Fabric Manager", func() {
+		res, err := resolve(false, "",
+			fabric(map[string]string{"capabilities": "eastWestEthernet,security_group_physical_noop"}))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.Fabric.HasCapability(networkmanager.CapabilitySecurityGroupPhysicalNoop)).To(BeTrue())
+		Expect(res.SecurityGroupPhysicalNoop()).To(BeTrue())
+	})
+
 	DescribeTable("SecurityGroupICMP",
 		func(k8sName string, want bool, objs ...client.Object) {
 			res, err := resolve(false, k8sName, objs...)
@@ -129,6 +137,19 @@ var _ = Describe("Resolve (TC-REG-01)", func() {
 			fabric(map[string]string{"capabilities": "security_group_icmp"}), k8s(nil)),
 		Entry("only the Kubernetes Manager declares it", "cudn_evpn", false,
 			fabric(nil), k8s(map[string]string{"capabilities": "security_group_icmp"})),
+	)
+
+	DescribeTable("SecurityGroupPhysicalNoop",
+		func(want bool, objs ...client.Object) {
+			res, err := resolve(false, "", objs...)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.SecurityGroupPhysicalNoop()).To(Equal(want))
+		},
+		Entry("the Fabric Manager declares it", true,
+			fabric(map[string]string{"capabilities": "security_group_physical_noop"})),
+		Entry("the Fabric Manager does not declare it", false, fabric(nil)),
+		Entry("the Fabric Manager declares only security_group_icmp", false,
+			fabric(map[string]string{"capabilities": "security_group_icmp"})),
 	)
 
 	It("rejects a malformed name", func() {
@@ -200,6 +221,9 @@ var _ = Describe("Resolve (TC-REG-01)", func() {
 		Entry("capabilities on a Kubernetes Manager", "cudn_evpn", false,
 			`ConfigMap osac-operator/network-manager-cudn-evpn: unknown capability "eastWestEthernet"`,
 			fabric(nil), k8s(map[string]string{"capabilities": "eastWestEthernet"})),
+		Entry("security_group_physical_noop on a Kubernetes Manager", "cudn_evpn", false,
+			`ConfigMap osac-operator/network-manager-cudn-evpn: unknown capability "security_group_physical_noop"`,
+			fabric(nil), k8s(map[string]string{"capabilities": "security_group_physical_noop"})),
 		Entry("no Kubernetes registration", "cudn_evpn", false,
 			`kubernetes manager "cudn_evpn" matches no ConfigMap labelled osac.openshift.io/network-k8s-manager`,
 			fabric(nil)),

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -57,25 +58,26 @@ const (
 // authorization code flow, device flow, or resource owner password credentials flow to obtain and automatically renew
 // access tokens.
 type TokenSourceBuilder struct {
-	logger       *slog.Logger
-	store        auth.TokenStore
-	flow         Flow
-	listener     FlowListener
-	issuer       string
-	clientId     string
-	clientSecret string
-	username     string
-	password     string
-	scopes       []string
-	audience     string
-	insecure     bool
-	caPool       *trust.CertPool
-	interactive  bool
-	timeout      time.Duration
-	httpClient   *http.Client
-	openFunc     func(ctx context.Context, url string) error
-	pollInterval time.Duration
-	redirectUri  string
+	logger           *slog.Logger
+	store            auth.TokenStore
+	flow             Flow
+	listener         FlowListener
+	issuer           string
+	clientId         string
+	clientSecret     string
+	clientSecretFile string
+	username         string
+	password         string
+	scopes           []string
+	audience         string
+	insecure         bool
+	caPool           *trust.CertPool
+	interactive      bool
+	timeout          time.Duration
+	httpClient       *http.Client
+	openFunc         func(ctx context.Context, url string) error
+	pollInterval     time.Duration
+	redirectUri      string
 }
 
 type TokenSource struct {
@@ -86,6 +88,7 @@ type TokenSource struct {
 	issuer           string
 	clientId         string
 	clientSecret     string
+	clientSecretFile string
 	username         string
 	password         string
 	scopes           []string
@@ -182,9 +185,16 @@ func (b *TokenSourceBuilder) SetClientId(value string) *TokenSourceBuilder {
 	return b
 }
 
-// SetClientSecret sets the client secret. This is mandatory for client credentials flow and optional for other flows.
+// SetClientSecret sets an inline client secret. The client credentials flow requires this or a secret file.
 func (b *TokenSourceBuilder) SetClientSecret(value string) *TokenSourceBuilder {
 	b.clientSecret = value
+	return b
+}
+
+// SetClientSecretFile sets the path read for each client credentials grant.
+// It cannot be combined with SetClientSecret or used with other flows.
+func (b *TokenSourceBuilder) SetClientSecretFile(path string) *TokenSourceBuilder {
+	b.clientSecretFile = path
 	return b
 }
 
@@ -328,6 +338,7 @@ func (b *TokenSourceBuilder) Build() (result *TokenSource, err error) {
 		issuer:           b.issuer,
 		clientId:         b.clientId,
 		clientSecret:     b.clientSecret,
+		clientSecretFile: b.clientSecretFile,
 		username:         b.username,
 		password:         b.password,
 		scopes:           resolved.scopes,
@@ -362,12 +373,20 @@ type resolvedConfig struct {
 
 // validateFlowParameters validates per-flow parameter requirements.
 func (b *TokenSourceBuilder) validateFlowParameters() error {
+	if b.clientSecretFile != "" {
+		if b.clientSecret != "" {
+			return errors.New("inline client secret and client secret file are mutually exclusive")
+		}
+		if b.flow != CredentialsFlow {
+			return errors.New("client secret file is only supported for the client credentials flow")
+		}
+	}
 	switch b.flow {
 	case CredentialsFlow:
 		if b.clientId == "" {
 			return errors.New("client identifier is mandatory for the client credentials flow")
 		}
-		if b.clientSecret == "" {
+		if b.clientSecret == "" && b.clientSecretFile == "" {
 			return errors.New("client secret is mandatory for the client credentials flow")
 		}
 	case CodeFlow:
@@ -765,9 +784,28 @@ func (s *TokenSource) runFlow(ctx context.Context) (result *auth.Token, err erro
 // sendForm sends a request containing a set of fields and returns the response. The request should be a struct with
 // `url` tags that will be used to encode the request into a URL encoded form. If the response code is 200 it writes
 // the result into the given response, which should be a pointer to a struct that has JSON tags. If the response code
-// is not 200 then an error is returned. The error will be of type `endpointError` if the server returned a valid JSON
-// error response with at least the `error` field. Otherwise will be a generic error.
-func (s *TokenSource) sendForm(ctx context.Context, endpoint string, form any, result any) error {
+// is not 200 then an error is returned. For inline credentials, the error can be an endpointError.
+func (s *TokenSource) sendForm(ctx context.Context, endpoint string, form any, result any) (err error) {
+	var status int
+	if s.clientSecretFile != "" {
+		// The provider or transport may include credentials in diagnostic text.
+		// Return only locally generated diagnostics for these requests.
+		defer func() {
+			switch {
+			case err == nil:
+			case ctx.Err() != nil:
+				err = ctx.Err()
+			case isTimeoutError(err):
+				err = errors.New("token endpoint request timed out")
+			case status == http.StatusOK:
+				err = errors.New("token endpoint returned an invalid response")
+			case status != 0:
+				err = fmt.Errorf("token endpoint request failed (HTTP %d)", status)
+			default:
+				err = errors.New("token endpoint request failed before receiving a response")
+			}
+		}()
+	}
 	values, err := query.Values(form)
 	if err != nil {
 		return err
@@ -784,9 +822,10 @@ func (s *TokenSource) sendForm(ctx context.Context, endpoint string, form any, r
 	if err != nil {
 		return err
 	}
+	status = response.StatusCode
 	defer func() {
 		err := response.Body.Close()
-		if err != nil {
+		if err != nil && s.clientSecretFile == "" {
 			s.logger.ErrorContext(
 				ctx,
 				"Failed to close response body",
@@ -795,6 +834,9 @@ func (s *TokenSource) sendForm(ctx context.Context, endpoint string, form any, r
 			)
 		}
 	}()
+	if s.clientSecretFile != "" && status != http.StatusOK {
+		return errors.New("unsuccessful token endpoint response")
+	}
 	switch response.StatusCode {
 	case http.StatusOK:
 		contentType := response.Header.Get("Content-Type")
@@ -852,17 +894,26 @@ func (s *TokenSource) sendForm(ctx context.Context, endpoint string, form any, r
 	}
 }
 
+// isTimeoutError reports whether err is a network timeout, such as the
+// http.Client.Timeout firing while the caller's context is still live.
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
 func (s *TokenSource) sendTokenForm(ctx context.Context,
 	request tokenEndpointRequest) (response tokenEndpointResponse, err error) {
 	err = s.sendForm(ctx, s.tokenEndpoint, &request, &response)
 	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to send token form",
-			slog.String("endpoint", s.tokenEndpoint),
-			slog.Any("!request", request),
-			slog.Any("error", err),
-		)
+		if s.clientSecretFile == "" {
+			s.logger.ErrorContext(
+				ctx,
+				"Failed to send token form",
+				slog.String("endpoint", s.tokenEndpoint),
+				slog.Any("!request", request),
+				slog.Any("error", err),
+			)
+		}
 		return
 	}
 	return

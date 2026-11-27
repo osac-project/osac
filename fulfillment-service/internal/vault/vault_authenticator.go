@@ -30,16 +30,16 @@ import (
 )
 
 type AuthenticatorBuilder struct {
-	logger               *slog.Logger
-	vaultAddress         string
-	vaultNamespace       string
-	vaultAuthMountPath   string
-	vaultRole            string
-	keycloakIssuerURL    string
-	keycloakClientID     string
-	keycloakClientSecret string
-	keycloakAudience     string
-	caPool               *trust.CertPool
+	logger                   *slog.Logger
+	vaultAddress             string
+	vaultNamespace           string
+	vaultAuthMountPath       string
+	vaultRole                string
+	keycloakIssuerURL        string
+	keycloakClientID         string
+	keycloakClientSecretFile string
+	keycloakAudience         string
+	caPool                   *trust.CertPool
 }
 
 type Authenticator struct {
@@ -98,8 +98,8 @@ func (b *AuthenticatorBuilder) SetKeycloakClientID(value string) *AuthenticatorB
 	return b
 }
 
-func (b *AuthenticatorBuilder) SetKeycloakClientSecret(value string) *AuthenticatorBuilder {
-	b.keycloakClientSecret = value
+func (b *AuthenticatorBuilder) SetKeycloakClientSecretFile(path string) *AuthenticatorBuilder {
+	b.keycloakClientSecretFile = path
 	return b
 }
 
@@ -138,8 +138,8 @@ func (b *AuthenticatorBuilder) Build() (result *Authenticator, err error) {
 		err = errors.New("keycloak client ID is mandatory")
 		return
 	}
-	if b.keycloakClientSecret == "" {
-		err = errors.New("keycloak client secret is mandatory")
+	if b.keycloakClientSecretFile == "" {
+		err = errors.New("keycloak client secret file is mandatory")
 		return
 	}
 	if err = validatePathComponent(b.vaultAuthMountPath, "vault auth mount path"); err != nil {
@@ -159,7 +159,7 @@ func (b *AuthenticatorBuilder) Build() (result *Authenticator, err error) {
 		SetFlow(oauth.CredentialsFlow).
 		SetIssuer(b.keycloakIssuerURL).
 		SetClientId(b.keycloakClientID).
-		SetClientSecret(b.keycloakClientSecret).
+		SetClientSecretFile(b.keycloakClientSecretFile).
 		SetCaPool(b.caPool).
 		SetStore(tokenStore)
 

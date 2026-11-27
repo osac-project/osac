@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -28,11 +30,14 @@ import (
 
 var _ = Describe("ServiceTenantTokenSource", func() {
 	var (
-		ctx context.Context
+		ctx        context.Context
+		secretFile string
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		secretFile = filepath.Join(GinkgoT().TempDir(), "client-secret")
+		Expect(os.WriteFile(secretFile, []byte("secret"), 0o600)).To(Succeed())
 	})
 
 	newKeycloakServer := func(returnToken string) *httptest.Server {
@@ -86,7 +91,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL("http://keycloak/realms/osac").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("logger"))
@@ -98,7 +103,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL("http://keycloak/realms/osac").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("vault address"))
@@ -110,7 +115,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetVaultAddress("http://localhost:8200").
 				SetKeycloakIssuerURL("http://keycloak/realms/osac").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("parent namespace"))
@@ -122,7 +127,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetVaultAddress("http://localhost:8200").
 				SetParentNamespace("osac").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("keycloak issuer URL"))
@@ -137,13 +142,13 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetVaultAddress("http://localhost:8200").
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("keycloak client ID"))
 		})
 
-		It("fails without keycloak client secret", func() {
+		It("fails without a keycloak client secret file path", func() {
 			keycloakServer := newKeycloakServer("kc-jwt")
 			DeferCleanup(keycloakServer.Close)
 
@@ -155,29 +160,38 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetKeycloakClientID("client").
 				Build()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("keycloak client secret"))
+			Expect(err.Error()).To(ContainSubstring("keycloak client secret file"))
 		})
 	})
 
 	Describe("VaultToken", func() {
-		It("performs keycloak and vault authentication for a tenant", func() {
+		It("uses the configured file on first login and caches the tenant token", func() {
 			keycloakServer := newKeycloakServer("kc-jwt-token")
 			DeferCleanup(keycloakServer.Close)
 
 			vaultServer := httptest.NewServer(newVaultHandler("kc-jwt-token", "osac/tenant-a", "vault-tenant-token", 3600))
 			DeferCleanup(vaultServer.Close)
 
-			source, err := NewServiceTenantTokenSource().
-				SetLogger(logger).
-				SetVaultAddress(vaultServer.URL).
-				SetParentNamespace("osac").
-				SetKeycloakIssuerURL(keycloakServer.URL).
-				SetKeycloakClientID("my-client").
-				SetKeycloakClientSecret("my-secret").
-				Build()
+			path := filepath.Join(GinkgoT().TempDir(), "projected-secret")
+			source, err := NewServiceTenantTokenSourceFromConfig(logger, BaseConfig{
+				Endpoint:                 vaultServer.URL,
+				Namespace:                "osac",
+				KVMountPath:              "secret",
+				KeycloakIssuerURL:        keycloakServer.URL,
+				KeycloakClientID:         "my-client",
+				KeycloakClientSecretFile: path,
+			}, nil)
 			Expect(err).ToNot(HaveOccurred())
 
+			_, err = source.VaultToken(ctx, "tenant-a")
+			Expect(err).To(MatchError(ContainSubstring("failed to read client secret file")))
+			Expect(os.WriteFile(path, []byte("my-secret"), 0o600)).To(Succeed())
 			token, err := source.VaultToken(ctx, "tenant-a")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(token).To(Equal("vault-tenant-token"))
+
+			Expect(os.Remove(path)).To(Succeed())
+			token, err = source.VaultToken(ctx, "tenant-a")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(token).To(Equal("vault-tenant-token"))
 		})
@@ -206,7 +220,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -245,7 +259,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -273,7 +287,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -306,7 +320,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -331,7 +345,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -353,7 +367,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 

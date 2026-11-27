@@ -21,9 +21,8 @@ import (
 )
 
 // NewServiceTenantTokenSourceFromConfig creates a TenantTokenSource that
-// authenticates to Vault using Keycloak client credentials. It reads the
-// client secret from disk and builds a ServiceTenantTokenSource with
-// per-tenant token caching.
+// authenticates to Vault using Keycloak client credentials and caches Vault
+// tokens per tenant. It reads the secret file only for a client credentials grant.
 func NewServiceTenantTokenSourceFromConfig(
 	logger *slog.Logger,
 	base BaseConfig,
@@ -31,14 +30,6 @@ func NewServiceTenantTokenSourceFromConfig(
 ) (TenantTokenSource, error) {
 	if err := ValidateBaseConfig(base); err != nil {
 		return nil, err
-	}
-
-	keycloakClientSecret, err := readTrimmedFile(base.KeycloakClientSecretFile)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to read vault keycloak client secret from file '%s': %w",
-			base.KeycloakClientSecretFile, err,
-		)
 	}
 
 	logger.Info("Creating service tenant token source",
@@ -52,7 +43,7 @@ func NewServiceTenantTokenSourceFromConfig(
 		SetParentNamespace(base.Namespace).
 		SetKeycloakIssuerURL(base.KeycloakIssuerURL).
 		SetKeycloakClientID(base.KeycloakClientID).
-		SetKeycloakClientSecret(keycloakClientSecret).
+		SetKeycloakClientSecretFile(base.KeycloakClientSecretFile).
 		SetKeycloakAudience(base.KeycloakAudience).
 		SetCaPool(caPool).
 		Build()

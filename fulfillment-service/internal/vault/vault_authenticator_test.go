@@ -20,6 +20,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -29,11 +31,14 @@ import (
 
 var _ = Describe("Authenticator", func() {
 	var (
-		ctx context.Context
+		ctx        context.Context
+		secretFile string
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		secretFile = filepath.Join(GinkgoT().TempDir(), "client-secret")
+		Expect(os.WriteFile(secretFile, []byte("secret"), 0o600)).To(Succeed())
 	})
 
 	newKeycloakServer := func(expectedClientID, expectedSecret, returnToken string) *httptest.Server {
@@ -47,6 +52,7 @@ var _ = Describe("Authenticator", func() {
 			})
 		})
 		mux.HandleFunc("/protocol/openid-connect/token", func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
 			body, _ := io.ReadAll(r.Body)
 			Expect(string(body)).To(ContainSubstring("grant_type=client_credentials"))
 			Expect(string(body)).To(ContainSubstring(fmt.Sprintf("client_id=%s", expectedClientID)))
@@ -65,6 +71,7 @@ var _ = Describe("Authenticator", func() {
 
 	newVaultHandler := func(expectedJWT, expectedRole, returnToken string, leaseDuration int) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
 			Expect(r.URL.Path).To(Equal("/v1/auth/jwt/login"))
 			Expect(r.Header.Get("X-Vault-Namespace")).To(Equal("osac"))
 
@@ -91,7 +98,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL("http://keycloak/realms/osac").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("logger"))
@@ -104,7 +111,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL("http://keycloak/realms/osac").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("vault address"))
@@ -117,7 +124,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL("http://keycloak/realms/osac").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("vault namespace"))
@@ -130,7 +137,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultNamespace("osac").
 				SetKeycloakIssuerURL("http://keycloak/realms/osac").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("vault role"))
@@ -143,7 +150,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultNamespace("osac").
 				SetVaultRole("lifecycle").
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("keycloak issuer URL"))
@@ -159,13 +166,13 @@ var _ = Describe("Authenticator", func() {
 				SetVaultNamespace("osac").
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL(keycloakServer.URL).
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("keycloak client ID"))
 		})
 
-		It("fails without keycloak client secret", func() {
+		It("fails without a keycloak client secret file path", func() {
 			keycloakServer := newKeycloakServer("client", "secret", "kc-jwt")
 			DeferCleanup(keycloakServer.Close)
 
@@ -178,7 +185,7 @@ var _ = Describe("Authenticator", func() {
 				SetKeycloakClientID("client").
 				Build()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("keycloak client secret"))
+			Expect(err.Error()).To(ContainSubstring("keycloak client secret file"))
 		})
 
 		It("defaults auth mount path to jwt", func() {
@@ -205,7 +212,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -216,27 +223,37 @@ var _ = Describe("Authenticator", func() {
 	})
 
 	Describe("VaultToken", func() {
-		It("performs keycloak and vault authentication", func() {
+		It("uses the configured file on first login and caches the lifecycle token", func() {
 			keycloakServer := newKeycloakServer("my-client", "my-secret", "kc-jwt-token")
 			DeferCleanup(keycloakServer.Close)
 
-			vaultServer := httptest.NewServer(newVaultHandler("kc-jwt-token", "lifecycle", "vault-result-token", 3600))
+			mux := http.NewServeMux()
+			mux.HandleFunc("/v1/auth/jwt/login", newVaultHandler("kc-jwt-token", "lifecycle", "vault-result-token", 3600))
+			mux.HandleFunc("DELETE /v1/sys/namespaces/tenant-a", func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
+				Expect(r.Header.Get("X-Vault-Namespace")).To(Equal("osac"))
+				Expect(r.Header.Get("X-Vault-Token")).To(Equal("vault-result-token"))
+				w.WriteHeader(http.StatusNoContent)
+			})
+			vaultServer := httptest.NewServer(mux)
 			DeferCleanup(vaultServer.Close)
 
-			auth, err := NewAuthenticator().
-				SetLogger(logger).
-				SetVaultAddress(vaultServer.URL).
-				SetVaultNamespace("osac").
-				SetVaultRole("lifecycle").
-				SetKeycloakIssuerURL(keycloakServer.URL).
-				SetKeycloakClientID("my-client").
-				SetKeycloakClientSecret("my-secret").
-				Build()
+			path := filepath.Join(GinkgoT().TempDir(), "projected-secret")
+			client, err := NewLifecycleClientFromConfig(logger, BaseConfig{
+				Endpoint:                 vaultServer.URL,
+				Namespace:                "osac",
+				KVMountPath:              "secret",
+				KeycloakIssuerURL:        keycloakServer.URL,
+				KeycloakClientID:         "my-client",
+				KeycloakClientSecretFile: path,
+			}, LifecycleConfig{Role: "lifecycle", MountPath: "jwt", TransitMountPath: "transit"}, nil)
 			Expect(err).ToNot(HaveOccurred())
 
-			token, err := auth.VaultToken(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(token).To(Equal("vault-result-token"))
+			Expect(client.DeleteTenantNamespace(ctx, "tenant-a")).To(MatchError(ContainSubstring("failed to read client secret file")))
+			Expect(os.WriteFile(path, []byte("my-secret\n"), 0o600)).To(Succeed())
+			Expect(client.DeleteTenantNamespace(ctx, "tenant-a")).To(Succeed())
+			Expect(os.Remove(path)).To(Succeed())
+			Expect(client.DeleteTenantNamespace(ctx, "tenant-a")).To(Succeed())
 		})
 
 		It("caches token on subsequent calls", func() {
@@ -272,7 +289,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -312,7 +329,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -338,7 +355,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -373,7 +390,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -396,7 +413,7 @@ var _ = Describe("Authenticator", func() {
 				SetVaultRole("lifecycle").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecretFile(secretFile).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 

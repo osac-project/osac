@@ -247,3 +247,5 @@ phase files into the single `junit.xml` at the root of the run's
 `osac-logs-it-<suite>-<run_id>` log bundle, which the ci-observe monitoring
 reads; the phases of one suite share Ginkgo's suite description, so each
 merged `<testsuite>` name carries the phase file's stem.
+
+BMaaS validation and public network-status coverage is tracked by [OSAC-7619](https://redhat.atlassian.net/browse/OSAC-7619).

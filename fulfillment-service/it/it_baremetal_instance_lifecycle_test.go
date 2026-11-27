@@ -106,6 +106,24 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 								Type:  "Ethernet",
 								Speed: "25Gbps",
 							}.Build(),
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "management-0",
+								Role:  "management",
+								Type:  "Ethernet",
+								Speed: "1Gbps",
+							}.Build(),
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "storage-0",
+								Role:  "storage",
+								Type:  "Ethernet",
+								Speed: "25Gbps",
+							}.Build(),
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "lifecycle-0",
+								Role:  "lifecycle",
+								Type:  "Ethernet",
+								Speed: "1Gbps",
+							}.Build(),
 						},
 					}.Build(),
 					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
@@ -382,6 +400,63 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(fresh.GetStatusCondition(bmfov1alpha1.HostConditionNetworkAttachmentsReady).Message).
 			To(Equal(diagnostic), "the internal diagnostic should remain on the hub CR")
 
+		By("projecting a terminal power-cycle handoff failure with a curated message")
+		setBMFStatus(bmfov1alpha1.BareMetalInstancePhaseFailed, []metav1.Condition{
+			{
+				Type:               string(bmfov1alpha1.HostConditionNetworkAttachmentsReady),
+				Status:             metav1.ConditionTrue,
+				Reason:             "Succeeded",
+				Message:            "Fabric apply completed",
+				LastTransitionTime: metav1.Now(),
+			},
+			{
+				Type:               string(bmfov1alpha1.HostConditionNetworkHandoffComplete),
+				Status:             metav1.ConditionFalse,
+				Reason:             bmfov1alpha1.HostConditionReasonNetworkHandoffFailed,
+				Message:            "private management diagnostic; job id 9403",
+				LastTransitionTime: metav1.Now(),
+			},
+		})
+		Eventually(func(g Gomega) {
+			response, getErr := bareMetalInstancesClient.Get(ctx,
+				publicv1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			condition := findBareMetalInstanceCondition(response.GetObject().GetStatus().GetConditions(),
+				publicv1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+			g.Expect(condition).NotTo(BeNil())
+			g.Expect(condition.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
+			g.Expect(condition.GetReason()).To(Equal("NetworkHandoffFailed"))
+			g.Expect(condition.GetMessage()).To(Equal("Network handoff did not complete."))
+			g.Expect(condition.GetMessage()).NotTo(ContainSubstring("private management diagnostic"))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		By("reporting disabled networking as NETWORK_READY=True with a stable reason")
+		setBMFStatus(bmfov1alpha1.BareMetalInstancePhaseReady, []metav1.Condition{
+			{
+				Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue,
+				Reason: "Skipped", Message: "Networking provisioning disabled", LastTransitionTime: metav1.Now(),
+			},
+			{
+				Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue,
+				Reason: "Skipped", Message: "Networking provisioning disabled", LastTransitionTime: metav1.Now(),
+			},
+			{
+				Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionTrue,
+				Reason: "Skipped", Message: "Networking provisioning disabled", LastTransitionTime: metav1.Now(),
+			},
+		})
+		Eventually(func(g Gomega) {
+			response, getErr := bareMetalInstancesClient.Get(ctx,
+				publicv1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			condition := findBareMetalInstanceCondition(response.GetObject().GetStatus().GetConditions(),
+				publicv1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+			g.Expect(condition).NotTo(BeNil())
+			g.Expect(condition.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_TRUE))
+			g.Expect(condition.GetReason()).To(Equal("ProvisioningDisabled"))
+			g.Expect(condition.GetMessage()).To(Equal("Provider networking is disabled; this operation was skipped."))
+		}, time.Minute, time.Second).Should(Succeed())
+
 		By("leaving NETWORK_READY unset when provisioning fails before networking")
 		setBMFStatus(bmfov1alpha1.BareMetalInstancePhaseFailed, nil)
 		Eventually(func(g Gomega) {
@@ -444,6 +519,53 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		By("retaining the last network condition while cleanup retries")
 		setBMFStatus(bmfov1alpha1.BareMetalInstancePhaseDeleting, nil)
 		Eventually(expectCleanupStatus, time.Minute, time.Second).Should(Succeed())
+	})
+
+	It("creates and deletes a BareMetalInstance without allocating an automatic ExternalIP when networking is disabled", func(ctx context.Context) {
+		ndSkipIfProviderNetworkingEnabled(ctx, "automatic ExternalIP suppression for a BareMetalInstance")
+
+		name := fmt.Sprintf("test-bmi-disabled-auto-eip-%s", uuid.New()[24:32])
+		created, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem:              publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:             publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					UserDataSource:           publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+					DiskImage:                publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					AutoExternalIpAttachment: new(true),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		bmiID := created.GetObject().GetId()
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, deleteErr := privateBareMetalInstancesClient.Delete(cleanupCtx,
+				privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build())
+			if grpcstatus.Code(deleteErr) != grpccodes.NotFound {
+				Expect(deleteErr).NotTo(HaveOccurred())
+			}
+			Eventually(func(g Gomega) {
+				_, getErr := privateBareMetalInstancesClient.Get(cleanupCtx,
+					privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		})
+
+		persisted, err := privateBareMetalInstancesClient.Get(ctx,
+			privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
+
+		externalIPsClient := privatev1.NewExternalIPsClient(tool.InternalView().AdminConn())
+		filter := fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == %q && this.metadata.labels['osac.openshift.io/auto-created'] == 'true'", bmiID)
+		Consistently(func(g Gomega) {
+			response, listErr := externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
+				Filter: &filter,
+			}.Build())
+			g.Expect(listErr).NotTo(HaveOccurred())
+			g.Expect(response.GetItems()).To(BeEmpty(), "disabled networking must not allocate an automatic ExternalIP")
+		}, 3*time.Second, time.Second).Should(Succeed())
 	})
 
 	It("waits for automatic ExternalIP cleanup before deleting the BMFO CR", func(ctx context.Context) {
@@ -673,25 +795,84 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		})
 
 		originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachments()[0]).(*publicv1.BareMetalNetworkAttachment)
-		changed := proto.Clone(originalAttachment).(*publicv1.BareMetalNetworkAttachment)
-		changed.SetSecurityGroups(nil)
-		candidate := proto.Clone(object).(*publicv1.BareMetalInstance)
-		candidate.GetSpec().SetNetworkAttachments([]*publicv1.BareMetalNetworkAttachment{changed})
 		mask := catalogItemUpdateMask("spec.network_attachments")
-		_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
-			Object: candidate, UpdateMask: mask,
-		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		mutations := []struct {
+			name   string
+			mutate func(*publicv1.BareMetalNetworkAttachment)
+		}{
+			{name: "subnet", mutate: func(a *publicv1.BareMetalNetworkAttachment) {
+				a.SetSubnet(publicv1.SubnetLocalReference_builder{Id: "different-subnet"}.Build())
+			}},
+			{name: "interface", mutate: func(a *publicv1.BareMetalNetworkAttachment) { a.SetInterface("management-0") }},
+			{name: "primary", mutate: func(a *publicv1.BareMetalNetworkAttachment) { a.SetPrimary(false) }},
+			{name: "security groups", mutate: func(a *publicv1.BareMetalNetworkAttachment) { a.SetSecurityGroups(nil) }},
+		}
+		for _, mutation := range mutations {
+			By("rejecting a change to the immutable " + mutation.name + " field")
+			changed := proto.Clone(originalAttachment).(*publicv1.BareMetalNetworkAttachment)
+			mutation.mutate(changed)
+			candidate := proto.Clone(object).(*publicv1.BareMetalInstance)
+			candidate.GetSpec().SetNetworkAttachments([]*publicv1.BareMetalNetworkAttachment{changed})
+			_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
+				Object: candidate, UpdateMask: mask,
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument), mutation.name)
+
+			persisted, getErr := bareMetalInstancesClient.Get(ctx,
+				publicv1.BareMetalInstancesGetRequest_builder{Id: bareMetalInstanceId}.Build())
+			Expect(getErr).NotTo(HaveOccurred())
+			Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).
+				To(BeTrue(), "rejected %s update must not change persisted network configuration", mutation.name)
+		}
 
 		persisted, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: bareMetalInstanceId}.Build())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
 
 		_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
 			Object:     persisted.GetObject(),
 			UpdateMask: mask,
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("rejects non-fabric interfaces and primary false before persisting a BareMetalInstance", func(ctx context.Context) {
+		cases := []struct {
+			name    string
+			iface   string
+			primary *bool
+		}{
+			{name: "management", iface: "management-0"},
+			{name: "storage", iface: "storage-0"},
+			{name: "lifecycle", iface: "lifecycle-0"},
+			{name: "primary-false", iface: "data-0", primary: new(false)},
+		}
+		for _, tc := range cases {
+			name := fmt.Sprintf("test-bmi-invalid-network-%s-%s", tc.name, uuid.New()[24:32])
+			attachment := defaultNetworkingFixture.bareMetalInstanceAttachment()
+			attachment.SetInterface(tc.iface)
+			if tc.primary != nil {
+				attachment.SetPrimary(*tc.primary)
+			}
+			_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+					Spec: publicv1.BareMetalInstanceSpec_builder{
+						CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+						InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+						UserDataSource:     publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+						DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+						NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{attachment},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument), tc.name)
+
+			filter := fmt.Sprintf("this.metadata.name == %q", name)
+			listed, listErr := bareMetalInstancesClient.List(ctx,
+				publicv1.BareMetalInstancesListRequest_builder{Filter: &filter}.Build())
+			Expect(listErr).NotTo(HaveOccurred())
+			Expect(listed.GetItems()).To(BeEmpty(), "rejected %s request must not persist", tc.name)
+		}
 	})
 
 	It("Creates BareMetalInstance with disk_image and persists it", func(ctx context.Context) {

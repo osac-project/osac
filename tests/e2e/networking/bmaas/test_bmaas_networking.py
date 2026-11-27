@@ -72,6 +72,20 @@ def _describe_external_ip(item: dict[str, Any]) -> str:
     return f"{metadata.get('name', '?')} ({item.get('id', '?')}, tenant {metadata.get('tenant', '?')})"
 
 
+def _has_public_network_ready(grpc: GRPCClient, bmi_id: str, tenant_ip: str) -> bool:
+    status = grpc.get_baremetal_instance(bmi_id=bmi_id).get("object", {}).get("status", {})
+    network_ready = any(
+        condition.get("type") == "BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY"
+        and condition.get("status") == "CONDITION_STATUS_TRUE"
+        for condition in status.get("conditions", [])
+    )
+    discovered_primary_ip = any(
+        attachment.get("primary") is True and attachment.get("ipAddress") == tenant_ip
+        for attachment in status.get("networkAttachmentStatuses", [])
+    )
+    return network_ready and discovered_primary_ip
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _guest_snapshot_source(k8s_hub_client: K8sClient, bmh_namespace: str) -> Iterator[None]:
     """Let a failure snapshot read the network state of the BMIs this class has recorded so far, and the hosts."""
@@ -245,7 +259,14 @@ class TestBmaasNetworking:
                 external_ip_attachment=is_auto_eip,
             )
             print("Created BMI")
-            bmis.append({"name": bmi_name, "id": bmi_id, "subnet": "a" if i < 2 else "b"})
+            bmi = {
+                "name": bmi_name,
+                "id": bmi_id,
+                "cr": f"bmi-{bmi_id}",
+                "subnet": "a" if i < 2 else "b",
+            }
+            self.__class__.state.setdefault("created_bmis", []).append(bmi)
+            bmis.append(bmi)
 
         for bmi in bmis:
             bmi["cr"] = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi["id"])
@@ -265,6 +286,15 @@ class TestBmaasNetworking:
                 resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
                 resource_id=bmi["cr"],
             )
+            poll_until(
+                fn=lambda b=bmi: _has_public_network_ready(grpc=grpc, bmi_id=b["id"], tenant_ip=b["ip"]),
+                until=lambda ready: ready,
+                retries=60,
+                delay=5,
+                description=f"{bmi['name']} public NETWORK_READY and DHCP address feedback",
+                resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                resource_id=bmi["id"],
+            )
 
             ext_host = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi["cr"])
             bmi["bmh"] = ext_host.split("/", 1)[1]
@@ -277,9 +307,6 @@ class TestBmaasNetworking:
             else:
                 assert bmi["ip"].startswith("172.20.2."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet B"
 
-        self.__class__.state["bmi1"] = bmis[0]
-        self.__class__.state["bmi2"] = bmis[1]
-        self.__class__.state["bmi3"] = bmis[2]
         # RUNNING comes about a minute after the host is powered back on, before sshd listens.
         bmi_ssh.wait_for_ssh_ready(bmis)
         for bmi in bmis:
@@ -289,6 +316,7 @@ class TestBmaasNetworking:
                 f"BareMetalInstance {bmi['name']} has instance_type {instance_type.get('name')!r}, "
                 f"expected {bmi_instance_type!r}"
             )
+        self.__class__.state.update(bmi1=bmis[0], bmi2=bmis[1], bmi3=bmis[2])
 
     def test_05b_verify_auto_eip_on_bmi3(
         self, grpc: GRPCClient, private_grpc: GRPCClient, k8s_hub_client: K8sClient
@@ -517,21 +545,39 @@ class TestBmaasNetworking:
     def test_14_delete_bmis(
         self, cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, bmh_namespace: str
     ) -> None:
-        for key in ("bmi1", "bmi2", "bmi3"):
-            if key not in self.state:
-                continue
-            bmi = self.state[key]
+        bmis = self.state.get("created_bmis", [])
+        for bmi in bmis:
+            cr_name = bmi.get("cr", f"bmi-{bmi['id']}")
+            bmh_name = bmi.get("bmh")
+            if not bmh_name:
+                try:
+                    external_host_id = k8s_hub_client.get_baremetal_instance_external_host_id(name=cr_name)
+                except CommandFailed:
+                    external_host_id = ""
+                if "/" in external_host_id:
+                    bmh_name = external_host_id.split("/", 1)[1]
+            if bmh_name:
+                bmi["bmh"] = bmh_name
             print("Deleting BMI...")
             cli.delete_baremetal_instance(uuid=bmi["id"])
 
-        for key in ("bmi1", "bmi2", "bmi3"):
-            if key not in self.state:
-                continue
-            bmi = self.state[key]
-            wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi["cr"])
+        for bmi in bmis:
+            cr_name = bmi.get("cr", f"bmi-{bmi['id']}")
+            wait_for_bmi_deletion(k8s=k8s_hub_client, name=cr_name)
             wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi["id"])
-            wait_for_bmh_available(k8s=k8s_hub_client, name=bmi["bmh"], bmh_namespace=bmh_namespace)
-            print("BMI deprovisioned, BMH available")
+            bmh_name = bmi.get("bmh")
+            if not bmh_name:
+                try:
+                    external_host_id = k8s_hub_client.get_baremetal_instance_external_host_id(name=cr_name)
+                except CommandFailed:
+                    external_host_id = ""
+                if "/" in external_host_id:
+                    bmh_name = external_host_id.split("/", 1)[1]
+            if bmh_name:
+                wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_namespace)
+                print("BMI deprovisioned, BMH available")
+            else:
+                print("BMI deprovisioned before a BMH was assigned")
 
     def test_14b_verify_auto_eip_garbage_collected(self, grpc: GRPCClient) -> None:
         if "auto_attach_id" not in self.state:

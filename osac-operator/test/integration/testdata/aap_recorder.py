@@ -7,11 +7,23 @@ endpoints in sync when either suite changes.
 """
 
 import json
+import ssl
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.error import HTTPError
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.request import Request, urlopen
 
-TEMPLATES = {1: "osac-create-compute-instance", 2: "osac-delete-compute-instance"}
+TEMPLATES = {
+    1: "osac-create-compute-instance",
+    2: "osac-delete-compute-instance",
+    3: "osac-apply-network-attachment",
+    4: "osac-query-dhcp-lease",
+    5: "osac-delete-network-attachment",
+    6: "osac-create-bare-metal-instance",
+    7: "osac-delete-bare-metal-instance",
+}
 
 
 class RecorderServer(ThreadingHTTPServer):
@@ -23,7 +35,99 @@ class RecorderServer(ThreadingHTTPServer):
         self.jobs = {}
         self.labels = {}
         self.unexpected = []
+        self.handoff_complete = {}
         self.next_id = 100
+
+    @staticmethod
+    def open_baremetalinstance_watch(target_id, resource_version):
+        service_account = "/var/run/secrets/kubernetes.io/serviceaccount"
+        with open(f"{service_account}/namespace", encoding="utf-8") as stream:
+            namespace = stream.read().strip()
+        with open(f"{service_account}/token", encoding="utf-8") as stream:
+            token = stream.read().strip()
+
+        query = urlencode(
+            {
+                "watch": "true",
+                "fieldSelector": f"metadata.name={target_id}",
+                "resourceVersion": resource_version,
+            }
+        )
+        url = (
+            "https://kubernetes.default.svc/apis/osac.openshift.io/v1alpha1/namespaces/"
+            f"{quote(namespace, safe='')}/baremetalinstances?{query}"
+        )
+        request = Request(url, headers={"Authorization": f"Bearer {token}"})
+        tls = ssl.create_default_context(cafile=f"{service_account}/ca.crt")
+        return urlopen(request, context=tls)
+
+    def track_baremetalinstance(self, target_id):
+        # Establish the filtered watch before the test creates its BMI. The
+        # AAP handler can then compare launch arrival with already-seen events.
+        response = self.open_baremetalinstance_watch(target_id, "0")
+        thread = threading.Thread(
+            target=self.consume_baremetalinstance_watch,
+            args=(target_id, response, "0"),
+            daemon=True,
+        )
+        thread.start()
+
+    def consume_baremetalinstance_watch(self, target_id, response, resource_version):
+        while True:
+            try:
+                with response:
+                    for line in response:
+                        if not line:
+                            continue
+                        event = json.loads(line)
+                        if event.get("type") == "ERROR":
+                            error = event.get("object", {})
+                            if error.get("code") == 410:
+                                resource_version = "0"
+                                break
+                            raise ValueError("Kubernetes watch returned an error")
+
+                        instance = event.get("object", {})
+                        metadata = instance.get("metadata", {})
+                        resource_version = metadata.get("resourceVersion", resource_version)
+                        labels = metadata.get("labels", {})
+                        if labels.get("osac.openshift.io/baremetalinstance-uuid") != target_id:
+                            continue
+                        conditions = instance.get("status", {}).get("conditions", [])
+                        handoff_complete = any(
+                            condition.get("type") == "NetworkHandoffComplete"
+                            and condition.get("status") == "True"
+                            for condition in conditions
+                        )
+                        with self.lock:
+                            self.handoff_complete[target_id] = (
+                                handoff_complete and event.get("type") != "DELETED",
+                                time.monotonic(),
+                            )
+                        if event.get("type") == "DELETED":
+                            return
+            except Exception as error:  # noqa: BLE001 - report only a safe error class
+                if isinstance(error, (OSError, TimeoutError)):
+                    time.sleep(0.2)
+                else:
+                    with self.lock:
+                        self.unexpected.append(
+                            f"BareMetalInstance watch failed: {type(error).__name__}"
+                        )
+                    return
+            time.sleep(0.2)
+            try:
+                response = self.open_baremetalinstance_watch(target_id, resource_version)
+            except HTTPError as error:
+                if error.code == 410:
+                    resource_version = "0"
+                    continue
+                if error.code not in (429, 500, 502, 503, 504):
+                    with self.lock:
+                        self.unexpected.append("BareMetalInstance watch failed: HTTPError")
+                    return
+            except (OSError, TimeoutError):
+                continue
 
 
 class RecorderHandler(BaseHTTPRequestHandler):
@@ -51,8 +155,18 @@ class RecorderHandler(BaseHTTPRequestHandler):
             "id": job["id"],
             "status": job["status"],
             "extra_vars": json.dumps(job["payload"]["extra_vars"]),
-            "artifacts": {},
+            "artifacts": job.get("artifacts", {}),
         }
+
+    def network_handoff_complete_at_launch(self, payload, received_at):
+        """Use only BMI condition events observed before the DHCP launch."""
+        job_vars = payload.get("extra_vars", {}).get("osac_job_vars", {})
+        resource = job_vars.get("resource", {})
+        target_id = resource.get("spec", {}).get("target", {}).get("id")
+        if not isinstance(target_id, str) or not target_id:
+            raise ValueError("DHCP launch has no BareMetalInstance target")
+        handoff = self.server.handoff_complete.get(target_id)
+        return handoff is not None and handoff[0] and handoff[1] < received_at
 
     def do_GET(self):
         """Serve health, captures, template lookups, labels, and job status."""
@@ -105,6 +219,7 @@ class RecorderHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Record launches, cancellations, labels, completions, and resets."""
+        received_at = time.monotonic()
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length < 0 or length > 2 * 1024 * 1024:
@@ -123,6 +238,17 @@ class RecorderHandler(BaseHTTPRequestHandler):
                 self.server.jobs.clear()
                 self.server.labels.clear()
                 self.server.unexpected.clear()
+                self.server.handoff_complete.clear()
+                self.reply(200, {})
+            elif len(parts) == 2 and parts[0] == "track" and parts[1]:
+                try:
+                    self.server.track_baremetalinstance(parts[1])
+                except Exception as error:  # noqa: BLE001 - report only a safe error class
+                    self.server.unexpected.append(
+                        f"BareMetalInstance watch setup failed: {type(error).__name__}"
+                    )
+                    self.reply(503, {"detail": "could not track BareMetalInstance"})
+                    return
                 self.reply(200, {})
             elif path == "/api/v2/labels/":
                 label = {"id": len(self.server.labels) + 1, "name": payload["name"]}
@@ -134,25 +260,53 @@ class RecorderHandler(BaseHTTPRequestHandler):
                 if job is None or state not in ("successful", "failed", "canceled"):
                     self.reply(400, {"detail": "invalid completion"})
                     return
+                artifacts = payload.get("artifacts", {})
+                if not isinstance(artifacts, dict):
+                    self.reply(400, {"detail": "artifacts must be an object"})
+                    return
                 job["status"] = state
+                job["artifacts"] = artifacts
                 self.reply(200, {})
             elif (
                 len(parts) == 5
                 and parts[:3] == ["api", "v2", "job_templates"]
                 and parts[4] == "launch"
-                and parts[3] in ("1", "2", *TEMPLATES.values())
+                and (
+                    (parts[3].isdigit() and int(parts[3]) in TEMPLATES)
+                    or parts[3] in TEMPLATES.values()
+                )
             ):
                 if not isinstance(payload.get("extra_vars"), dict):
                     self.reply(400, {"detail": "extra_vars must be an object"})
                     return
+                template = TEMPLATES[int(parts[3])] if parts[3].isdigit() else parts[3]
+                handoff_complete = None
+                if template == "osac-query-dhcp-lease":
+                    try:
+                        handoff_complete = self.network_handoff_complete_at_launch(payload, received_at)
+                    except Exception as error:  # noqa: BLE001 - report only a safe error class
+                        self.server.unexpected.append(
+                            f"DHCP launch condition lookup failed: {type(error).__name__}"
+                        )
+                        self.reply(503, {"detail": "could not inspect handoff condition"})
+                        return
+                    if not handoff_complete:
+                        self.server.unexpected.append(
+                            "DHCP launch before NetworkHandoffComplete=True"
+                        )
+                        self.reply(409, {"detail": "network handoff is incomplete"})
+                        return
                 self.server.next_id += 1
                 job_id = self.server.next_id
                 self.server.jobs[str(job_id)] = {
                     "id": job_id,
-                    "template": TEMPLATES[int(parts[3])] if parts[3].isdigit() else parts[3],
+                    "template": template,
                     "status": "running",
                     "payload": payload,
+                    "artifacts": {},
                 }
+                if handoff_complete is not None:
+                    self.server.jobs[str(job_id)]["network_handoff_complete_at_launch"] = handoff_complete
                 self.reply(201, {"id": job_id})
             elif (
                 len(parts) == 5

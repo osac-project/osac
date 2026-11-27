@@ -29,9 +29,9 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -64,10 +64,11 @@ const (
 var aapRecorderScript string
 
 type aapCapture struct {
-	ID       int    `json:"id"`
-	Template string `json:"template"`
-	Status   string `json:"status"`
-	Payload  struct {
+	ID                             int    `json:"id"`
+	Template                       string `json:"template"`
+	Status                         string `json:"status"`
+	NetworkHandoffCompleteAtLaunch *bool  `json:"network_handoff_complete_at_launch,omitempty"`
+	Payload                        struct {
 		ExtraVars struct {
 			JobVars struct {
 				VMNetwork struct {
@@ -91,32 +92,40 @@ type aapCaptures struct {
 	Unexpected []string     `json:"unexpected"`
 }
 
-// applyObjects serializes typed Kubernetes objects into one v1.List for
-// kubectl apply, so the fixture schema stays type-checked.
-func applyObjects(objects ...any) string {
-	list := &corev1.List{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "List"}}
-	for _, object := range objects {
-		raw, err := json.Marshal(object)
-		Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder object")
-		list.Items = append(list.Items, runtime.RawExtension{Raw: raw})
-	}
-	manifest, err := json.Marshal(list)
-	Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder list")
-	return string(manifest)
-}
-
 // installAAPRecorder deploys the capture-only AAP server the operator points
 // at through operator.aap.url. It waits until the service proxy answers
 // /healthz before a ComputeInstance can launch a job.
 func installAAPRecorder() {
 	// A previous interrupted run may have left the fixed-name objects behind;
 	// recreate the recorder so it always runs the embedded script.
-	for _, resource := range []string{"pod", "service", "configmap"} {
+	for _, resource := range []string{"pod", "service", "configmap", "rolebinding", "role", "serviceaccount"} {
 		_, _ = runRecorderKubectl("", "delete", resource, aapRecorderName,
 			"-n", operatorNamespace, "--ignore-not-found", "--wait=true")
 	}
 
 	objects := []any{
+		&corev1.ServiceAccount{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"},
+			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
+		},
+		&rbacv1.Role{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role"},
+			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
+		},
+		&rbacv1.RoleBinding{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding"},
+			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: "rbac.authorization.k8s.io",
+				Kind:     "Role",
+				Name:     aapRecorderName,
+			},
+			Subjects: []rbacv1.Subject{{
+				Kind:      "ServiceAccount",
+				Name:      aapRecorderName,
+				Namespace: operatorNamespace,
+			}},
+		},
 		&corev1.ConfigMap{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
 			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
@@ -142,7 +151,8 @@ func installAAPRecorder() {
 				Labels:    map[string]string{"app": aapRecorderName},
 			},
 			Spec: corev1.PodSpec{
-				AutomountServiceAccountToken: new(false),
+				AutomountServiceAccountToken: new(true),
+				ServiceAccountName:           aapRecorderName,
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsNonRoot:   new(true),
 					RunAsUser:      new(int64(1000)),
@@ -184,8 +194,12 @@ func installAAPRecorder() {
 		},
 	}
 
-	_, err := runRecorderKubectl(applyObjects(objects...), "apply", "-f", "-")
-	Expect(err).NotTo(HaveOccurred(), "apply the AAP recorder fixture")
+	for _, object := range objects {
+		manifest, err := json.Marshal(object)
+		Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder object")
+		_, err = runRecorderKubectl(string(manifest), "apply", "-f", "-")
+		Expect(err).NotTo(HaveOccurred(), "apply the AAP recorder fixture")
+	}
 
 	Eventually(func(g Gomega) {
 		output, err := runRecorderKubectl("", "get", "pod", aapRecorderName, "-n", operatorNamespace,
@@ -211,7 +225,7 @@ func installAAPRecorder() {
 	}, 5*time.Minute, 2*time.Second).Should(Succeed())
 
 	DeferCleanup(func() {
-		for _, resource := range []string{"pod", "service", "configmap"} {
+		for _, resource := range []string{"pod", "service", "configmap", "rolebinding", "role", "serviceaccount"} {
 			_, _ = runRecorderKubectl("", "delete", resource, aapRecorderName,
 				"-n", operatorNamespace, "--ignore-not-found", "--wait=false")
 		}
@@ -259,24 +273,32 @@ func captureSummary(jobs []aapCapture) string {
 	return strings.Join(summaries, ", ")
 }
 
-// waitForAAPLaunch waits until exactly one launch of template carries the
-// ComputeInstance API ID that the operator put in the job's resource labels.
-func waitForAAPLaunch(template, id string) aapCapture {
+// waitForAAPCapture waits until the recorder contains exactly one matching job.
+func waitForAAPCapture(matches func(aapCapture) bool, unexpectedMessage string) aapCapture {
 	var found aapCapture
 	Eventually(func(g Gomega) {
 		captures, err := readAAPCaptures()
 		g.Expect(err).NotTo(HaveOccurred(), "read the AAP recorder captures")
-		g.Expect(captures.Unexpected).To(BeEmpty(), "the operator must launch no other AAP operation")
-		var matches []aapCapture
+		g.Expect(captures.Unexpected).To(BeEmpty(), unexpectedMessage)
+		var matchingJobs []aapCapture
 		for _, job := range captures.Jobs {
-			if job.Template == template && job.Payload.ExtraVars.JobVars.Resource.Metadata.Labels[computeInstanceIDLabel] == id {
-				matches = append(matches, job)
+			if matches(job) {
+				matchingJobs = append(matchingJobs, job)
 			}
 		}
-		g.Expect(matches).To(HaveLen(1), "captured jobs: %s", captureSummary(captures.Jobs))
-		found = matches[0]
+		g.Expect(matchingJobs).To(HaveLen(1), "captured jobs: %s", captureSummary(captures.Jobs))
+		found = matchingJobs[0]
 	}, aapLaunchTimeout, time.Second).Should(Succeed())
 	return found
+}
+
+// waitForAAPLaunch waits until exactly one launch of template carries the
+// ComputeInstance API ID that the operator put in the job's resource labels.
+func waitForAAPLaunch(template, id string) aapCapture {
+	return waitForAAPCapture(func(job aapCapture) bool {
+		resourceID := job.Payload.ExtraVars.JobVars.Resource.Metadata.Labels[computeInstanceIDLabel]
+		return job.Template == template && resourceID == id
+	}, "the operator must launch no other AAP operation")
 }
 
 // createTenantStorageClass creates a StorageClass labeled for the Tenant and

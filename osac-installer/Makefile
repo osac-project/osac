@@ -1333,16 +1333,24 @@ endif
 endif
 ifeq ($(SUITE),bmf)
 ifneq ($(strip $(JUNIT_REPORT_DIR)),)
-	rm -f "$(abspath $(JUNIT_REPORT_DIR)/bmf.xml)"
+	rm -f "$(abspath $(JUNIT_REPORT_DIR)/bmf.xml)" \
+		"$(abspath $(JUNIT_REPORT_DIR)/bmaas-networking-enabled.xml)" \
+		"$(abspath $(JUNIT_REPORT_DIR)/bmaas-networking-disabled.xml)"
 endif
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
+	$(call kind-load-image,localhost/osac-operator:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.secretAPI.url= --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.provisioningEnabled=true $(METERING_IT_IMAGE_ARGS)"
 	cd ../bare-metal-fulfillment-operator && ginkgo run $(call junit-report,bmf) --timeout 30m -v test/integration
+	# Keep the cluster-mutating phases in a script so dry-run never executes the block.
+	METERING_IT_IMAGE_ARGS='$(METERING_IT_IMAGE_ARGS)' \
+	JUNIT_REPORT_DIR="$(if $(strip $(JUNIT_REPORT_DIR)),$(abspath $(JUNIT_REPORT_DIR)))" \
+		./scripts/test-bmf-handoff.sh
 endif
 
 ##@ Charts

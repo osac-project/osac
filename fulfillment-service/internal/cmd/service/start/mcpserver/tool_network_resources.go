@@ -133,7 +133,7 @@ func handleCreateNetworkResource(
 		ctx context.Context, req *mcp.CallToolRequest, input CreateNetworkResourceInput,
 	) (*mcp.CallToolResult, CreateNetworkResourceOutput, error) {
 		if strings.TrimSpace(input.ID) != "" {
-			return nil, CreateNetworkResourceOutput{}, safeUnsupportedInPlaceNetworkEditError()
+			return nil, CreateNetworkResourceOutput{}, safeUnsupportedInPlaceNetworkEditError(input.ResourceType)
 		}
 		input = normalizeCreateNetworkResourceInput(input)
 		var err error
@@ -217,7 +217,7 @@ func handleExposeNetworkResource(
 			return nil, ExposeNetworkResourceOutput{}, safeInvalidRequestError(err)
 		}
 		if input.ID != "" {
-			return nil, ExposeNetworkResourceOutput{}, safeUnsupportedInPlaceNetworkEditError()
+			return nil, ExposeNetworkResourceOutput{}, safeUnsupportedInPlaceNetworkExposeEditError()
 		}
 		request, err := networkExposeRequestFromInput(input)
 		if err != nil {
@@ -644,10 +644,26 @@ func unsupportedExposeNetworkResourceTypeError(resourceType NetworkResourceType)
 	)
 }
 
-func safeUnsupportedInPlaceNetworkEditError() error {
+func safeUnsupportedInPlaceNetworkExposeEditError() error {
 	return safeInvalidRequestError(fmt.Errorf(
 		"unsupported_in_place: network resources are immutable; create and delete are separate tools",
 	))
+}
+
+func safeUnsupportedInPlaceNetworkEditError(resourceType NetworkResourceType) error {
+	var guidance string
+	switch resourceType {
+	case NetworkResourceTypeVirtualNetwork:
+		guidance = "metadata.name and spec.ipv4_cidr are immutable. Delete is blocked while Subnets, SecurityGroups, NATGateways, or FabricDomains reference this VirtualNetwork. Create the replacement VirtualNetwork, recreate its dependents under it, and remove old dependents before a separate delete request."
+	case NetworkResourceTypeSubnet:
+		guidance = "metadata.name, spec.virtual_network, and spec.ipv4_cidr are immutable. Delete is blocked while ComputeInstances, Clusters, or BaremetalInstances have a network attachment to this Subnet. Create a replacement Subnet in a ready VirtualNetwork, create replacement workloads with that Subnet, and remove old workloads before a separate delete request. Workload network attachments are immutable after creation."
+	case NetworkResourceTypeSecurityGroup:
+		guidance = "metadata.name and spec.virtual_network are immutable in this MCP tool. The public SecurityGroups.Update operation replaces the complete ingress and egress rule lists, but MCP does not expose it. Delete is blocked while ComputeInstances, Clusters, or BaremetalInstances have a network attachment to this SecurityGroup. To replace it, create a new group in the same VirtualNetwork and replacement workloads with the new group, then separately delete the old group after its dependents are gone."
+	default:
+		guidance = "network resource specifications and metadata are immutable. A replacement requires separate create, attachment, and delete calls; deletion is allowed only after active dependents are removed."
+	}
+	guidance += " Tenant default resources cannot be deleted individually; Fulfillment removes them only with the Tenant."
+	return safeInvalidRequestError(fmt.Errorf("unsupported_in_place: %s", guidance))
 }
 
 func safeNetworkCreateError(err error) error {

@@ -404,6 +404,28 @@ var _ = Describe("MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listedTools.Tools).To(HaveLen(len(expectedMCPServerToolNames)))
 		Expect(mcpToolNames(listedTools.Tools)).To(ConsistOf(expectedMCPServerToolNames))
+		listedToolsByName := make(map[string]*mcp.Tool, len(listedTools.Tools))
+		for _, listedTool := range listedTools.Tools {
+			listedToolsByName[listedTool.Name] = listedTool
+		}
+		Expect(listedToolsByName["create_network_resource"].Description).To(ContainSubstring(
+			"For a replacement, omit id from the create input",
+		))
+		Expect(listedToolsByName["create_network_resource"].Description).To(ContainSubstring(
+			"delete_network_resource requires a separate explicit request",
+		))
+		Expect(listedToolsByName["create_network_resource"].Description).To(ContainSubstring(
+			"Tenant default resources cannot be deleted individually",
+		))
+		Expect(listedToolsByName["delete_network_resource"].Description).To(ContainSubstring(
+			"never inferred from a replacement",
+		))
+		Expect(listedToolsByName["delete_network_resource"].Description).To(ContainSubstring(
+			"only when the user explicitly requests deletion",
+		))
+		Expect(listedToolsByName["delete_network_resource"].Description).To(ContainSubstring(
+			"Tenant default resources cannot be deleted individually",
+		))
 
 		instancesBefore, err := computeInstancesClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{
 			Limit: proto.Int32(1),
@@ -459,39 +481,12 @@ var _ = Describe("MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(instancesAfter.GetTotal()).To(Equal(instancesBefore.GetTotal()))
 
-		assertDiscoverable := func(resourceType mcpserver.ResourceType, id string) map[string]any {
-			listOutput, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
-				ResourceType: resourceType,
-				Filter:       fmt.Sprintf("this.id == %q", id),
-			})
-			Expect(err).ToNot(HaveOccurred())
-			Expect(listOutput.Items).To(HaveLen(1))
-			Expect(listOutput.Items[0].ID).To(Equal(id))
-
-			resource, err := callMCPTool[mcpserver.GetResourceOutput](ctx, session, "get_resource", mcpserver.GetResourceInput{
-				ResourceType: resourceType,
-				ID:           id,
-			})
-			Expect(err).ToNot(HaveOccurred())
-			Expect(resource.Resource).To(HaveKeyWithValue("id", id))
-			Expect(resource.Resource).To(HaveKey("name"))
-			Expect(resource.Resource).To(HaveKey("version"))
-			Expect(resource.Resource).ToNot(HaveKey("title"))
-			Expect(resource.Resource).ToNot(HaveKey("description"))
-			Expect(resource.Resource).ToNot(HaveKey("annotations"))
-			Expect(resource.Resource).ToNot(HaveKey("status"))
-			Expect(resource.Resource).ToNot(HaveKey("conditions"))
-			Expect(resource.Resource).ToNot(HaveKey("specDefaults"))
-			Expect(resource.Resource).ToNot(HaveKey("spec"))
-			Expect(resource.Resource).ToNot(HaveKey("fields"))
-			Expect(resource.Resource).ToNot(HaveKey("userData"))
-			return resource.Resource
-		}
-
-		catalogItem := assertDiscoverable(mcpserver.ResourceTypeComputeInstanceCatalogItem, catalogItemID)
-		assertDiscoverable(mcpserver.ResourceTypeComputeInstanceTemplate, templateID)
-		instanceType := assertDiscoverable(mcpserver.ResourceTypeInstanceType, instanceTypeID)
-		assertDiscoverable(mcpserver.ResourceTypeDiskImage, diskImageID)
+		catalogItem := assertMCPResourceDiscoverable(
+			ctx, session, mcpserver.ResourceTypeComputeInstanceCatalogItem, catalogItemID,
+		)
+		assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeComputeInstanceTemplate, templateID)
+		instanceType := assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeInstanceType, instanceTypeID)
+		assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeDiskImage, diskImageID)
 		projectList, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
 			ResourceType: mcpserver.ResourceTypeProject,
 			Filter:       fmt.Sprintf("this.id == %q", projectID),
@@ -499,10 +494,10 @@ var _ = Describe("MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(projectList.Items).To(HaveLen(1))
 		Expect(projectList.Items[0].ID).To(Equal(projectID))
-		storageTierResource := assertDiscoverable(mcpserver.ResourceTypeStorageTier, storageTierID)
-		assertDiscoverable(mcpserver.ResourceTypeVirtualNetwork, virtualNetworkID)
-		subnet := assertDiscoverable(mcpserver.ResourceTypeSubnet, subnetID)
-		securityGroup := assertDiscoverable(mcpserver.ResourceTypeSecurityGroup, securityGroupID)
+		storageTierResource := assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeStorageTier, storageTierID)
+		assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeVirtualNetwork, virtualNetworkID)
+		subnet := assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeSubnet, subnetID)
+		securityGroup := assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeSecurityGroup, securityGroupID)
 
 		catalogItemResourceID, ok := catalogItem["id"].(string)
 		Expect(ok).To(BeTrue())
@@ -598,6 +593,8 @@ var _ = Describe("MCP server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring(`"category":"conflict"`))
 		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"Aborted"`))
+		By("keeping the network identity discoverable after the stale version conflict")
+		assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeVirtualNetwork, virtualNetworkID)
 
 		var updated mcpserver.UpdateComputeInstanceOutput
 		Eventually(func(g Gomega) {

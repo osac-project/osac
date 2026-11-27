@@ -65,19 +65,39 @@ data, or raw protobuf JSON.
 `security_group` through the existing public Create API as the MCP caller. It
 accepts only the typed fields for the selected resource, requires canonical
 IPv4 CIDRs, and rejects edit-shaped input containing an existing resource ID
-with `unsupported_in_place` before any public mutation. Subnet and
-SecurityGroup creation passes the named parent VirtualNetwork to the public
-Create call. A missing or inaccessible parent is rejected there and returns a
-named prerequisite error without creating a dependent resource. NetworkClass
-remains provider-managed and is never exposed
-as a tenant write. SecurityGroup creation accepts at most 100 rules in total
-across `ingress_rules` and `egress_rules`, with the same per-direction schema
-limit.
+with `unsupported_in_place` before any public mutation. The error identifies
+the immutable fields and the resource types that block deletion:
+
+| Resource | Immutable fields named by the error | Delete dependencies |
+| --- | --- | --- |
+| `virtual_network` | `metadata.name`, `spec.ipv4_cidr` | Subnets, SecurityGroups, NATGateways, FabricDomains |
+| `subnet` | `metadata.name`, `spec.virtual_network`, `spec.ipv4_cidr` | ComputeInstances, Clusters, BaremetalInstances |
+| `security_group` | `metadata.name`, `spec.virtual_network` | ComputeInstances, Clusters, BaremetalInstances |
+
+To replace a resource, omit `id` from a separate create call and use the new
+ID returned by Create. Each create, workload creation or attachment, and
+delete is a separate write for host review. Existing workload network
+attachments are immutable; create a replacement workload to use a different
+attachment. Never infer deletion of the old resource from an edit request.
+The public SecurityGroups Update API supports replacing the full ingress and
+egress rule lists, but MCP does not expose that operation.
+
+Tenant default network resources cannot be deleted individually; Fulfillment
+removes them only with the Tenant.
+
+Subnet and SecurityGroup creation passes the named parent VirtualNetwork to
+the public Create call. A missing or inaccessible parent is rejected there
+and returns a named prerequisite error without creating a dependent resource.
+NetworkClass remains provider-managed and is never exposed as a tenant write.
+SecurityGroup creation accepts at most 100 rules in total across
+`ingress_rules` and `egress_rules`, with the same per-direction schema limit.
 
 `delete_network_resource` deletes exactly one explicitly named eligible
 network resource: VirtualNetwork, Subnet, SecurityGroup, ExternalIP,
-ExternalIPAttachment, or NATGateway. It does not cascade: a parent with active
-dependents returns a conflict, and callers must delete dependents first.
+ExternalIPAttachment, or NATGateway. Deletion is never inferred from a
+replacement. It does not cascade: a parent with active dependents returns a
+conflict and remains available for inspection, and callers must remove
+dependents before a separate delete call.
 
 `expose_network_resource` creates exactly one `external_ip`,
 `external_ip_attachment`, or `nat_gateway` through the existing public Create

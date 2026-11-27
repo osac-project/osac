@@ -440,7 +440,13 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		Description: "Use this tool only after the user confirms the requested resource. Create a virtual_network with ipv4_cidr, " +
 			"a subnet with virtual_network_id and ipv4_cidr, or a security_group with virtual_network_id and optional typed rules. " +
 			"Use IDs from list_resources, canonical IPv4 CIDRs only, and snake_case fields. Supplying id requests an unsupported " +
-			"in-place edit. Creation is asynchronous and acceptance does not mean the resource is ready.",
+			"in-place edit and never triggers Create, Update, or Delete. For a replacement, omit id from the create input; the " +
+			"Create response returns the new resource ID. Make " +
+			"each create, workload attachment, and delete a separate write so the host can review one write at a time. Workload " +
+			"network attachments are immutable, so create a replacement workload to use a new attachment. Never infer deletion " +
+			"of the old resource; delete_network_resource requires a separate explicit request after its dependents are removed. " +
+			"Tenant default resources cannot be deleted individually; Fulfillment removes them only with the Tenant. " +
+			"Creation is asynchronous and acceptance does not mean the resource is ready.",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Create OSAC network resource",
 			ReadOnlyHint:    false,
@@ -475,9 +481,11 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 	))
 	registerWriteTool(registry, &mcp.Tool{
 		Name: "delete_network_resource",
-		Description: "Use this tool only when the user explicitly requests deletion or cleanup. Deletes exactly one named " +
-			"virtual_network, subnet, security_group, external_ip, external_ip_attachment, or nat_gateway by ID. " +
-			"Dependencies must be removed first; this tool never cascades.",
+		Description: "Use this tool only when the user explicitly requests deletion or cleanup; deletion is never inferred from a replacement. " +
+			"Deletes exactly one named virtual_network, subnet, security_group, external_ip, external_ip_attachment, or nat_gateway by ID. " +
+			"Dependencies must be removed first; " +
+			"a dependency conflict leaves the resource available for inspection, and this tool never cascades. " +
+			"Tenant default resources cannot be deleted individually; Fulfillment removes them only with the Tenant.",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Delete OSAC network resource",
 			ReadOnlyHint:    false,

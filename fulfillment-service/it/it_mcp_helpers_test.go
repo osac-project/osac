@@ -16,6 +16,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start/mcpserver"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var expectedMCPServerToolNames = []string{
@@ -66,6 +67,72 @@ func mcpToolNames(tools []*mcp.Tool) []string {
 		names[index] = registeredTool.Name
 	}
 	return names
+}
+
+func assertMCPResourceDiscoverable(
+	ctx context.Context, session *mcp.ClientSession, resourceType mcpserver.ResourceType, id string,
+) map[string]any {
+	GinkgoHelper()
+	listOutput, err := callMCPTool[mcpserver.ListResourcesOutput](
+		ctx, session, "list_resources", mcpserver.ListResourcesInput{
+			ResourceType: resourceType,
+			Filter:       fmt.Sprintf("this.id == %q", id),
+		},
+	)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	ExpectWithOffset(1, listOutput.Items).To(HaveLen(1))
+	ExpectWithOffset(1, listOutput.Items[0].ID).To(Equal(id))
+
+	resource, err := callMCPTool[mcpserver.GetResourceOutput](
+		ctx, session, "get_resource", mcpserver.GetResourceInput{
+			ResourceType: resourceType,
+			ID:           id,
+		},
+	)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	ExpectWithOffset(1, resource.Resource).To(HaveKeyWithValue("id", id))
+	ExpectWithOffset(1, resource.Resource).To(HaveKey("name"))
+	ExpectWithOffset(1, resource.Resource).To(HaveKey("version"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("title"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("description"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("annotations"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("status"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("conditions"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("specDefaults"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("spec"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("fields"))
+	ExpectWithOffset(1, resource.Resource).ToNot(HaveKey("userData"))
+	return resource.Resource
+}
+
+func createMCPVirtualNetworkReplacement(
+	ctx context.Context,
+	session *mcp.ClientSession,
+	virtualNetworks privatev1.VirtualNetworksClient,
+	virtualNetworkID string,
+	name string,
+	ipv4CIDR string,
+) string {
+	GinkgoHelper()
+	replacement, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
+		ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+			ResourceType: mcpserver.NetworkResourceTypeVirtualNetwork,
+			Name:         name,
+			IPv4Cidr:     ipv4CIDR,
+		},
+	)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	replacementID := replacement.ID
+	DeferCleanup(func(cleanupCtx context.Context) {
+		if replacementID != "" {
+			ExpectWithOffset(1, cleanupVirtualNetworkFixture(
+				cleanupCtx, virtualNetworks, replacementID,
+			)).To(Succeed())
+		}
+	})
+	ExpectWithOffset(1, replacementID).ToNot(BeEmpty())
+	ExpectWithOffset(1, replacementID).ToNot(Equal(virtualNetworkID))
+	return replacementID
 }
 
 func startInProcessMCPServer(ctx context.Context, userAgent string) *httptest.Server {

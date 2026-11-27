@@ -292,31 +292,43 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		Expect(capturedObject.GetSpec().GetEgress()[0].GetProtocol()).To(Equal(publicv1.Protocol_PROTOCOL_ALL))
 	})
 
-	It("Rejects an edit-shaped request before any public API call", func() {
-		publicCall := func() error { return errors.New("public API should not be called") }
-		virtualNetworks := &mockVirtualNetworksClient{
-			createFunc: func(context.Context, *publicv1.VirtualNetworksCreateRequest, ...grpc.CallOption) (*publicv1.VirtualNetworksCreateResponse, error) {
-				return nil, publicCall()
-			},
-		}
-		subnets := &mockSubnetsClient{
-			createFunc: func(context.Context, *publicv1.SubnetsCreateRequest, ...grpc.CallOption) (*publicv1.SubnetsCreateResponse, error) {
-				return nil, publicCall()
-			},
-		}
-
-		handler := handleCreateNetworkResource(virtualNetworks, subnets, nil)
-		_, _, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
-			ID:           "virtual-network-1",
-			ResourceType: NetworkResourceTypeVirtualNetwork,
-			Name:         "demo-network",
-			IPv4Cidr:     "10.20.0.0/16",
-		})
-		envelope := decodeToolError(err)
-		Expect(envelope.Category).To(Equal("invalid_request"))
-		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
-		Expect(envelope.Details).To(ContainElement(ContainSubstring("unsupported_in_place")))
-	})
+	DescribeTable("Rejects edit-shaped requests before any public mutation",
+		func(input CreateNetworkResourceInput, expectedDetails ...string) {
+			handler := handleCreateNetworkResource(nil, nil, nil)
+			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), input)
+			envelope := decodeToolError(err)
+			Expect(envelope.Category).To(Equal("invalid_request"))
+			Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+			Expect(envelope.Details).To(ContainElement(ContainSubstring("unsupported_in_place")))
+			for _, detail := range expectedDetails {
+				Expect(envelope.Details).To(ContainElement(ContainSubstring(detail)))
+			}
+		},
+		Entry("VirtualNetwork", CreateNetworkResourceInput{
+			ID: "virtual-network-1", ResourceType: NetworkResourceTypeVirtualNetwork,
+			Name: "demo-network", IPv4Cidr: "10.20.0.0/16",
+		},
+			"spec.ipv4_cidr", "Subnets", "SecurityGroups", "NATGateways",
+			"Tenant default resources", "only with the Tenant",
+		),
+		Entry("Subnet", CreateNetworkResourceInput{
+			ID: "subnet-1", ResourceType: NetworkResourceTypeSubnet,
+			Name: "demo-subnet", VirtualNetworkID: "virtual-network-1",
+			IPv4Cidr: "10.20.1.0/24",
+		},
+			"spec.virtual_network", "spec.ipv4_cidr", "ComputeInstances",
+			"Clusters", "BaremetalInstances", "Tenant default resources",
+			"only with the Tenant",
+		),
+		Entry("SecurityGroup", CreateNetworkResourceInput{
+			ID: "security-group-1", ResourceType: NetworkResourceTypeSecurityGroup,
+			Name: "demo-security-group", VirtualNetworkID: "virtual-network-1",
+		},
+			"spec.virtual_network", "SecurityGroups.Update", "ingress",
+			"ComputeInstances", "Clusters", "BaremetalInstances",
+			"Tenant default resources", "only with the Tenant",
+		),
+	)
 
 	It("Rejects too many ingress rules before dispatch", func() {
 		securityGroups := &mockSecurityGroupsClient{

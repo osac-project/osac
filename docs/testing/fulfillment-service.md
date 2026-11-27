@@ -75,8 +75,12 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   `SUITE=fulfillment` deployment, which disables that feature; this run does
   not establish provider lifecycle coverage. Its ExternalIPAttachment request
   uses missing dependencies and verifies rejection without persistence. Real
-  address
-  reachability and NAT behavior belong to [QE] [OSAC-5856](https://redhat.atlassian.net/browse/OSAC-5856).
+  address reachability and NAT behavior belong to
+  [QE] [OSAC-5856](https://redhat.atlassian.net/browse/OSAC-5856).
+- MCP network replacement is covered only at the DEV boundary in
+  [OSAC-5855](https://redhat.atlassian.net/browse/OSAC-5855); provider-backed
+  replacement and cleanup remain QE coverage in
+  [OSAC-5856](https://redhat.atlassian.net/browse/OSAC-5856).
 - VM power and restart coverage
   ([OSAC-5850](https://redhat.atlassian.net/browse/OSAC-5850)) uses
   `it_mcp_server_test.go` through the deployed Fulfillment and PostgreSQL

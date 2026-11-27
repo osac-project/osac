@@ -480,6 +480,17 @@ enum ComputeInstanceConditionType {
   COMPUTE_INSTANCE_CONDITION_TYPE_NETWORK_READY = 9;
 }
 
+// Reference to a ComputeInstance resource.
+message ComputeInstanceReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+  // Tenant where the referenced object lives. If omitted, the owner tenant is used;
+  // the legacy shared selector can select the shared tenant.
+  string tenant = 5;
+}
+
 // Local reference to a ComputeInstance resource.
 message ComputeInstanceLocalReference {
   string id = 1;

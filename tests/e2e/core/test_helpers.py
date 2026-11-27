@@ -50,6 +50,33 @@ def _hosted_control_plane(*, failing: str = "False") -> dict[str, object]:
     return {"status": {"conditions": [{"type": "ClusterVersionFailing", "status": failing}]}}
 
 
+def test_wait_for_grpc_removal_polls_the_exact_instance_until_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    grpc = Mock()
+    grpc.get_compute_instance.side_effect = [
+        {"object": {"id": "test-vm"}},
+        runner.CommandFailed(69, ["grpcurl"], stderr="ERROR:\n  Code: NotFound"),
+    ]
+    monkeypatch.setattr(runner.time, "sleep", Mock())
+
+    helpers.wait_for_grpc_removal(grpc=grpc, uuid="test-vm")
+
+    assert grpc.get_compute_instance.call_args_list == [call(ci_id="test-vm"), call(ci_id="test-vm")]
+
+
+def test_wait_for_grpc_removal_propagates_other_rpc_errors() -> None:
+    grpc = Mock()
+    error = runner.CommandFailed(
+        71, ["grpcurl"], stderr="ERROR:\n  Code: PermissionDenied\n  Message:\n  Code: NotFound"
+    )
+    grpc.get_compute_instance.side_effect = error
+
+    with pytest.raises(runner.CommandFailed) as exc_info:
+        helpers.wait_for_grpc_removal(grpc=grpc, uuid="test-vm")
+
+    assert exc_info.value is error
+    grpc.get_compute_instance.assert_called_once_with(ci_id="test-vm")
+
+
 def test_wait_for_cluster_ready_fails_immediately_on_failed_order(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock()
     k8s.get_cluster_order_phase.return_value = "Failed"

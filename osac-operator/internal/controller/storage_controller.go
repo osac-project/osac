@@ -508,10 +508,15 @@ func (r *StorageReconciler) canProvisionOSACStorage(ctx context.Context) bool {
 
 // handleCaaSUpdate provisions cluster-side storage on CaaS clusters belonging
 // to this tenant. For each Ready ClusterOrder without ClusterStorageReady=True,
-// it retrieves the kubeconfig and triggers the AAP provisioning job.
+// it retrieves the kubeconfig and triggers the AAP provisioning job, recording
+// the resolved storage tier-definition version on that job.
 func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alpha1.Tenant) (ctrl.Result, error) {
 	if !r.canProvisionOSACStorage(ctx) {
 		return ctrl.Result{}, nil
+	}
+	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(provisioning.StorageTierDefinitionsFromContext(ctx))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("hash resolved storage tiers for tenant %q: %w", tenant.Name, err)
 	}
 	log := ctrllog.FromContext(ctx)
 	tenantName := tenant.GetName()
@@ -573,7 +578,10 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 		provCtx := provisioning.WithAdminKubeconfig(ctx, string(kubeconfig))
 
 		provResult, provErr := provisioning.RunProvisioningLifecycle(provCtx, r.ClusterStorageProvider, co,
-			&provisioning.State{Jobs: &co.Status.ClusterStorageJobs},
+			&provisioning.State{
+				Jobs:                 &co.Status.ClusterStorageJobs,
+				DesiredConfigVersion: desiredVersion,
+			},
 			r.MaxJobHistory, r.StatusPollInterval, nil,
 			func() bool {
 				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.Client,
@@ -856,7 +864,10 @@ func (r *StorageReconciler) handleBackendProvisioning(ctx context.Context, tenan
 	if !r.canProvisionOSACStorage(ctx) {
 		return ctrl.Result{}, nil
 	}
-	desiredVersion, _ := provisioning.ComputeDesiredConfigVersion(provisioning.StorageTierDefinitionsFromContext(ctx))
+	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(provisioning.StorageTierDefinitionsFromContext(ctx))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("hash resolved storage tiers for tenant %q: %w", tenant.Name, err)
+	}
 	latestJob := provisioning.FindLatestJobByType(tenant.Status.StorageBackendJobs, v1alpha1.JobTypeProvision)
 	if latestJob != nil && latestJob.State == v1alpha1.JobStateFailed &&
 		(latestJob.ConfigVersion == "" || latestJob.ConfigVersion == desiredVersion) {
@@ -896,7 +907,10 @@ func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context
 	if !r.canProvisionOSACStorage(ctx) {
 		return ctrl.Result{}, nil
 	}
-	desiredVersion, _ := provisioning.ComputeDesiredConfigVersion(provisioning.StorageTierDefinitionsFromContext(ctx))
+	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(provisioning.StorageTierDefinitionsFromContext(ctx))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("hash resolved storage tiers for tenant %q: %w", tenant.Name, err)
+	}
 	latestJob := provisioning.FindLatestJobByType(tenant.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
 	if latestJob != nil && latestJob.State == v1alpha1.JobStateFailed &&
 		(latestJob.ConfigVersion == "" || latestJob.ConfigVersion == desiredVersion) {

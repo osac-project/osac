@@ -60,6 +60,7 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	clientcmdlatest "k8s.io/client-go/tools/clientcmd/api/latest"
 )
 
 // mockStorageBackendsClient is a test double for StorageBackendsClient.
@@ -3545,6 +3546,229 @@ var _ = Describe("Storage Controller", func() {
 			updatedCO := &v1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
 			Expect(updatedCO.Finalizers).NotTo(ContainElement(clusterStorageFinalizer))
+		})
+
+		It("should record the resolved tier-definition version on the CaaS cluster-storage job", func() {
+			const (
+				tenantName  = "caas-prov-version"
+				coName      = "caas-prov-version-co"
+				hcNamespace = "caas-ver-hc-ns"
+				hcName      = "caas-ver-hc"
+				tierName    = "fast"
+				backendID   = "backend-lvms"
+			)
+			hcpNamespace := hcNamespace + "-" + hcName
+
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createHubSecretForBackend(ctx, tenantName, backendID, "lvms", secretsNamespace)
+			createLabeledStorageClass(ctx, tenantName+"-fast-sc", tenantName, tierName)
+			waitForStorageClassInCache(tenantName + "-fast-sc")
+
+			for _, nsName := range []string{hcNamespace, hcpNamespace} {
+				ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+				Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns))).To(Succeed())
+				DeferCleanup(func() {
+					Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, ns))).To(Succeed())
+				})
+			}
+
+			guestEnv := &envtest.Environment{
+				BinaryAssetsDirectory: testEnv.BinaryAssetsDirectory,
+			}
+			guestCfg, err := guestEnv.Start()
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				Expect(guestEnv.Stop()).To(Succeed())
+			})
+
+			guestAPIConfig := clientcmdapi.Config{
+				Clusters: map[string]*clientcmdapi.Cluster{
+					"guest": {
+						Server:                   guestCfg.Host,
+						CertificateAuthorityData: guestCfg.CAData,
+						CertificateAuthority:     guestCfg.CAFile,
+						InsecureSkipTLSVerify:    guestCfg.Insecure,
+					},
+				},
+				AuthInfos: map[string]*clientcmdapi.AuthInfo{
+					"guest-user": {
+						ClientCertificateData: guestCfg.CertData,
+						ClientCertificate:     guestCfg.CertFile,
+						ClientKeyData:         guestCfg.KeyData,
+						ClientKey:             guestCfg.KeyFile,
+						Token:                 guestCfg.BearerToken,
+					},
+				},
+				Contexts: map[string]*clientcmdapi.Context{
+					"guest": {Cluster: "guest", AuthInfo: "guest-user"},
+				},
+				CurrentContext: "guest",
+			}
+			kubeconfigBytes, err := runtime.Encode(clientcmdlatest.Codec, &guestAPIConfig)
+			Expect(err).NotTo(HaveOccurred())
+
+			kubeconfigSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "admin-kubeconfig",
+					Namespace: hcpNamespace,
+				},
+				Data: map[string][]byte{
+					"kubeconfig": kubeconfigBytes, // was: []byte("apiVersion: v1\nkind: Config\n")
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, kubeconfigSecret)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, kubeconfigSecret))).To(Succeed())
+			})
+
+			hcp := &hypershiftv1beta1.HostedControlPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      hcName,
+					Namespace: hcpNamespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, hcp))).To(Succeed())
+			})
+			hcp.Status.KubeConfig = &hypershiftv1beta1.KubeconfigSecretRef{
+				Name: kubeconfigSecret.Name,
+				Key:  "kubeconfig",
+			}
+			Expect(k8sClient.Status().Update(ctx, hcp)).To(Succeed())
+
+			clusterProvisionJob := v1alpha1.JobStatus{
+				JobID:         "cluster-provision-1",
+				Type:          v1alpha1.JobTypeProvision,
+				State:         v1alpha1.JobStateRunning,
+				ConfigVersion: "cluster-spec-v1",
+				Timestamp:     metav1.Now(),
+			}
+			co := newClusterOrder(coName, testNamespace, map[string]string{
+				osacTenantKey: tenantName,
+			})
+			Expect(k8sClient.Create(ctx, co)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, co))).To(Succeed())
+			})
+			co.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+			co.Status.DesiredConfigVersion = clusterProvisionJob.ConfigVersion
+			co.Status.ProvisioningJobs = []v1alpha1.JobStatus{clusterProvisionJob}
+			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
+				Namespace:         hcNamespace,
+				HostedClusterName: hcName,
+			}
+			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
+
+			resolvedTiers := []provisioning.TierDefinition{{
+				Name:      tierName,
+				Protocol:  "nfs",
+				Provider:  "lvms",
+				BackendID: backendID,
+				QosLimits: provisioning.TierQosLimits{
+					MaxReadBandwidthMBs:  100,
+					MaxWriteBandwidthMBs: 100,
+				},
+			}}
+			wantVersion, err := provisioning.ComputeDesiredConfigVersion(resolvedTiers)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(wantVersion).NotTo(BeEmpty())
+
+			var seenTiers []provisioning.TierDefinition
+			triggers := 0
+			clusterProvider := &mockProvisioningProvider{
+				name: "caas-mock",
+				triggerProvisionFunc: func(pCtx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					triggers++
+					Expect(resource.GetName()).To(Equal(coName))
+					seenTiers = append([]provisioning.TierDefinition(nil), provisioning.StorageTierDefinitionsFromContext(pCtx)...)
+					return &provisioning.ProvisionResult{
+						JobID:        "caas-storage-job-1",
+						InitialState: v1alpha1.JobStateRunning,
+					}, nil
+				},
+				getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateRunning}, nil
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval, provisioning.DefaultMaxJobHistory,
+			)
+			// Direct reads keep the follow-up reconcile independent of cache lag.
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier(tierName, backendID)},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				listFunc: registeredBackendsClient(1).listFunc,
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if in.GetId() == backendID {
+						return newTestStorageBackendGetResponse("lvms"), nil
+					}
+					return nil, status.Error(codes.NotFound, "not found")
+				},
+			}
+
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pollInterval))
+			Expect(triggers).To(Equal(1))
+			Expect(seenTiers).To(Equal(resolvedTiers))
+
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Status.ProvisioningJobs).To(HaveLen(1))
+			Expect(updatedCO.Status.ProvisioningJobs[0].JobID).To(Equal(clusterProvisionJob.JobID))
+			Expect(updatedCO.Status.ProvisioningJobs[0].ConfigVersion).To(Equal(clusterProvisionJob.ConfigVersion))
+			Expect(updatedCO.Status.DesiredConfigVersion).To(Equal(clusterProvisionJob.ConfigVersion))
+			Expect(updatedCO.Status.ClusterStorageJobs).To(HaveLen(1))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].JobID).To(Equal("caas-storage-job-1"))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].Type).To(Equal(v1alpha1.JobTypeProvision))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].ConfigVersion).To(Equal(wantVersion))
+
+			By("continuing the in-progress cluster-storage job instead of replacing it")
+			result, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pollInterval))
+			Expect(triggers).To(Equal(1))
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Status.ProvisioningJobs).To(HaveLen(1))
+			Expect(updatedCO.Status.ProvisioningJobs[0].JobID).To(Equal(clusterProvisionJob.JobID))
+			Expect(updatedCO.Status.ProvisioningJobs[0].ConfigVersion).To(Equal(clusterProvisionJob.ConfigVersion))
+			Expect(updatedCO.Status.ClusterStorageJobs).To(HaveLen(1))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].JobID).To(Equal("caas-storage-job-1"))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].ConfigVersion).To(Equal(wantVersion))
+
+			By("recording the job success and running the completion path")
+			clusterProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded}, nil
+			}
+			result, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Status.ClusterStorageJobs).To(HaveLen(1))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].JobID).To(Equal("caas-storage-job-1"))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].State).To(Equal(v1alpha1.JobStateSucceeded))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].ConfigVersion).To(Equal(wantVersion))
+
+			By("skipping the reconcile when the job succeeded with the current tier hash")
+			result, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+			Expect(triggers).To(Equal(1))
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Status.ClusterStorageJobs).To(HaveLen(1))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].JobID).To(Equal("caas-storage-job-1"))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].State).To(Equal(v1alpha1.JobStateSucceeded))
+			Expect(updatedCO.Status.ClusterStorageJobs[0].ConfigVersion).To(Equal(wantVersion))
 		})
 	})
 

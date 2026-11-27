@@ -1,0 +1,49 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{/*
+BackendTLSPolicy needs a ConfigMap keyed ca.crt. The shared trust bundle
+(certs.caBundle.configMap) is keyed bundle.pem, so re-materialize the CA under
+ca.crt via a trust-manager Bundle. trust-manager ships with osac-deps.
+
+The source is the ClusterIssuer's CA Secret, NOT the ca-bundle ConfigMap:
+trust-manager reads Bundle sources in its own namespace (cert-manager), and the
+ca-bundle ConfigMap only exists in the workload namespaces. The ClusterIssuer CA
+Secret lives in cert-manager, next to trust-manager, so it is readable. This
+mirrors how the osac-infra ca-bundle Bundle sources the same secret. Requires
+certs.issuerRef.kind=ClusterIssuer; override the secret name with
+ingress.gatewayapi.backendCaSecret when it differs from the issuer name.
+*/}}
+{{- if and (eq .Values.ingress.driver "gatewayapi") (eq .Values.certs.issuerRef.kind "ClusterIssuer") }}
+{{- $caSecret := .Values.ingress.gatewayapi.backendCaSecret | default .Values.certs.issuerRef.name }}
+{{- /* Bundle is cluster-scoped and names its target ConfigMaps after itself, so
+the default name carries the release namespace: two releases on one cluster
+would otherwise fight over the same Bundle. An explicit backendCaConfigMap
+wins unchanged. */}}
+{{- $caName := .Values.ingress.gatewayapi.backendCaConfigMap | default (printf "osac-backend-ca-%s" .Release.Namespace) }}
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: {{ $caName }}
+spec:
+  sources:
+  - secret:
+      name: {{ $caSecret }}
+      key: ca.crt
+  target:
+    configMap:
+      key: ca.crt
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
+{{- end }}

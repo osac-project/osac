@@ -38,6 +38,17 @@ caIssuer:
 envoygateway:
   enabled: false
 
+# OpenShift CIO-managed Gateway API (OSAC-7866). Installs the cluster-scoped
+# GatewayClass that activates OpenShift's built-in ingress (embedded Sail/Istio,
+# controller openshift.io/gateway-controller/v1) for fulfillment-service
+# releases running with service.ingress.driver=gatewayapi. OpenShift only --
+# Kind/dev keeps the Envoy Gateway above. Deliberately separate from
+# envoygateway: different controller and different purpose (that one serves
+# devstack UI/Keycloak traffic on Kind).
+gatewayapi:
+  enabled: false
+  gatewayClassName: openshift-default
+
 keycloak:
   enabled: true
   realmOverwrite: true
@@ -233,11 +244,30 @@ bundledPostgres:
       cpu: 50m
       memory: 128Mi
 
-# --- Bundled OpenBao (dev/CI only) ---
+# --- Bundled secret store: OpenBao or HashiCorp Vault (dev/CI only) ---
 # Vault-compatible secret store for testing and CI. Not for production.
 bundledVault:
   enabled: false
-  image: "ghcr.io/openbao/openbao:2.6.2"
+  # flavor selects the backend:
+  #   openbao - ghcr.io/openbao/openbao (default; no license required).
+  #             OpenBao open-sourced Vault namespaces, so per-tenant
+  #             namespaces work out of the box.
+  #   vault   - HashiCorp Vault Enterprise. Namespaces are an Enterprise
+  #             feature, so the Enterprise image is REQUIRED: OSS Vault
+  #             (hashicorp/vault) has no sys/namespaces API and cannot
+  #             support OSAC's per-tenant namespaces. Vault Enterprise
+  #             refuses to start without a license -- set licenseSecret.
+  flavor: openbao
+  # image: leave empty to derive from flavor:
+  #   openbao -> ghcr.io/openbao/openbao:2.6.2
+  #   vault   -> hashicorp/vault-enterprise:1.21.14-ent
+  image: ""
+  # licenseSecret: name of a Secret (in this release namespace) holding the
+  # HashiCorp Vault Enterprise license under key 'license'. Required when
+  # flavor is vault; ignored for openbao. Create it before install:
+  #   oc -n osac-infra create secret generic vault-license \
+  #     --from-file=license=<license-file>
+  licenseSecret: ""
   # Default podSecurityContext omits a hardcoded UID so that OpenShift's
   # restricted-v2 SCC can allocate from the namespace UID range. Override
   # this in a profile's infra.yaml when a specific UID is required (e.g. Kind).

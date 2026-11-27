@@ -70,6 +70,41 @@ externalHostname:
 # additional layer of defense.
 internalHostname:
 
+# Ingress driver: how the public and internal APIs are exposed.
+#   envoy      - bundled fulfillment-ingress-proxy Envoy (default; current behavior)
+#   gatewayapi - OpenShift CIO-managed Gateway API; the bundled Envoy is not deployed
+ingress:
+  driver: envoy
+
+  gatewayapi:
+    # Namespace of the CIO-managed Gateway (where istiod/Envoy run).
+    gatewayNamespace: openshift-ingress
+    # GatewayClass installed as a cluster prerequisite by osac-installer.
+    gatewayClassName: openshift-default
+    # Gateway name. Empty defaults to osac-gateway-<release-namespace>: the
+    # Gateway, its Certificate and the TLS Secret live in the shared gateway
+    # namespace and must not collide between two gatewayapi releases.
+    gatewayName: ""
+    # In-cluster reachable address of the gateway (a Pod IP; an EndpointSlice
+    # address may NOT be another Service's ClusterIP — the API server rejects
+    # it for non-privileged identities). When empty the bridge EndpointSlices
+    # are not rendered here and the installer's gateway-bridge.sh
+    # maintains them against the ready gateway Pod IPs.
+    gatewayAddress: ""
+    # Request timeouts. gRPC stream routes MUST be 0s (uncapped); REST stays bounded.
+    grpcRequestTimeout: "0s"
+    restRequestTimeout: "300s"
+    jwksRequestTimeout: "10s"
+    # ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation.
+    # Empty defaults to osac-backend-ca-<release-namespace>: the trust-manager
+    # Bundle that materializes it is cluster-scoped and names its target
+    # ConfigMaps after itself, so the default must be unique per release.
+    backendCaConfigMap: ""
+    # trust-manager Bundle source: the ClusterIssuer CA Secret (in trust-manager's
+    # namespace). Defaults to certs.issuerRef.name; set when the CA Secret of the
+    # ClusterIssuer is named differently.
+    backendCaSecret: ""
+
 # MCP is an opt-in integration endpoint.
 # Custom external ports are supported on Kind; OpenShift Routes use HTTPS port 443.
 mcp:

@@ -1,0 +1,32 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{/*
+Cluster-scoped GatewayClass that activates the OpenShift CIO-managed Gateway
+API (embedded Sail/Istio, controller openshift.io/gateway-controller/v1).
+Creating it is what triggers OpenShift to install istiod and the gateway data
+plane, so it belongs in the installer prereq layer rather than the per-release
+fulfillment-service chart. Gated on OpenShift-only gatewayapi.enabled; the
+Envoy Gateway used by devstack/kind is envoy-gateway-resources.yaml and is
+unaffected (different controller, different GatewayClass name).
+*/}}
+{{- if .Values.gatewayapi.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.gatewayapi.gatewayClassName }}
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  controllerName: openshift.io/gateway-controller/v1
+{{- end }}

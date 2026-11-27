@@ -11,6 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 specific language governing permissions and limitations under the License.
 */}}
 
+{{- if eq .Values.ingress.driver "envoy" }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -18,3 +19,4 @@ metadata:
   name: fulfillment-ingress-proxy
 data:
   envoy.yaml: {{ include "ingress-proxy.config.yaml" . | quote }}
+{{- end }}

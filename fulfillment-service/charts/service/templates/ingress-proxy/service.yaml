@@ -17,8 +17,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   name: fulfillment-api
 spec:
+{{- if eq .Values.ingress.driver "envoy" }}
   selector:
     app: fulfillment-ingress-proxy
+{{- end }}
   ports:
   - name: external-api
     port: 8000
@@ -32,13 +34,16 @@ metadata:
   namespace: {{ .Release.Namespace }}
   name: fulfillment-internal-api
 spec:
+{{- if eq .Values.ingress.driver "envoy" }}
   selector:
     app: fulfillment-ingress-proxy
+{{- end }}
   ports:
   - name: internal-api
     port: 8001
     targetPort: internal-api
 
+{{- if eq .Values.ingress.driver "envoy" }}
 ---
 
 apiVersion: v1
@@ -56,3 +61,4 @@ spec:
   - name: metrics
     port: 8002
     targetPort: metrics
+{{- end }}

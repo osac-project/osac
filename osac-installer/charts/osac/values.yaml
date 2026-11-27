@@ -212,6 +212,41 @@ service:
   externalHostname: ""
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)
   internalHostname: ""
+  # Ingress driver for the public/internal APIs. envoy (default) deploys the
+  # bundled fulfillment-ingress-proxy; gatewayapi uses the OpenShift
+  # CIO-managed Gateway API and skips the bundled Envoy. gatewayapi requires
+  # the cluster-scoped GatewayClass prerequisite (osac-infra gatewayapi.enabled)
+  # and OpenShift 4.22+ (BackendTLSPolicy/v1 GA). In gatewayapi mode every cross-origin browser caller
+  # (the UI origin) MUST be listed in httpCorsAllowedOrigins below -- the
+  # gateway has no CORS filter, so app-side CORS is the only enforcement.
+  ingress:
+    driver: envoy
+    gatewayapi:
+      # Namespace of the CIO-managed Gateway (where istiod/Envoy run).
+      gatewayNamespace: openshift-ingress
+      # GatewayClass installed as a cluster prerequisite by osac-infra.
+      gatewayClassName: openshift-default
+      # Empty defaults to osac-gateway-<release-namespace> in the service chart
+      # (gateway-namespace objects must not collide between releases).
+      gatewayName: ""
+      # In-cluster reachable address of the gateway (a Pod IP; an
+      # EndpointSlice address may NOT be another Service's ClusterIP —
+      # the API server rejects it for non-privileged identities). Leave
+      # empty: the installer's scripts/gateway-bridge.sh resolves
+      # the ready gateway Pod IPs and maintains the bridge EndpointSlices.
+      gatewayAddress: ""
+      # Request timeouts. gRPC stream routes MUST stay 0s (uncapped).
+      grpcRequestTimeout: "0s"
+      restRequestTimeout: "300s"
+      jwksRequestTimeout: "10s"
+      # ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation.
+      # Empty defaults to osac-backend-ca-<release-namespace> in the service
+      # chart (the Bundle is cluster-scoped; the name must be unique per
+      # release).
+      backendCaConfigMap: ""
+      # trust-manager Bundle source: the ClusterIssuer CA Secret. Defaults to
+      # service.certs.issuerRef.name when empty.
+      backendCaSecret: ""
   mcp:
     enabled: false
     externalHostname: ""

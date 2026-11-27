@@ -307,6 +307,12 @@ def cluster_tenants(quota_defaults: None, namespace: str, k8s_hub_client: K8sCli
 
 @pytest.fixture(scope="session")
 def cluster_domain() -> str:
+    # OSAC_CLUSTER_DOMAIN overrides the cluster read: a vcluster has no
+    # ingresses.config.openshift.io API to ask, so a run against one carries
+    # the outer cluster's domain explicitly.
+    override = env("OSAC_CLUSTER_DOMAIN", "")
+    if override:
+        return override
     return run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
 
 

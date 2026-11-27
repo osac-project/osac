@@ -17,6 +17,7 @@ import ProjectRoutes from '@osac/ui-components/components/Project/ProjectRoutes'
 import ProjectMembershipRoutes from '@osac/ui-components/components/ProjectMembership/ProjectMembershipRoutes';
 import RoleBindingRoutes from '@osac/ui-components/components/RoleBinding/RoleBindingRoutes';
 import SecretRoutes from '@osac/ui-components/components/Secret/SecretRoutes';
+import ServiceAccountsListPage from '@osac/ui-components/components/ServiceAccount/ServiceAccountsListPage';
 import VmCatalogLaunchPage from '@osac/ui-components/components/vm/CreateWizard/VmCatalogLaunchPage';
 import VMCatalogItemDetailPage from '@osac/ui-components/components/VMCatalogItem/Details/VMCatalogItemDetailPage';
 import { useSession } from '@osac/ui-components/hooks/use-session';
@@ -271,6 +272,14 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           element={
             <ShellRoute>
               <RoleBindingRoutes />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/tenant/service-accounts"
+          element={
+            <ShellRoute>
+              <ServiceAccountsListPage />
             </ShellRoute>
           }
         />

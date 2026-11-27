@@ -28,6 +28,7 @@ import {
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter.ts';
+import { usePermissions } from '@osac/ui-components/hooks/use-permissions';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
@@ -47,6 +48,8 @@ const IDENTITY_PROVIDERS_VIEW_KEY = 'identity-providers';
 
 const IdentityProviderListPage = () => {
   const { t } = useTranslation();
+  const permissions = usePermissions(IdentityProviders, 'list');
+
   const [, setSearchParams] = useSearchParams();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [enabledFilterParam, setEnabledFilter] = usePageFilter(ENABLED_FILTER_PARAM);
@@ -68,7 +71,11 @@ const IdentityProviderListPage = () => {
     [phaseEnumValues, enabledFilter, search],
   );
 
-  const { data, isLoading, error } = useListResource(IdentityProviders, { filter });
+  const { data, isLoading, error } = useListResource(
+    IdentityProviders,
+    { filter },
+    { enabled: permissions.allowed },
+  );
 
   const { data: totalsData, error: totalsError } = useListResource(IdentityProviders, {
     limit: 0,
@@ -132,6 +139,7 @@ const IdentityProviderListPage = () => {
           {t('Create identity provider')}
         </CreateButton>
       }
+      permissions={permissions}
     >
       <Stack hasGutter>
         <StackItem>

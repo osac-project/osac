@@ -77,6 +77,8 @@ export * from './osac/public/v1/role_type_pb.js';
 export * from './osac/public/v1/roles_service_pb.js';
 export * from './osac/public/v1/role_binding_type_pb.js';
 export * from './osac/public/v1/role_bindings_service_pb.js';
+export * from './osac/public/v1/service_account_type_pb.js';
+export * from './osac/public/v1/service_accounts_service_pb.js';
 
 export * from './osac/public/v1/project_type_pb.js';
 export * from './osac/public/v1/projects_service_pb.js';

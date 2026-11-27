@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { renderWithProviders } from '@osac/ui-components/test-utils/TestProviders';
+
 import ListPage from './ListPage';
 
 describe('ListPage', () => {
@@ -49,6 +51,22 @@ describe('ListPage', () => {
       );
 
       expect(screen.queryByRole('button', { name: 'Create item' })).not.toBeInTheDocument();
+    });
+
+    it('renders permission denial instead of children when List is denied', () => {
+      renderWithProviders(
+        <ListPage title="Items" permissions={{ allowed: false, error: null, isLoading: false }}>
+          <p>Page body</p>
+        </ListPage>,
+      );
+
+      expect(
+        screen.getByRole('heading', { name: 'Permission denied', level: 2 }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText('You are not authorized to access this resource.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Page body')).not.toBeInTheDocument();
     });
   });
 });

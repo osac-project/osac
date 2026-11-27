@@ -12,14 +12,19 @@ import {
   PageSidebarBody,
 } from '@patternfly/react-core';
 
+import {
+  type ServiceWithMethod,
+  usePermissions,
+  usePermissionsForServices,
+} from '@osac/ui-components/hooks/use-permissions';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
-import { type NavLink, isNavSection, navRowsForRole } from './shellNav';
+import { type NavLink, type NavSection, isNavSection, navRowsForRole } from './shellNav';
 
 import './ShellSidebar.css';
 
-const ShellNavItem = ({ item }: { item: NavLink }) => {
+const ShellNavLink = ({ item }: { item: NavLink }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -36,6 +41,51 @@ const ShellNavItem = ({ item }: { item: NavLink }) => {
       {item.label}
     </NavItem>
   );
+};
+
+const PermissionedShellNavItem = ({
+  item,
+  resource,
+}: {
+  item: NavLink;
+  resource: ServiceWithMethod<'list'>;
+}) => {
+  const { allowed, isLoading } = usePermissions(resource, 'list');
+
+  return !isLoading && allowed ? <ShellNavLink item={item} /> : null;
+};
+
+const ShellNavItem = ({ item }: { item: NavLink }) =>
+  item.resource ? (
+    <PermissionedShellNavItem item={item} resource={item.resource} />
+  ) : (
+    <ShellNavLink item={item} />
+  );
+
+const ShellNavSection = ({ section }: { section: NavSection }) => {
+  const permissionedChildren = section.children.filter(
+    (item): item is NavLink & { resource: ServiceWithMethod<'list'> } =>
+      item.resource !== undefined,
+  );
+  const permissions = usePermissionsForServices(
+    permissionedChildren.map((item) => item.resource),
+    'list',
+  );
+  const permissionByItem = new Map(
+    permissionedChildren.map((item, index) => [item.id, permissions[index]?.allowed === true]),
+  );
+
+  const visibleChildren = section.children.filter(
+    (item) => !item.resource || permissionByItem.get(item.id) === true,
+  );
+
+  return visibleChildren.length > 0 ? (
+    <NavExpandable key={section.id} title={section.label} isExpanded>
+      {visibleChildren.map((item) => (
+        <ShellNavLink key={item.id} item={item} />
+      ))}
+    </NavExpandable>
+  ) : null;
 };
 
 export const ShellSidebar = () => {
@@ -58,13 +108,7 @@ export const ShellSidebar = () => {
           <NavList>
             {navRows.map((row) => {
               if (isNavSection(row)) {
-                return (
-                  <NavExpandable key={row.id} title={row.label} isExpanded>
-                    {row.children.map((item) => (
-                      <ShellNavItem key={item.id} item={item} />
-                    ))}
-                  </NavExpandable>
-                );
+                return <ShellNavSection key={row.id} section={row} />;
               }
               return <ShellNavItem key={row.id} item={row} />;
             })}

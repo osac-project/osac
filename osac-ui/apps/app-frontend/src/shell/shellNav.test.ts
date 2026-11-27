@@ -240,10 +240,18 @@ describe('navRowsForRole', () => {
   });
 
   it('IDP sections show for tenant-idp-manager and tenant-admin', () => {
-    for (const role of ['tenant-idp-manager', 'tenant-admin'] as UserRole[]) {
+    for (const role of ['tenant-idp-manager'] as UserRole[]) {
       expect(findLink(role, 'idp')).toBeDefined();
       expect(findLink(role, 'role-bindings')).toBeDefined();
     }
+
+    const tenantAdministration = findSection('tenant-admin', 'nav-tenant-admin');
+    expect(tenantAdministration?.children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'idp' }),
+        expect.objectContaining({ id: 'role-bindings' }),
+      ]),
+    );
 
     const catalogLink = findLink('tenant-idp-manager', 'catalog');
     expect(catalogLink).toBeUndefined();

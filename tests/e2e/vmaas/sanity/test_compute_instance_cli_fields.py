@@ -135,7 +135,8 @@ def test_compute_instance_reads_osac_user_data_secret(
 ) -> None:
     hostname = unique_name("e2e-userdata")
     secret_name = unique_name("e2e-ci-user-data")
-    cloud_config = f"#cloud-config\npreserve_hostname: false\nhostname: {hostname}\n"
+    # Apply the marker in cloud-init's final stage, after early hostname setup.
+    cloud_config = f"#cloud-config\nruncmd:\n  - [hostnamectl, set-hostname, {hostname}]\n"
     encoded = base64.b64encode(cloud_config.encode()).decode()
     secret_id = grpc.call(
         service=f"{PUBLIC_API}.Secrets/Create",

@@ -1,0 +1,101 @@
+#cloud-config
+# Slurm Head Node (Controller) cloud-init configuration
+#
+# This configures a bare metal instance as a Slurm controller node (slurmctld).
+# Use with the 'slurm-node' catalog item.
+#
+# The workers register themselves: each worker runs a periodic unit that SSHes to
+# this node and calls /usr/local/bin/slurm-register-node, which appends the worker's
+# NodeName entry to slurm.conf under a lock, so concurrent registrations can't race,
+# and restarts slurmctld. The workers then download the updated slurm.conf with
+# their own sync unit.
+
+package_update: true
+packages:
+  - slurm
+  - slurm-slurmctld
+  - munge
+
+# The work key pair, used by the workers to SSH to this node as the default user
+# (which has passwordless sudo on cloud images):
+ssh_authorized_keys:
+  - ${work_public_key}
+
+write_files:
+  - path: /usr/local/bin/slurm-register-node
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Registers a worker node in slurm.conf. Called over SSH by the workers:
+      #   slurm-register-node <node-name> <node-addr> <cpus> <memory-mb>
+      # The lock serializes concurrent registrations from multiple workers, so the
+      # check-and-append can't race and corrupt the file.
+      set -euo pipefail
+      NODE=$1
+      ADDR=$2
+      CPUS=$3
+      MEM=$4
+      exec 9>/run/slurm-register.lock
+      flock 9
+      if grep -q "^NodeName=$NODE " /etc/slurm/slurm.conf; then
+          exit 0
+      fi
+      echo "NodeName=$NODE NodeAddr=$ADDR CPUs=$CPUS RealMemory=$MEM State=UNKNOWN" >> /etc/slurm/slurm.conf
+      systemctl restart slurmctld
+
+  - path: /etc/slurm/slurm.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # Slurm configuration for OSAC cluster
+      ClusterName=osac-slurm
+      SlurmctldHost=slurm-head-1
+
+      # Scheduler configuration
+      SchedulerType=sched/backfill
+      SelectType=select/cons_tres
+      SelectTypeParameters=CR_Core_Memory
+
+      # Logging
+      SlurmctldLogFile=/var/log/slurm/slurmctld.log
+      SlurmdLogFile=/var/log/slurm/slurmd.log
+      SlurmctldDebug=info
+      SlurmdDebug=info
+
+      # Authentication
+      AuthType=auth/munge
+      CryptoType=crypto/munge
+
+      # Process tracking
+      ProctrackType=proctrack/cgroup
+      TaskPlugin=task/affinity,task/cgroup
+
+      # Timeouts
+      SlurmctldTimeout=300
+      SlurmdTimeout=300
+      InactiveLimit=0
+      MinJobAge=300
+      KillWait=30
+      Waittime=0
+
+      # Node definitions are appended by the workers themselves, through
+      # /usr/local/bin/slurm-register-node. The partition takes all registered
+      # nodes, so no partition edit is ever needed:
+      PartitionName=compute Nodes=ALL Default=YES MaxTime=INFINITE State=UP
+
+  - path: /etc/slurm/cgroup.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      CgroupAutomount=yes
+      ConstrainCores=yes
+      ConstrainRAMSpace=yes
+
+runcmd:
+  - mkdir -p /var/log/slurm
+  - chown slurm:slurm /var/log/slurm
+  - systemctl enable munge
+  - systemctl start munge
+  - systemctl enable slurmctld
+  - systemctl start slurmctld

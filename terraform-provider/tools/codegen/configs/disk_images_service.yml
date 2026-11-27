@@ -1,0 +1,7 @@
+provider:
+  name: osac
+data_sources:
+  disk_image:
+    read:
+      path: /api/fulfillment/v1/disk_images/{id}
+      method: GET

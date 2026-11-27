@@ -50,7 +50,7 @@ func (r Rewriter) Query(expression string) (string, error) {
 	if strings.TrimSpace(expression) == "" {
 		return "", fmt.Errorf("query parameter is empty")
 	}
-	parsed, err := parser.NewParser(expression).ParseExpr()
+	parsed, err := parser.NewParser(parser.Options{}).ParseExpr(expression)
 	if err != nil {
 		return "", fmt.Errorf("parse query: %w", err)
 	}
@@ -65,7 +65,7 @@ func (r Rewriter) Query(expression string) (string, error) {
 
 // Selector rewrites one `match[]` selector.
 func (r Rewriter) Selector(selector string) (string, error) {
-	matchers, err := parser.ParseMetricSelector(selector)
+	matchers, err := parser.NewParser(parser.Options{}).ParseMetricSelector(selector)
 	if err != nil {
 		return "", fmt.Errorf("parse match[]: %w", err)
 	}

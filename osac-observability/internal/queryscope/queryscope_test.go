@@ -25,7 +25,7 @@ func testRewriter() Rewriter {
 // strings keeps the test independent of how the AST re-renders.
 func assertEverySelectorScoped(t *testing.T, expression string) {
 	t.Helper()
-	parsed, err := parser.NewParser(expression).ParseExpr()
+	parsed, err := parser.NewParser(parser.Options{}).ParseExpr(expression)
 	if err != nil {
 		t.Fatalf("rewritten query does not parse: %v\n%s", err, expression)
 	}
@@ -87,7 +87,7 @@ func TestSelectorAddsTheScopeMatcher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Selector: %v", err)
 	}
-	matchers, err := parser.ParseMetricSelector(scoped)
+	matchers, err := parser.NewParser(parser.Options{}).ParseMetricSelector(scoped)
 	if err != nil {
 		t.Fatalf("rewritten selector does not parse: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestRequestScopesListingEndpointsWithoutMatchers(t *testing.T) {
 		if len(matchers) != 1 {
 			t.Fatalf("%s: match[] = %v, want one scope selector", path, matchers)
 		}
-		parsed, err := parser.ParseMetricSelector(matchers[0])
+		parsed, err := parser.NewParser(parser.Options{}).ParseMetricSelector(matchers[0])
 		if err != nil {
 			t.Fatalf("%s: scope selector does not parse: %v", path, err)
 		}

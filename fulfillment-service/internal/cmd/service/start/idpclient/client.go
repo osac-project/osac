@@ -118,11 +118,23 @@ func (b *ClientBuilder) Build() (*idp.Client, error) {
 
 	b.logger.Info("Creating Keycloak IDP client")
 	client, err := idp.NewClient().SetLogger(b.logger).SetBaseURL(b.baseURL).
-		SetTokenSource(source).SetCaPool(b.caPool).Build()
+		SetTokenSource(source).SetCaPool(b.caPool).
+		SetRealmName(realmFromIssuer(b.issuerURL)).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Keycloak client: %w", err)
 	}
 	return client, nil
+}
+
+// realmFromIssuer extracts the Keycloak realm from an issuer URL such as
+// https://keycloak.example.com/realms/demoav1. The admin client must target
+// the same realm that issues its tokens; a mismatch is rejected with 403.
+// Falls back to the historical default realm "osac" when parsing fails.
+func realmFromIssuer(issuerURL string) string {
+	if _, realm, found := strings.Cut(issuerURL, "/realms/"); found && realm != "" {
+		return strings.TrimSuffix(realm, "/")
+	}
+	return "osac"
 }
 
 func credential(flag, value, path string) (string, error) {

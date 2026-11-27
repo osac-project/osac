@@ -27,11 +27,10 @@
       {{ osac_job_vars.resource.metadata.namespace }}
       {%- endif -%}
     tenant_uid: "{{ osac_job_vars.resource.metadata.uid }}"
-    # ClusterOrder is the legacy CaaS guest-cluster path. Keep its VAST CSI
-    # installation in the VAST provider role until OSAC CSI is ready for CaaS;
-    # the separate provider-native install action below remains Tenant/VMaaS-only.
-    storage_provider_caas_legacy_vast_csi_install_enabled: >-
-      {{ osac_job_vars.resource.kind == 'ClusterOrder' }}
+    # Provisioning target for storage_provider routing, computed once: a Tenant is
+    # the hub (vmaas), a ClusterOrder is a guest cluster (caas). Any other kind is
+    # rejected by the pre_tasks assert below; an unmapped kind also fails the lookup.
+    _storage_provisioning_target: "{{ {'ClusterOrder': 'caas', 'Tenant': 'vmaas'}[osac_job_vars.resource.kind] }}"
   pre_tasks:
     - name: Show resource metadata
       tags: [always]
@@ -50,6 +49,14 @@
         osac_job_vars.resource.metadata.namespace | length == 0 or
         osac_job_vars.resource.metadata.uid is not defined or
         osac_job_vars.resource.metadata.uid | length == 0
+
+    - name: Validate the resource kind is one this playbook can route
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.resource.kind | default('') in ['Tenant', 'ClusterOrder']
+        fail_msg: >-
+          osac_job_vars.resource.kind must be 'Tenant' (hub storage) or 'ClusterOrder'
+          (guest-cluster storage). Got: {{ osac_job_vars.resource.kind | default('') | to_json }}
 
     - name: Validate storage_tier_definitions is a non-empty array in the EDA event
       tags: [always]
@@ -116,9 +123,8 @@
 
   tasks:
     # Tenant storage uses the selected VMaaS target resolved above. ClusterOrder
-    # storage is the separate CaaS guest-cluster path and does not run this new
-    # provider-native setup action. Existing VAST ClusterOrders retain their
-    # legacy install through ensure_storage_class, enabled explicitly below.
+    # storage is the CaaS guest-cluster path: it runs no CSI driver install here and
+    # gets its StorageClasses from the provider role the caas target resolves to.
     - name: Ensure provider-native CSI drivers on the selected VMaaS cluster
       tags: [provider_csi_driver_install]
       when: osac_job_vars.resource.kind == 'Tenant'
@@ -187,6 +193,7 @@
             storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
             storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
             storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
+            storage_provider_provisioning_target: "{{ _storage_provisioning_target }}"
       rescue:
         - name: Warn about StorageClass creation failure
           ansible.builtin.debug:
@@ -204,3 +211,4 @@
             storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
             storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
             storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
+            storage_provider_provisioning_target: "{{ _storage_provisioning_target }}"

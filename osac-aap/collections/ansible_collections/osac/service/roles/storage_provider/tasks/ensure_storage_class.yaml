@@ -1,10 +1,17 @@
 ---
 # Dispatches ensure_storage_class to each unique provider in the tier list.
 # Accumulates StorageClass names across all providers into a single list.
+#
+# VAST block tiers are not supported on CLaaS. The osac_csi_storage role skips them and
+# appends their names to _storage_provider_refused_block_tiers without failing, so every
+# other tier, including those on other VAST backends, still gets its StorageClass. After
+# the loop this file records the reason vast_block_unsupported_on_caas (tiers and
+# backend_ids) in osac_storage_provider_failures and fails once.
 
-- name: Initialize StorageClass name accumulator
+- name: Initialize StorageClass name accumulator and refused block tier list
   ansible.builtin.set_fact:
     _all_sc_names: []
+    _storage_provider_refused_block_tiers: []
 
 - name: Dispatch ensure_storage_class to each provider backend pair
   block:
@@ -17,3 +24,35 @@
     - name: Set StorageClass names output (list)
       ansible.builtin.set_fact:
         storage_provider_storage_class_names: "{{ _all_sc_names }}"
+
+- name: Refuse VAST block tiers after all StorageClasses were created
+  when: _storage_provider_refused_block_tiers | default([]) | length > 0
+  block:
+    - name: Fail naming the VAST block tiers
+      ansible.builtin.fail:
+        msg: >-
+          VAST block tiers are not supported on CLaaS clusters. Tier(s)
+          {{ _storage_provider_refused_block_tiers | join(', ') }}
+          got no StorageClass. Use the nfs protocol for VAST, or a netapp or pure
+          backend for block storage.
+  rescue:
+    - name: Build structured failure artifact for VAST block tiers
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures:
+          - reason: vast_block_unsupported_on_caas
+            tiers: "{{ _storage_provider_refused_block_tiers }}"
+            backend_ids: >-
+              {{ _storage_provider_tiers
+                 | selectattr('name', 'in', _storage_provider_refused_block_tiers)
+                 | map(attribute='backend_id') | map('string') | unique | list }}
+            message: "{{ ansible_failed_result.msg }}"
+
+    - name: Emit structured failure artifact for VAST block tiers
+      ansible.builtin.set_stats:
+        data:
+          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
+        aggregate: false
+
+    - name: Re-raise the VAST block tier refusal
+      ansible.builtin.fail:
+        msg: "{{ ansible_failed_result.msg }}"

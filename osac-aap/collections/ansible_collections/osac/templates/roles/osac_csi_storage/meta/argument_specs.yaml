@@ -1,0 +1,41 @@
+---
+# Only the install_driver entry point declares arguments.
+argument_specs:
+  install_driver:
+    short_description: Install the OSAC CSI driver on a cluster with Helm
+    options:
+      osac_csi_driver_extra_values:
+        type: dict
+        default: {}
+        no_log: true
+        description:
+          - Helm values merged over the values this role computes.
+          - The merge is recursive and the caller's values win; a list here replaces the computed list.
+          - Except that driverName, namespace, controller.fulfillment.credentials.secretName and controller.fulfillment.tls.insecureSkipVerify must keep the values the role computes; the render fails when these values change them. They change only through osac_csi_driver_name, osac_csi_driver_namespace, osac_csi_driver_credentials_secret_name and osac_csi_driver_fulfillment_tls_insecure.
+          - Other tls keys merge normally; for example controller.fulfillment.tls.caBundle.configMap and .key may be set here to point the driver at a CA bundle.
+          - The caller sets this only from playbook or operator job vars, never from tenant-controlled input, and never with a VAST credential.
+      tenant_name:
+        type: str
+        required: true
+        description:
+          - Tenant name; labels the driver namespace.
+      _remote_kubeconfig:
+        type: str
+        required: true
+        description:
+          - Path to the kubeconfig of the target cluster.
+      fulfillment_endpoint:
+        type: str
+        required: false
+        description:
+          - Fulfillment-service endpoint the driver controller connects to.
+          - Required when the driver talks to the hub fulfillment service (controller-enabled install); omitted from the values when unset (guest node mode).
+          - The controller credentials and tls values are emitted only when both this and fulfillment_issuer_url are set.
+          - Callers map osac_job_vars.fulfillment_endpoint to this top-level var.
+      fulfillment_issuer_url:
+        type: str
+        required: false
+        description:
+          - OAuth2 issuer URL the driver controller uses to authenticate.
+          - Required when the driver talks to the hub fulfillment service (controller-enabled install); omitted from the values when unset (guest node mode).
+          - Callers map osac_job_vars.fulfillment_issuer_url to this top-level var.

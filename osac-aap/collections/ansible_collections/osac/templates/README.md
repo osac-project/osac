@@ -194,9 +194,10 @@ extra_var, each tier declares its provider, and the service-layer dispatcher
 template role with the filtered tier subset.
 
 1. Create role structure. The role **MUST** be named `{provider}_storage` (e.g.,
-   `vast_storage`, `netapp_storage`). This naming convention is enforced by the
-   dispatcher at `osac.service.storage_provider`, which constructs the role name
-   dynamically: `osac.templates.{{ provider }}_storage`. Using a different naming
+   `vast_storage`, `lvms_storage`). The dispatcher at `osac.service.storage_provider`
+   resolves the role name in `tasks/_resolve_provider_role.yaml`, which falls back to
+   `osac.templates.{{ provider }}_storage` (see "Dispatcher pattern" for the full order,
+   including the `caas` target and the `netapp`/`pure` mapping). Using a different naming
    pattern will cause a runtime role-not-found error.
    ```bash
    mkdir -p roles/my_provider_storage/{tasks,defaults,meta}
@@ -242,13 +243,17 @@ template role with the filtered tier subset.
    env-var or K8s Secret fallback for admin credentials.
 
 5. **Provisioning targets:** Each provider declares only the targets it implements
-   via `meta/osac.yaml`. `caas` is currently supported by the `lvms_storage`
-   provider (installs LVMS on the guest cluster, creates per-tenant StorageClasses).
+   via `meta/osac.yaml`. On `caas`, `lvms_storage` installs LVMS on the guest cluster and
+   creates per-tenant StorageClasses; every other provider is served by `osac_csi_storage`
+   unless it is listed in `storage_provider_guest_native_providers` (see "Dispatcher
+   pattern"). A new provider that runs its own CSI driver on guest clusters must be added to
+   that list to keep its own role on `caas`.
    HCP-level targets (`hcp_control_plane`, `hcp_worker_root`, `hcp_data_plane`)
    are defined but not yet implemented by any provider.
 
-**CaaS provisioning targets:** `caas` is supported by the `lvms_storage` provider
-(OSAC-3234). `hcp_control_plane`, `hcp_worker_root`, and `hcp_data_plane` remain
+**CaaS provisioning targets:** `caas` is served by the `lvms_storage` provider
+(OSAC-3234) and, for all other providers, by `osac_csi_storage`.
+`hcp_control_plane`, `hcp_worker_root`, and `hcp_data_plane` remain
 unimplemented — they are defined in the provisioning target enum for future
 network-attached storage providers that serve HCP worker nodes directly.
 
@@ -286,8 +291,31 @@ enforcement.
 
 **Dispatcher pattern:** `osac.service.storage_provider` validates inputs (tier list,
 provider allowlist, protocol allowlist, provisioning target enum, max tier count) then
-dispatches to `osac.templates.{provider}_storage` via a `_dispatch_provider.yaml`
-wrapper (Ansible does not support `loop:` on `include_role`).
+dispatches each provider to the role chosen by `tasks/_resolve_provider_role.yaml`, via a
+`_dispatch_provider.yaml` wrapper (Ansible does not support `loop:` on `include_role`).
+
+The resolver reads the provider name (hyphens read as underscores) and the
+`storage_provider_provisioning_target` input (`vmaas` or `caas`, default `vmaas`; any other
+value is refused). It picks the role in this order:
+
+1. Target `caas` and the provider is not in `storage_provider_guest_native_providers`
+   (default `[lvms]`): `osac_csi_storage`. The list is compared after hyphens are read as
+   underscores and a trailing `_storage` is removed, so `lvms`, `lvms_storage` and
+   `lvms-storage` all count as guest-native.
+2. Provider `netapp` or `pure`: `osac_csi_storage`.
+3. Provider name already ends in `_storage`: that role.
+4. Otherwise: `{provider}_storage`.
+
+On `vmaas` only rules 2 to 4 apply, so existing VMaaS routing is unchanged. Before the
+resolver runs, a `vmaas` `ensure_storage_class` or `teardown_cluster_storage` dispatch fails
+for a provider outside `storage_provider_vmaas_supported_providers` (default
+`[vast, lvms]`), naming the provider and its gap (netapp: the API accepts it only with
+`cspManaged: true`; pure: its VMaaS role is not registered yet). Backend `setup` and
+`teardown_backend` are not affected. On `caas`, every
+tier (nfs or block) of a non-guest-native provider routes to `osac_csi_storage`. On `caas`,
+VAST block tiers are refused after all other StorageClasses are created (reason
+`vast_block_unsupported_on_caas`, no StorageClass for them); NFS tiers, including those on
+other VAST backends, still get theirs, and netapp and pure block tiers are unaffected. This covers CLaaS (ClusterOrder) storage only.
 
 **VAST provider specifics:** The `vast_storage` role creates per-tenant VMS managers
 (TENANT_ADMIN user type) with random passwords via REST API (`POST /api/managers/`).
@@ -389,9 +417,49 @@ PersistentVolume or PersistentVolumeClaim still uses one of the tenant's
 StorageClasses. `teardown_backend` leaves the prepared SVM, accounts, and QoS policy
 groups untouched.
 
-**Block encryption:** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
+**OSAC CSI provider specifics (`osac_csi_storage`):** The role creates and deletes
+per-tier StorageClasses on a CaaS tenant cluster and nothing else. It requires the
+OSAC CSI driver to be registered there already (a `CSIDriver` named
+`osac_csi_driver_name`); without it `ensure_storage_class` fails and records the
+reason `csi_driver_not_registered` in `osac_storage_provider_failures`. It places no
+credentials on the cluster, and its StorageClasses do not allow volume expansion.
+`ensure_storage_class` skips any VAST block tier (no StorageClass) and appends its name to
+the fact `_storage_provider_refused_block_tiers` without failing. The `storage_provider`
+dispatcher fails once after every provider backend pair was handled, recording the reason
+`vast_block_unsupported_on_caas` (tiers and backend IDs) in
+`osac_storage_provider_failures` with the message "VAST block tiers are not supported on
+CLaaS clusters".
+`teardown_cluster_storage` deletes only the tenant's StorageClasses. Installing the
+driver is a separate entry point, `tasks_from: install_driver`, with
+`uninstall_driver` as its counterpart; the StorageClass actions do not call either.
+Callers map `osac_job_vars.fulfillment_endpoint` and
+`osac_job_vars.fulfillment_issuer_url` to the top-level vars `fulfillment_endpoint`
+and `fulfillment_issuer_url` that `install_driver` reads.
+`install_driver` accepts `osac_csi_driver_extra_values`, a dict merged recursively
+over the computed Helm values. The caller's values win, and a list replaces the
+computed list instead of merging. The caller fills it only from playbook or operator
+job vars, never from tenant-controlled input and never with a VAST credential.
+The caller's values win except for four keys, which change only through their own
+role variables: `driverName` (`osac_csi_driver_name`), `namespace`
+(`osac_csi_driver_namespace`), `controller.fulfillment.credentials.secretName`
+(`osac_csi_driver_credentials_secret_name`) and
+`controller.fulfillment.tls.insecureSkipVerify`
+(`osac_csi_driver_fulfillment_tls_insecure`). Extra values that change one of them
+fail the render with a message naming the key path, not the value. Other `tls` keys
+merge normally: `controller.fulfillment.tls.caBundle.configMap` and `.key`, for
+example, may be set through the dict to point the driver at a CA bundle (the chart
+mounts it when fulfillment trust is enabled).
+Nothing calls `install_driver` yet; a separate per-cluster install job will, see
+[OSAC-7841](https://redhat.atlassian.net/browse/OSAC-7841). `uninstall_driver` has
+no caller, and none is needed today: fulfillment-service refuses to delete a tenant
+while it still has clusters (`rejectDeleteWhileResourcesExist` in
+`fulfillment-service/internal/servers/private_tenants_server.go`), and deleting a
+cluster removes its guest cluster.
+
+**Block encryption (`vast_storage` only; `osac_csi_storage` has no block-encryption
+handling):** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
 event payload, the passphrase is persisted to the hub Secret during `setup` and used by
-`ensure_storage_class` to populate the CSI Secret's `passphrase` field and set
+the `vast_storage` `ensure_storage_class` to populate the CSI Secret's `passphrase` field and set
 `hostEncryption: "true"` on block-protocol StorageClasses. On CSI Secret recreation,
 `ensure_storage_class` reads the passphrase from the hub Secret so it survives the
 original event. NFS encryption is managed at the VAST cluster level and is not
@@ -431,6 +499,14 @@ Templates integrate with OSAC through a well-defined interface:
 7. If absent, reads per-tenant creds from hub Secret, creates CSI Secret with tenant creds + per-tier StorageClasses
 8. On tenant deletion (`{{ aap_prefix }}-delete-org`), `teardown` reads stored config, deletes per-tier resources + per-tenant user
 9. Teardown validates provider type, handles legacy single-tier Secrets, gates hub Secret deletion on cleanup success
+
+The steps above describe the VAST provider on the hub (`vmaas`). For a ClusterOrder, the
+cluster-storage playbooks pass `storage_provider_provisioning_target: caas`, so the dispatcher
+resolves each tier's provider with the order in "Dispatcher pattern" above. A `vast` tier on a
+ClusterOrder is therefore served by `osac_csi_storage`: `ensure_storage_class` creates an OSAC CSI
+StorageClass on the guest cluster, reads no hub Secret and makes no VAST calls, and
+`teardown_cluster_storage` removes that StorageClass. The OSAC CSI driver must already be
+installed on the guest.
 
 ## Dependencies
 

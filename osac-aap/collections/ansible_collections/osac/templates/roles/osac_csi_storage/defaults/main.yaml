@@ -20,16 +20,7 @@ osac_csi_driver_chart_version: "0.0.1"
 # when the release name already contains the chart name ("csi-driver" ⊆ "csi-driver").
 osac_csi_driver_helm_release: csi-driver
 
-# Hub Secret name prefix written by OSAC-4197 for the tenant CSI service identity.
-# Full name: <prefix><tenant_name>
-osac_csi_driver_hub_secret_prefix: "osac-csi-driver-"
-
-# Hub namespace where the OSAC-4197 credential Secret is stored.
-osac_csi_driver_hub_secret_namespace: >-
-  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
-
-# Name of the Kubernetes Secret created on the tenant cluster holding OAuth2 credentials.
+# Names the Secret the chart reads.
 osac_csi_driver_credentials_secret_name: osac-csi-driver-credentials
 
 # TLS: set true to skip TLS verification when the fulfillment-service endpoint uses a
@@ -43,6 +34,12 @@ osac_csi_driver_reclaim_policy: Delete
 # StorageClass volumeBindingMode. Immediate is preferred for OSAC-managed tiers
 # because the backend handles topology independently.
 osac_csi_driver_volume_binding_mode: Immediate
+
+# Extra Helm values for the install_driver entry point, merged recursively over the
+# computed values; the caller's values win and lists replace. The caller sets this
+# only from playbook or operator job vars, never from tenant-controlled input, and
+# never with a VAST credential.
+osac_csi_driver_extra_values: {}
 
 # Per-vendor node CSI socket paths for volume mounting on guest worker nodes,
 # matching csi_driver_install_vendor_node_socket_paths from OSAC-3290.

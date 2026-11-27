@@ -1550,18 +1550,176 @@
           - _all_tenant_configs['pure-backend-1'].provider == 'pure'
 
 # ──────────────────────────────────────────────────────────────
-# Regression: the legacy CaaS VAST path validates the native CSI matrix.
-# This lives last so run_tests.sh's second invocation exercises it after its
-# start-at-task split around the invalid-provider runner failure.
+# Provider role resolution by provisioning target
+# Expected: on the caas target every provider outside the guest-native list
+# (lvms) resolves to osac_csi_storage; the vmaas target and an unset target
+# keep today's per-provider role names.
 # ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- validate matrix for legacy CaaS VAST installation
+- name: Test storage_provider -- provider role resolution by provisioning target
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Run legacy CaaS install with an overridden native CSI matrix
+    # The vmaas rows are regression guards: they pin behaviour that exists
+    # today and must keep passing once the resolver is introduced.
+    - name: Assert the role resolved for each (target, provider) row
+      ansible.builtin.include_tasks: _assert_resolve_row.yml
+      loop:
+        - {target: caas, provider: vast, expected: osac_csi_storage}
+        - {target: caas, provider: netapp, expected: osac_csi_storage}
+        - {target: caas, provider: pure, expected: osac_csi_storage}
+        - {target: caas, provider: osac_csi, expected: osac_csi_storage}
+        - {target: caas, provider: lvms, expected: lvms_storage}
+        # a guest-native provider keeps its role whether the name carries the
+        # _storage suffix or uses a hyphen
+        - {target: caas, provider: lvms_storage, expected: lvms_storage}
+        - {target: caas, provider: lvms-storage, expected: lvms_storage}
+        # regression guards (current behaviour)
+        - {target: vmaas, provider: lvms-storage, expected: lvms_storage}
+        - {target: vmaas, provider: vast, expected: vast_storage}
+        - {target: vmaas, provider: lvms, expected: lvms_storage}
+        - {target: vmaas, provider: osac_csi_driver, expected: osac_csi_driver_storage}
+      loop_control:
+        loop_var: _row
+        label: "{{ _row.target }}/{{ _row.provider }}"
+
+    # An unset target cannot go through the helper: a value passed in vars is
+    # never undefined. The target is deliberately not passed here at all.
+    - name: Reset _dispatch_role before the unset-target row
+      ansible.builtin.set_fact:
+        _dispatch_role: ""
+
+    - name: Set _current_provider for the unset-target row
+      ansible.builtin.set_fact:
+        _current_provider: vast
+
+    - name: Resolve the provider role without a provisioning target
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: _resolve_provider_role.yaml
+
+    - name: Assert an unset target keeps the vmaas behaviour
+      ansible.builtin.assert:
+        that:
+          - _dispatch_role == 'vast_storage'
+        fail_msg: "provider 'vast' with no provisioning target resolved to '{{ _dispatch_role }}', expected 'vast_storage'"
+        success_msg: "provider 'vast' with no provisioning target resolves to 'vast_storage'"
+
+# ──────────────────────────────────────────────────────────────
+# Unknown provisioning target is rejected
+# Expected: the argument spec rejects 'bogus'. Provider osac-csi is used on
+# purpose: its setup only sets a fact, so on code that does not validate the
+# target nothing touches Kubernetes and the "should not be reached" task fires.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- unknown provisioning target (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run unknown-target failure test
       block:
-        - name: Include storage_provider with a legacy VAST matrix override
+        - name: Attempt with unknown provisioning target 'bogus' (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_provisioning_target: bogus
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: osac-csi
+                backend_id: be-1
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when the provisioning target is unknown"
+
+      rescue:
+        - name: Verify role failed naming storage_provider_provisioning_target
+          ansible.builtin.assert:
+            that:
+              - >-
+                'storage_provider_provisioning_target' in
+                ((ansible_failed_result.msg | default('')) ~ ' ' ~
+                (ansible_failed_result.argument_errors | default([]) | join(' ')))
+            fail_msg: "Role failed but not on the provisioning target: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Unknown provisioning target rejected"
+
+# ──────────────────────────────────────────────────────────────
+# The resolver rejects an unknown provisioning target itself
+# Expected: _resolve_provider_role.yaml fails with its own message naming
+# storage_provider_provisioning_target. The argument spec check above never reaches
+# the resolver, so this guards the resolver for callers that include it directly.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- resolver rejects an unknown provisioning target (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run resolver unknown-target failure test
+      block:
+        - name: Set _current_provider for the resolver test
+          ansible.builtin.set_fact:
+            _current_provider: vast
+
+        - name: Resolve the provider role with an unknown target (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+            tasks_from: _resolve_provider_role.yaml
+          vars:
+            storage_provider_provisioning_target: bogus
+
+        - name: This task should not be reached -- the resolver should have failed
+          ansible.builtin.fail:
+            msg: "Resolver did not fail as expected when the provisioning target is unknown"
+
+      rescue:
+        - name: Verify the resolver's own message names storage_provider_provisioning_target
+          ansible.builtin.assert:
+            that:
+              - "'storage_provider_provisioning_target must be' in (ansible_failed_result.msg | default(''))"
+              - "'bogus' in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Resolver failed but not with its own target message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Resolver rejected the unknown provisioning target"
+
+# ──────────────────────────────────────────────────────────────
+# VMaaS cluster storage accepts only the providers it supports
+# Expected: on the vmaas target, ensure_storage_class and teardown_cluster_storage
+# fail before any provider role runs for a provider outside
+# storage_provider_vmaas_supported_providers, and the message names the provider
+# and its gap. A backend setup job is not affected.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- vmaas refuses unsupported providers for cluster storage
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Check each unsupported provider and cluster action on vmaas
+      ansible.builtin.include_tasks: _assert_vmaas_unsupported.yml
+      loop:
+        - {provider: netapp, protocol: block, action: ensure_storage_class, gap: cspManaged}
+        - {provider: pure, protocol: block, action: ensure_storage_class, gap: '#1531'}
+        - {provider: netapp, protocol: block, action: teardown_cluster_storage, gap: cspManaged}
+      loop_control:
+        loop_var: _vmaas_case
+        label: "{{ _vmaas_case.provider }} {{ _vmaas_case.action }}"
+
+# ──────────────────────────────────────────────────────────────
+# Regression: a VAST StorageClass dispatch installs no CSI operator, so it never
+# consults the native CSI install matrix, whatever flags the caller passes.
+# This lives last so run_tests.sh's second invocation exercises it after its
+# start-at-task split around the invalid-provider runner failure.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- VAST StorageClass dispatch ignores the native CSI matrix
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run a VAST StorageClass dispatch with an overridden native CSI matrix
+      block:
+        - name: Include storage_provider with a matrix override and the removed CaaS install flag
           ansible.builtin.include_role:
             name: osac.service.storage_provider
           vars:
@@ -1577,16 +1735,25 @@
             tenant_name: tenant-acme
             tenant_namespace: osac-tenants
 
-        - name: Fail if the legacy path accepts the matrix override
-          ansible.builtin.fail:
-            msg: "Legacy CaaS VAST installation accepted an untrusted native CSI matrix"
+        - name: Record that the dispatch did not fail
+          ansible.builtin.set_fact:
+            _matrix_probe_failure: {}
 
       rescue:
-        - name: Verify the legacy path rejected the matrix before dispatch
-          ansible.builtin.assert:
-            that:
-              - "'configured in defaults' in (ansible_failed_result.msg | default(''))"
-            fail_msg: >-
-              Legacy CaaS VAST validation failed for an unexpected reason:
-              {{ ansible_failed_result.msg | default('unknown error') }}
-            success_msg: "Legacy CaaS VAST installation rejected the matrix override before dispatch"
+        - name: Record where the dispatch failed
+          ansible.builtin.set_fact:
+            _matrix_probe_failure:
+              msg: "{{ ansible_failed_result.msg | default('') }}"
+              task: "{{ ansible_failed_task.name | default('') }}"
+
+    - name: Verify the dispatch neither checked the matrix nor reached a CSI operator install
+      ansible.builtin.assert:
+        that:
+          - "'configured in defaults' not in (_matrix_probe_failure.msg | default(''))"
+          - "'CSI operator' not in (_matrix_probe_failure.task | default(''))"
+          - "'CSI driver' not in (_matrix_probe_failure.task | default(''))"
+        fail_msg: >-
+          A VAST StorageClass dispatch must not validate or use the native CSI install
+          matrix. Failed task: {{ _matrix_probe_failure.task | default('none') }};
+          message: {{ _matrix_probe_failure.msg | default('none') }}
+        success_msg: "The VAST StorageClass dispatch ignored the native CSI matrix"

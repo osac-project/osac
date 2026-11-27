@@ -6,7 +6,13 @@
 #   _current_pair      — dict with 'provider' and 'backend_id' for this iteration
 #   _dispatch_action   — task file to invoke (setup, ensure_storage_class, teardown_cluster_storage, teardown_backend)
 #
+# Sets (via _resolve_provider_role.yaml):
+#   _current_provider, _dispatch_role — provider name and the osac.templates role chosen for it
+#
 # Uses from play scope:
+#   storage_provider_provisioning_target — vmaas (default) or caas; with
+#                                          storage_provider_guest_native_providers it decides
+#                                          which role serves the provider
 #   _storage_provider_tiers              — full tier list, qos_policy-defaulted (filtered here per provider and backend_id)
 #   storage_provider_backend_connections — backend connection details keyed by backend_id,
 #                                          filtered here to only the backend_id(s) referenced
@@ -28,6 +34,31 @@
   ansible.builtin.set_fact:
     _current_provider: "{{ _current_pair.provider }}"
     _current_backend_id: "{{ _current_pair.backend_id | string }}"
+
+- name: "Refuse cluster storage on vmaas for a provider the target does not support"
+  vars:
+    _vmaas_base: "{{ _current_provider | replace('-', '_') | regex_replace('_storage$', '') }}"
+    _vmaas_supported: >-
+      {{ storage_provider_vmaas_supported_providers | default(['vast', 'lvms'])
+         | map('replace', '-', '_') | map('regex_replace', '_storage$', '') | list }}
+    _vmaas_gaps:
+      netapp: >-
+        the API accepts a netapp StorageBackend only with cspManaged: true
+        (netapp_requires_csp_managed)
+      pure: its VMaaS template role is not registered yet (osac-project/osac#1531)
+  ansible.builtin.fail:
+    msg: >-
+      Provider '{{ _current_provider }}' (backend '{{ _current_backend_id }}') is not
+      supported for {{ _dispatch_action }} on the vmaas target:
+      {{ _vmaas_gaps[_vmaas_base] | default('it is not in storage_provider_vmaas_supported_providers') }}.
+      Supported on vmaas: {{ _vmaas_supported | join(', ') }}.
+  when:
+    - storage_provider_provisioning_target | default('vmaas') == 'vmaas'
+    - _dispatch_action in ['ensure_storage_class', 'teardown_cluster_storage']
+    - _vmaas_base not in _vmaas_supported
+
+- name: "Resolve the role that serves the current provider"
+  ansible.builtin.include_tasks: _resolve_provider_role.yaml
 
 - name: "Compute filtered tiers for current provider and backend_id"
   ansible.builtin.set_fact:
@@ -81,16 +112,13 @@
   block:
     - name: "Include provider storage role"
       ansible.builtin.include_role:
-        name: >-
-          {% set _clean = _current_provider | replace('-', '_') -%}
-          {% set _csi_managed = ['netapp', 'pure'] -%}
-          {% set _role = 'osac_csi_storage' if _clean in _csi_managed else (_clean if _clean.endswith('_storage') else (_clean ~ '_storage')) -%}
-          osac.templates.{{ _role }}
+        name: "osac.templates.{{ _dispatch_role }}"
         tasks_from: "{{ _dispatch_action }}"
         public: true
       vars:
         _provider_tiers: "{{ _computed_provider_tiers }}"
-        _provider_backend_connections: "{{ _computed_provider_backend_connections }}"
+        # osac_csi_storage never reads backend connections; do not hand it credentials.
+        _provider_backend_connections: "{{ {} if _dispatch_role == 'osac_csi_storage' else _computed_provider_backend_connections }}"
         vast_storage_csi_provisioner_map: "{{ storage_provider_csi_driver_matrix.vast.protocols }}"
 
 - name: "Accumulate tenant config after dispatch (setup only)"

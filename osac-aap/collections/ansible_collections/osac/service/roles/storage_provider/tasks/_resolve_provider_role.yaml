@@ -1,0 +1,51 @@
+---
+# Resolve the osac.templates role that serves the current provider.
+#
+# Receives from caller:
+#   _current_provider                        — provider name for this dispatch
+#   storage_provider_provisioning_target     — vmaas (default) or caas
+#   storage_provider_guest_native_providers  — providers that keep their own role on caas
+#                                              (default [lvms])
+#
+# Sets:
+#   _dispatch_role — role name under osac.templates
+#
+# Resolution order, with hyphens in the provider name read as underscores:
+#   1. target caas and provider not guest-native -> osac_csi_storage
+#   2. provider netapp or pure                   -> osac_csi_storage
+#   3. provider already ends with _storage       -> the provider itself
+#   4. otherwise                                 -> <provider>_storage
+#
+# The guest-native check compares names with hyphens read as underscores and a
+# trailing _storage removed, so lvms, lvms_storage and lvms-storage all count as
+# guest-native (list entries are normalised the same way).
+#
+# The inline defaults keep callers that include this file directly, without the
+# role defaults loaded, working.
+
+- name: "Validate the provisioning target"
+  ansible.builtin.fail:
+    msg: >-
+      storage_provider_provisioning_target must be 'vmaas' or 'caas'.
+      Got: {{ storage_provider_provisioning_target | default('vmaas') | to_json }}
+  when: storage_provider_provisioning_target | default('vmaas') not in ['vmaas', 'caas']
+
+- name: "Resolve the provider role"
+  ansible.builtin.set_fact:
+    _dispatch_role: >-
+      {% filter trim -%}
+      {% set _clean = _current_provider | replace('-', '_') -%}
+      {% set _base = _clean | regex_replace('_storage$', '') -%}
+      {% set _native = (storage_provider_guest_native_providers | default(['lvms']))
+         | map('replace', '-', '_') | map('regex_replace', '_storage$', '') | list -%}
+      {% if storage_provider_provisioning_target | default('vmaas') == 'caas'
+            and _base not in _native -%}
+      osac_csi_storage
+      {%- elif _clean in ['netapp', 'pure'] -%}
+      osac_csi_storage
+      {%- elif _clean.endswith('_storage') -%}
+      {{ _clean }}
+      {%- else -%}
+      {{ _clean }}_storage
+      {%- endif %}
+      {%- endfilter %}

@@ -16,6 +16,11 @@
 #
 #   Test 5 (StorageClass entry and vendor derivation):
 #     ansible-playbook ... -e test_sc_derivation=true
+#
+#   Test 6 (Helm values rendered for the driver install, with and without
+#   osac_csi_driver_extra_values; renders through the role's _render_driver_values
+#   task file and publishes the result in the fact _osac_csi_driver_helm_values):
+#     ansible-playbook ... -e test_install_driver_values=true
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Hub-cluster path is rejected (no _remote_kubeconfig)
@@ -53,12 +58,18 @@
             fail_msg: "Expected failure about admin_kubeconfig, got: {{ ansible_failed_result.msg }}"
             success_msg: "Hub-path correctly rejected with actionable error"
 
+        # ignore_errors on include_role does not cover failures of the role's own tasks,
+        # so capture the expected failure with block/rescue instead.
         - name: Call teardown_cluster_storage without _remote_kubeconfig (expected to fail)
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: teardown_cluster_storage
-          ignore_errors: true
-          register: teardown_result
+          block:
+            - name: Include teardown_cluster_storage
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: teardown_cluster_storage
+          rescue:
+            - name: Capture the expected teardown failure
+              ansible.builtin.set_fact:
+                teardown_result: "{{ ansible_failed_result }}"
 
         - name: Verify teardown failure message mentions kubeconfig requirement
           ansible.builtin.assert:
@@ -82,28 +93,38 @@
     - name: Run input validation tests
       when: test_input_validation | default(false) | bool
       block:
+        # ignore_errors on include_role does not cover failures of the role's own tasks,
+        # so capture each expected failure with block/rescue instead.
         - name: Call ensure_storage_class with invalid tenant_name
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: "Invalid_Name!"
-            _provider_tiers:
-              - name: default
-                protocol: nfs
-                provider: osac_csi_driver
-          ignore_errors: true
-          register: name_result
+          block:
+            - name: Include ensure_storage_class with invalid tenant_name
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: "Invalid_Name!"
+                _provider_tiers:
+                  - name: default
+                    protocol: nfs
+                    provider: osac_csi_driver
+          rescue:
+            - name: Capture the expected invalid tenant_name failure
+              ansible.builtin.set_fact:
+                name_result: "{{ ansible_failed_result }}"
 
         - name: Call ensure_storage_class with empty _provider_tiers
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: valid-name
-            _provider_tiers: []
-          ignore_errors: true
-          register: tiers_result
+          block:
+            - name: Include ensure_storage_class with empty _provider_tiers
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: valid-name
+                _provider_tiers: []
+          rescue:
+            - name: Capture the expected empty _provider_tiers failure
+              ansible.builtin.set_fact:
+                tiers_result: "{{ ansible_failed_result }}"
 
         - name: Verify input validation failures
           ansible.builtin.assert:
@@ -260,3 +281,191 @@
                 'pure-flashblade=/var/lib/kubelet/plugins/pure.csi.com/csi.sock,' ~
                 'vast=/var/lib/kubelet/plugins/vast.csi.com/csi.sock'
             success_msg: "Vendor sockets derived correctly"
+
+# ──────────────────────────────────────────────────────────────
+# Test 6: Helm values rendered for the driver install
+#
+# Renders through the role's _render_driver_values task file, which the
+# install entry point includes before its Helm task, and reads the result from
+# the fact _osac_csi_driver_helm_values. Needs no cluster. Extra values are
+# passed only through include_role vars, the way a caller supplies them.
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_storage -- driver Helm values rendering
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _values_fulfillment_endpoint: fulfillment-api.test.example:443
+    _values_issuer_url: https://keycloak.test.example/realms/osac
+
+  tasks:
+    - name: Run driver Helm values tests
+      when: test_install_driver_values | default(false) | bool
+      block:
+        # Case A: no extra values; the render equals the computed defaults.
+        - name: Render driver values with the default (empty) extra values
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_storage
+            tasks_from: _render_driver_values
+          vars:
+            fulfillment_endpoint: "{{ _values_fulfillment_endpoint }}"
+            fulfillment_issuer_url: "{{ _values_issuer_url }}"
+
+        - name: Assert the default render equals the literal values dict
+          ansible.builtin.assert:
+            that:
+              - _osac_csi_driver_helm_values is mapping
+              - _osac_csi_driver_helm_values == _expected_default_values
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.insecureSkipVerify is sameas false
+            fail_msg: >-
+              Default render differs from the expected values.
+              Got: {{ _osac_csi_driver_helm_values | default('undefined') | to_json }}
+            success_msg: "Default render matches the literal values dict"
+          vars:
+            _expected_default_values:
+              driverName: csi.osac.openshift.io
+              namespace: osac-csi
+              controller:
+                fulfillment:
+                  endpoint: fulfillment-api.test.example:443
+                  issuerUrl: https://keycloak.test.example/realms/osac
+                  credentials:
+                    secretName: osac-csi-driver-credentials
+                    clientIdKey: client-id
+                    clientSecretKey: client-secret
+                  tls:
+                    insecureSkipVerify: false
+              node:
+                vendorSockets: >-
+                  netapp=/var/lib/kubelet/plugins/csi.trident.netapp.io/csi.sock,pure=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock,vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock
+
+        # Case B: nested extra values merge into the computed values; the siblings of
+        # the merged keys stay and the new keys appear.
+        - name: Render driver values with nested extra values
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_storage
+            tasks_from: _render_driver_values
+          vars:
+            fulfillment_endpoint: "{{ _values_fulfillment_endpoint }}"
+            fulfillment_issuer_url: "{{ _values_issuer_url }}"
+            osac_csi_driver_extra_values:
+              controller:
+                fulfillment:
+                  tls:
+                    caBundle:
+                      configMap: test-ca
+                      key: ca.crt
+                replicas: 2
+
+        - name: Assert extra values merged without dropping siblings
+          ansible.builtin.assert:
+            that:
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.caBundle.configMap == 'test-ca'
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.caBundle.key == 'ca.crt'
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.insecureSkipVerify is sameas false
+              - _osac_csi_driver_helm_values.controller.replicas == 2
+              - _osac_csi_driver_helm_values.controller.fulfillment.endpoint == _values_fulfillment_endpoint
+              - _osac_csi_driver_helm_values.controller.fulfillment.issuerUrl == _values_issuer_url
+              - _osac_csi_driver_helm_values.controller.fulfillment.credentials.secretName == 'osac-csi-driver-credentials'
+              - _osac_csi_driver_helm_values.driverName == 'csi.osac.openshift.io'
+              - _osac_csi_driver_helm_values.node.vendorSockets is search('^netapp=')
+            fail_msg: >-
+              Extra values were not merged as expected.
+              Got: {{ _osac_csi_driver_helm_values | default('undefined') | to_json }}
+            success_msg: "Nested extra values merged and siblings were preserved"
+
+        # Case C: guest-node install. fulfillment_endpoint and fulfillment_issuer_url
+        # are unset (optional for install_driver); the render must succeed and emit
+        # neither endpoint, issuerUrl, credentials nor tls: the chart fails to
+        # render when credentials are set without endpoint and issuer.
+        - name: Render driver values with endpoint and issuer URL unset (guest node mode)
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_storage
+            tasks_from: _render_driver_values
+          vars:
+            osac_csi_driver_extra_values:
+              mode: guestNode
+
+        - name: Assert the render omits the fulfillment settings and keeps the rest
+          ansible.builtin.assert:
+            that:
+              - _osac_csi_driver_helm_values is mapping
+              - _osac_csi_driver_helm_values.mode == 'guestNode'
+              - _case_c_fulfillment.endpoint is not defined
+              - _case_c_fulfillment.issuerUrl is not defined
+              - _case_c_fulfillment.credentials is not defined
+              - _case_c_fulfillment.tls is not defined
+              - _osac_csi_driver_helm_values.node.vendorSockets is search('^netapp=')
+              - _osac_csi_driver_helm_values.driverName == 'csi.osac.openshift.io'
+            fail_msg: >-
+              Guest-node render is wrong.
+              Got: {{ _osac_csi_driver_helm_values | default('undefined') | to_json }}
+            success_msg: "Render without endpoint and issuer URL omits credentials and tls"
+          vars:
+            _case_c_fulfillment: >-
+              {{ (_osac_csi_driver_helm_values.controller | default({})).fulfillment | default({}) }}
+
+        # Case D: extra values may not change the keys the role computes from its own
+        # variables (driverName, namespace, controller.fulfillment.tls and
+        # controller.fulfillment.credentials.secretName). The render fails with a
+        # message naming the key path and never the attempted value.
+        - name: Render driver values with extra values overriding driverName (expected to fail)
+          block:
+            - name: Include the render with a driverName override
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_storage
+                tasks_from: _render_driver_values
+              vars:
+                fulfillment_endpoint: "{{ _values_fulfillment_endpoint }}"
+                fulfillment_issuer_url: "{{ _values_issuer_url }}"
+                osac_csi_driver_extra_values:
+                  driverName: other.example.io
+
+            - name: Fail the test when the override was accepted
+              ansible.builtin.fail:
+                msg: "Case D1 render should have failed but succeeded"
+          rescue:
+            - name: Capture the driver name override failure
+              ansible.builtin.set_fact:
+                _case_d1_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Assert the driver name override was refused without echoing the value
+          ansible.builtin.assert:
+            that:
+              - _case_d1_msg is search('driverName')
+              - _case_d1_msg is not search('other.example.io')
+              - _case_d1_msg is not search('should have failed')
+            fail_msg: "Case D1 wrong failure message: {{ _case_d1_msg }}"
+            success_msg: "driverName override refused, value not echoed"
+
+        - name: Render driver values with extra values overriding the credentials Secret name (expected to fail)
+          block:
+            - name: Include the render with a credentials secretName override
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_storage
+                tasks_from: _render_driver_values
+              vars:
+                fulfillment_endpoint: "{{ _values_fulfillment_endpoint }}"
+                fulfillment_issuer_url: "{{ _values_issuer_url }}"
+                osac_csi_driver_extra_values:
+                  controller:
+                    fulfillment:
+                      credentials:
+                        secretName: attacker-secret
+
+            - name: Fail the test when the override was accepted
+              ansible.builtin.fail:
+                msg: "Case D2 render should have failed but succeeded"
+          rescue:
+            - name: Capture the credentials override failure
+              ansible.builtin.set_fact:
+                _case_d2_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Assert the credentials override was refused without echoing the value
+          ansible.builtin.assert:
+            that:
+              - _case_d2_msg is search('controller.fulfillment.credentials.secretName')
+              - _case_d2_msg is not search('attacker-secret')
+              - _case_d2_msg is not search('should have failed')
+            fail_msg: "Case D2 wrong failure message: {{ _case_d2_msg }}"
+            success_msg: "credentials.secretName override refused, value not echoed"

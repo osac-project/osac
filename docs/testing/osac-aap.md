@@ -51,6 +51,13 @@ in `osac-aap/Makefile`.
 - The local integration harness sets `OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES`
   to substitute test installers for external OLM operations. The playbooks
   default this gate to false, so extra vars alone cannot select roles.
+- `osac_csi_storage` ([OSAC-7904](https://redhat.atlassian.net/browse/OSAC-7904);
+  `tests/integration/targets/osac_csi_storage_class/`, also in `make test`):
+  StorageClass creation and deletion run against real Kind StorageClass,
+  CSIDriver and Namespace objects. The CSIDriver is a fixture and the "guest"
+  cluster is the same Kind API reached through a kubeconfig path. No OSAC CSI
+  driver, PVC provisioning or HCP guest cluster runs; installing the driver on a
+  guest is [OSAC-7841](https://redhat.atlassian.net/browse/OSAC-7841).
 - `network_task_playbook`, `netris_fabric`, `cudn_evpn` (also in `make test`):
   Netris is a stateful in-process fake; CUDN/VTEP CRDs are minimal schemas
   with fixture-supplied readiness — no OVN, real CRD validation, data plane or

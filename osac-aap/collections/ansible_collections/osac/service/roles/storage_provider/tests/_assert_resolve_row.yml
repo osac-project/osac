@@ -1,0 +1,33 @@
+---
+# Assert one row of the provider-role resolution table.
+#
+# Receives from caller (loop_var):
+#   _row — dict with 'provider' (as passed in _current_provider), 'target'
+#          (storage_provider_provisioning_target) and 'expected' (_dispatch_role)
+#
+# The target is passed through include vars only, never with set_fact: a value
+# passed in vars is scoped to the include, so no row can leak into the next.
+
+- name: "Reset _dispatch_role so a resolver that sets nothing cannot inherit the previous row"
+  ansible.builtin.set_fact:
+    _dispatch_role: ""
+
+- name: "Set _current_provider for the row"
+  ansible.builtin.set_fact:
+    _current_provider: "{{ _row.provider }}"
+
+- name: "Resolve the provider role for the row"
+  ansible.builtin.include_role:
+    name: osac.service.storage_provider
+    tasks_from: _resolve_provider_role.yaml
+  vars:
+    storage_provider_provisioning_target: "{{ _row.target }}"
+
+- name: "Assert the resolved role for the row"
+  ansible.builtin.assert:
+    that:
+      - _dispatch_role == _row.expected
+    fail_msg: >-
+      provider '{{ _row.provider }}' on target '{{ _row.target }}' resolved to
+      '{{ _dispatch_role }}', expected '{{ _row.expected }}'
+    success_msg: "provider '{{ _row.provider }}' on target '{{ _row.target }}' resolves to '{{ _row.expected }}'"

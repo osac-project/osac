@@ -1,0 +1,35 @@
+---
+# One case of the vmaas unsupported-provider play in test.yml.
+# Input: _vmaas_case with provider, protocol, action and gap (text the
+# failure message must contain).
+- name: "Run {{ _vmaas_case.action }} for {{ _vmaas_case.provider }} on vmaas"
+  block:
+    - name: "Include storage_provider for {{ _vmaas_case.provider }} on vmaas"
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_tiers:
+          - name: unsupported
+            protocol: "{{ _vmaas_case.protocol }}"
+            provider: "{{ _vmaas_case.provider }}"
+            backend_id: be-unsupported
+        storage_provider_action: "{{ _vmaas_case.action }}"
+        storage_provider_backend_connections: {}
+        tenant_name: tenant-acme
+        tenant_namespace: osac-tenants
+
+    - name: "Fail if {{ _vmaas_case.provider }} was accepted on vmaas"
+      ansible.builtin.fail:
+        msg: "{{ _vmaas_case.provider }} {{ _vmaas_case.action }} should have been refused on vmaas"
+
+  rescue:
+    - name: "Verify the refusal names {{ _vmaas_case.provider }} and its gap"
+      ansible.builtin.assert:
+        that:
+          - "'vmaas' in (ansible_failed_result.msg | default(''))"
+          - "_vmaas_case.provider in (ansible_failed_result.msg | default(''))"
+          - "_vmaas_case.gap in (ansible_failed_result.msg | default(''))"
+        fail_msg: >-
+          Unexpected failure for {{ _vmaas_case.provider }} {{ _vmaas_case.action }}:
+          {{ ansible_failed_result.msg | default('unknown error') }}
+        success_msg: "{{ _vmaas_case.provider }} {{ _vmaas_case.action }} refused on vmaas with its gap"

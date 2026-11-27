@@ -44,6 +44,7 @@ argument_specs:
         type: str
         required: false
         default: ""
+        no_log: true
         description: >
           Passphrase for block encryption. Passed from the Tenant CR event payload.
           When empty, block StorageClasses are created without host encryption.
@@ -68,6 +69,42 @@ argument_specs:
           its dispatched tier subset. Optional because teardown_cluster_storage never
           needs backend connection details (it only touches cluster-side K8s resources).
           Example: {be-001: {endpoint: vast.example.com:443, username: admin, password: "***"}}
+      storage_provider_provisioning_target:
+        type: str
+        required: false
+        default: vmaas
+        choices:
+          - vmaas
+          - caas
+        description: >
+          Target the storage job provisions for. vmaas is the hub or VM-hosting
+          cluster, caas is a tenant guest cluster. On caas every provider except
+          the guest-native ones (storage_provider_guest_native_providers) is
+          served by the OSAC CSI role, osac.templates.osac_csi_storage.
+      storage_provider_guest_native_providers:
+        type: list
+        elements: str
+        required: false
+        default:
+          - lvms
+        description: >
+          Providers that keep their own template role on the caas target instead of
+          being served by osac.templates.osac_csi_storage. lvms is the dev/CI-only
+          local tier, whose driver must be installed on the guest itself, which the
+          OSAC CSI driver cannot do. Names are compared with hyphens read as
+          underscores and a trailing _storage removed.
+      storage_provider_vmaas_supported_providers:
+        type: list
+        elements: str
+        required: false
+        default:
+          - vast
+          - lvms
+        description: >
+          Providers the vmaas target can create and tear down StorageClasses for.
+          On vmaas, ensure_storage_class and teardown_cluster_storage fail for any
+          other provider before a provider role runs. Names are compared the same
+          way as storage_provider_guest_native_providers.
       storage_provider_target_kubeconfig:
         type: str
         required: false
@@ -83,12 +120,3 @@ argument_specs:
           Disable TLS certificate validation for the target kubeconfig. Used for
           ClusterOrder guest clusters reached through routes whose certificate
           does not match the kubeconfig CA.
-      storage_provider_caas_legacy_vast_csi_install_enabled:
-        type: bool
-        required: false
-        default: false
-        description: >
-          Preserve the legacy VAST CSI installation for CaaS ClusterOrder storage
-          while OSAC CSI support for CaaS is incomplete. This only affects the
-          VAST ensure_storage_class dispatch and does not enable the new generic
-          ensure_csi_driver action for ClusterOrder resources.

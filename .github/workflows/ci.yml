@@ -144,6 +144,11 @@ jobs:
       contents: read
     uses: ./.github/workflows/check-pull-request.yaml
 
+  go-module-tidy:
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|go-module-tidy|')
+    uses: ./.github/workflows/go-module-tidy.yml
+
   darwin-keychain-tests:
     name: Darwin keychain tests
     needs: plan
@@ -245,6 +250,7 @@ jobs:
       - ansible-lint
       - check-generated-code
       - check-pull-request
+      - go-module-tidy
       - darwin-keychain-tests
       - helm-lint
       - build-osac-operator

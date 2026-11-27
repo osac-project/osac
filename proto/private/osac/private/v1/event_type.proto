@@ -38,6 +38,8 @@ import "osac/private/v1/identity_provider_type.proto";
 import "osac/private/v1/instance_type_type.proto";
 import "osac/private/v1/nat_gateway_type.proto";
 import "osac/private/v1/network_class_type.proto";
+import "osac/private/v1/notification_subscription_type.proto";
+import "osac/private/v1/notification_type.proto";
 import "osac/private/v1/project_membership_type.proto";
 import "osac/private/v1/project_type.proto";
 import "osac/private/v1/quota_limit_request_type.proto";
@@ -118,6 +120,9 @@ message Event {
     QuotaDefaultLimit quota_default_limit = 42 [(cleanapi.field).private = true];
     QuotaThreshold quota_threshold = 43 [(cleanapi.field).private = true];
     QuotaLimitRequest quota_limit_request = 44 [(cleanapi.field).private = true];
+    Notification notification = 45 [(cleanapi.field).private = true];
+    NotificationSubscription notification_subscription = 46 [(cleanapi.field).private = true];
+    NotificationSubscriptionDelivery notification_subscription_delivery = 47 [(cleanapi.field).private = true];
   }
 
   reserved 10;

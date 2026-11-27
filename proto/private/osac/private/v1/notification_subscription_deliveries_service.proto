@@ -1,0 +1,116 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/notification_subscription_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+message NotificationSubscriptionDeliveriesListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message NotificationSubscriptionDeliveriesListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated NotificationSubscriptionDelivery items = 3;
+}
+
+message NotificationSubscriptionDeliveriesGetRequest {
+  string id = 1;
+}
+
+message NotificationSubscriptionDeliveriesGetResponse {
+  NotificationSubscriptionDelivery object = 1;
+}
+
+message NotificationSubscriptionDeliveriesCreateRequest {
+  option (cleanapi.message).private = true;
+  NotificationSubscriptionDelivery object = 1 [(buf.validate.field).required = true];
+}
+
+message NotificationSubscriptionDeliveriesCreateResponse {
+  option (cleanapi.message).private = true;
+  NotificationSubscriptionDelivery object = 1;
+}
+
+message NotificationSubscriptionDeliveriesUpdateRequest {
+  option (cleanapi.message).private = true;
+  NotificationSubscriptionDelivery object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+  bool lock = 3;
+}
+
+message NotificationSubscriptionDeliveriesUpdateResponse {
+  option (cleanapi.message).private = true;
+  NotificationSubscriptionDelivery object = 1;
+}
+
+message NotificationSubscriptionDeliveriesDeleteRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+
+message NotificationSubscriptionDeliveriesDeleteResponse {
+  option (cleanapi.message).private = true;
+}
+
+message NotificationSubscriptionDeliveriesSignalRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+
+message NotificationSubscriptionDeliveriesSignalResponse {
+  option (cleanapi.message).private = true;
+}
+
+// Manages webhook delivery history. Controllers Create/Update; tenants List/Get.
+service NotificationSubscriptionDeliveries {
+  rpc List(NotificationSubscriptionDeliveriesListRequest) returns (NotificationSubscriptionDeliveriesListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/notification_subscription_deliveries"};
+  }
+
+  rpc Get(NotificationSubscriptionDeliveriesGetRequest) returns (NotificationSubscriptionDeliveriesGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/notification_subscription_deliveries/{id}"
+      response_body: "object"
+    };
+  }
+
+  rpc Create(NotificationSubscriptionDeliveriesCreateRequest) returns (NotificationSubscriptionDeliveriesCreateResponse) {
+    option (cleanapi.method).private = true;
+  }
+
+  rpc Update(NotificationSubscriptionDeliveriesUpdateRequest) returns (NotificationSubscriptionDeliveriesUpdateResponse) {
+    option (cleanapi.method).private = true;
+  }
+
+  rpc Delete(NotificationSubscriptionDeliveriesDeleteRequest) returns (NotificationSubscriptionDeliveriesDeleteResponse) {
+    option (cleanapi.method).private = true;
+  }
+
+  rpc Signal(NotificationSubscriptionDeliveriesSignalRequest) returns (NotificationSubscriptionDeliveriesSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
+}

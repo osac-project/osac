@@ -795,6 +795,80 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterServiceAccountsServer(registrar, privateServiceAccountsServer)
 
+	deps.Logger.InfoContext(ctx, "Creating notifications server")
+	notificationsServer, err := servers.NewNotificationsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create notifications server: %w", err)
+	}
+	publicv1.RegisterNotificationsServer(registrar, notificationsServer)
+
+	deps.Logger.InfoContext(ctx, "Creating private notifications server")
+	privateNotificationsServer, err := servers.NewPrivateNotificationsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private notifications server: %w", err)
+	}
+	privatev1.RegisterNotificationsServer(registrar, privateNotificationsServer)
+
+	deps.Logger.InfoContext(ctx, "Creating notification subscriptions server")
+	notificationSubscriptionsServer, err := servers.NewNotificationSubscriptionsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetSecretsServer(privateSecretsServer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create notification subscriptions server: %w", err)
+	}
+	publicv1.RegisterNotificationSubscriptionsServer(registrar, notificationSubscriptionsServer)
+
+	deps.Logger.InfoContext(ctx, "Creating private notification subscriptions server")
+	privateNotificationSubscriptionsServer, err := servers.NewPrivateNotificationSubscriptionsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetSecretsServer(privateSecretsServer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private notification subscriptions server: %w", err)
+	}
+	privatev1.RegisterNotificationSubscriptionsServer(registrar, privateNotificationSubscriptionsServer)
+
+	deps.Logger.InfoContext(ctx, "Creating notification subscription deliveries server")
+	notificationSubscriptionDeliveriesServer, err := servers.NewNotificationSubscriptionDeliveriesServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create notification subscription deliveries server: %w", err)
+	}
+	publicv1.RegisterNotificationSubscriptionDeliveriesServer(registrar, notificationSubscriptionDeliveriesServer)
+
+	deps.Logger.InfoContext(ctx, "Creating private notification subscription deliveries server")
+	privateNotificationSubscriptionDeliveriesServer, err := servers.NewPrivateNotificationSubscriptionDeliveriesServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private notification subscription deliveries server: %w", err)
+	}
+	privatev1.RegisterNotificationSubscriptionDeliveriesServer(registrar, privateNotificationSubscriptionDeliveriesServer)
+
 	// Create the project memberships server:
 	deps.Logger.InfoContext(ctx, "Creating project memberships server")
 	projectMembershipsServer, err := servers.NewProjectMembershipsServer().

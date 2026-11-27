@@ -40,6 +40,8 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create VirtualNetwork DAO for reference lookups: %w", err)
 	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.VirtualNetworkReference", virtualNetworksDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.VirtualNetworkReference", virtualNetworksDAO)
 	references.RegisterDAOLookup(validator, "osac.private.v1.VirtualNetworkLocalReference", virtualNetworksDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.VirtualNetworkLocalReference", virtualNetworksDAO)
 
@@ -61,6 +63,8 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create Subnet DAO for reference lookups: %w", err)
 	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.SubnetReference", subnetsDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.SubnetReference", subnetsDAO)
 	references.RegisterDAOLookup(validator, "osac.private.v1.SubnetLocalReference", subnetsDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.SubnetLocalReference", subnetsDAO)
 
@@ -83,6 +87,8 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create ExternalIP DAO for reference lookups: %w", err)
 	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.ExternalIPReference", externalIPsDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.ExternalIPReference", externalIPsDAO)
 	references.RegisterDAOLookup(validator, "osac.private.v1.ExternalIPLocalReference", externalIPsDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.ExternalIPLocalReference", externalIPsDAO)
 
@@ -115,6 +121,8 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create ComputeInstance DAO for reference lookups: %w", err)
 	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.ComputeInstanceReference", computeInstancesDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.ComputeInstanceReference", computeInstancesDAO)
 	references.RegisterDAOLookup(validator, "osac.private.v1.ComputeInstanceLocalReference", computeInstancesDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.ComputeInstanceLocalReference", computeInstancesDAO)
 
@@ -194,6 +202,8 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create Cluster DAO for reference lookups: %w", err)
 	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.ClusterReference", clustersDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.ClusterReference", clustersDAO)
 	references.RegisterDAOLookup(validator, "osac.private.v1.ClusterLocalReference", clustersDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.ClusterLocalReference", clustersDAO)
 
@@ -238,6 +248,8 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create BareMetalInstance DAO for reference lookups: %w", err)
 	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.BareMetalInstanceReference", bareMetalInstancesDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.BareMetalInstanceReference", bareMetalInstancesDAO)
 	references.RegisterDAOLookup(validator, "osac.private.v1.BareMetalInstanceLocalReference", bareMetalInstancesDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.BareMetalInstanceLocalReference", bareMetalInstancesDAO)
 
@@ -331,6 +343,20 @@ func registerReferenceLookups(
 		"osac.public.v1.SecretLocalReference",
 		references.NewScopedDAOLookupFunc(secretsDAO),
 	)
+
+	// Notification subscription references on delivery objects.
+	notificationSubscriptionsDAO, err := dao.NewGenericDAO[*privatev1.NotificationSubscription]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create NotificationSubscription DAO for reference lookups: %w", err)
+	}
+	references.RegisterDAOLookup(validator,
+		"osac.private.v1.NotificationSubscriptionLocalReference", notificationSubscriptionsDAO)
+	references.RegisterDAOLookup(validator,
+		"osac.public.v1.NotificationSubscriptionLocalReference", notificationSubscriptionsDAO)
 
 	return nil
 }

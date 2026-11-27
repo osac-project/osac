@@ -65,7 +65,12 @@ spec:
             [[ -n "${JOB_ID}" ]] || { echo "ERROR: Failed to launch publish-templates job"; exit 1; }
             echo "Job ${JOB_ID} launched, polling for completion..."
 
-            for i in $(seq 1 60); do
+            POLL_TIMEOUT={{ .Values.aap.hooks.publishPollTimeout }}
+            POLL_INTERVAL=10
+            DEADLINE=$(( SECONDS + POLL_TIMEOUT ))
+            i=0
+            while (( SECONDS < DEADLINE )); do
+              i=$(( i + 1 ))
               HTTP_CODE=$(curl -s{{ if .Values.aap.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} -o /tmp/poll-response.json -w '%{http_code}' \
                 --connect-timeout 5 --max-time 15 \
                 -H "Authorization: Bearer ${AAP_TOKEN}" \
@@ -73,7 +78,7 @@ spec:
               if [[ "${HTTP_CODE}" != "200" ]]; then
                 echo "  Poll ${i}: HTTP ${HTTP_CODE}, retrying..."
                 cat /tmp/poll-response.json
-                sleep 10
+                sleep "${POLL_INTERVAL}"
                 continue
               fi
               STATUS=$(python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" < /tmp/poll-response.json)
@@ -92,9 +97,9 @@ spec:
                   exit 1
                   ;;
               esac
-              sleep 10
+              sleep "${POLL_INTERVAL}"
             done
-            echo "ERROR: Timed out waiting for publish job ${JOB_ID} after 600s"
+            echo "ERROR: Timed out waiting for publish job ${JOB_ID} after ${POLL_TIMEOUT}s"
             exit 1
         env:
         - name: HOME

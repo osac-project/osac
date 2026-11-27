@@ -1449,6 +1449,19 @@
           },
           "additionalProperties": false
         },
+        "hooks": {
+          "type": "object",
+          "description": "Timeouts for the post-install hook Jobs",
+          "properties": {
+            "publishPollTimeout": {
+              "type": "integer",
+              "description": "Seconds the publish-templates hook polls the AAP job before failing. Raising this above the hook Job's activeDeadlineSeconds (1300) has no effect, because Kubernetes stops the pod first.",
+              "default": 600,
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
         "configAsCode": {
           "type": "object",
           "properties": {

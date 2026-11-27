@@ -358,6 +358,11 @@ aap:
       hostname: ""
     controller:
       hostname: ""
+  hooks:
+    # Seconds the publish-templates post-install hook polls AAP before failing.
+    # Values above the hook Job's activeDeadlineSeconds (1300) never take
+    # effect: Kubernetes stops the pod first.
+    publishPollTimeout: 600
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"

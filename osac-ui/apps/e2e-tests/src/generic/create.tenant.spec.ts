@@ -15,12 +15,13 @@ import {
   expectTenantToBeSynced,
   expectTenantToExist,
   getTenantFromBrowser,
+  loginWithStagedTenantPassword,
   openCreateTenantPage,
   readTenantCredentials,
   saveTenantCredentials,
   submitTenantAndReadIdentity,
   tenantCredentialsFilePath,
-  updateTenantCredentialsPassword,
+  tenantReplacementPassword,
 } from '../../../../libs/test-utils/src/tenants.page';
 import { writeTenantRunState } from '../shared/run_state';
 import { catalogTestRunId, tenantNameOrSkip, tenantPassword } from '../shared/test_data';
@@ -121,26 +122,25 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
     },
   );
 
-  const replacementPassword = tenantPassword?.trim() || configuredTenantName;
+  const replacementPassword = tenantReplacementPassword(tenantPassword);
   await testStep('tenant-create', 'Log in with the generated tenant credentials', async () => {
     await logout(page);
     logProgress(
       'tenant-create',
       tenantPassword?.trim()
         ? 'Using the configured replacement password for the tenant login.'
-        : `Using tenant "${configuredTenantName}" as the replacement password.`,
+        : 'Using a generated replacement password for the tenant login.',
     );
-    const passwordUpdated = await openAndLogin(
-      page,
-      '/',
-      tenantCredentials.username,
-      tenantCredentials.password,
-      'tenant_type',
-      replacementPassword,
+    await loginWithStagedTenantPassword(credentialsFile, replacementPassword, () =>
+      openAndLogin(
+        page,
+        '/',
+        tenantCredentials.username,
+        tenantCredentials.password,
+        'tenant_type',
+        replacementPassword,
+      ),
     );
-    if (passwordUpdated) {
-      await updateTenantCredentialsPassword(credentialsFile, replacementPassword);
-    }
   });
 
   const tenantAdminCredentials = await testStep(

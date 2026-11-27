@@ -1,5 +1,6 @@
 import { type APIResponse, type Locator, type Page, type Response, expect } from '@playwright/test';
-import { mkdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -37,7 +38,10 @@ const safeTenantName = (tenantName: string): string =>
   tenantName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'tenant';
 
 const tenantCredentialsDirectoryPath = (tenantName: string): string =>
-  join(tmpdir(), `osac-${safeTenantName(tenantName)}-break-glass`);
+  join(
+    process.env.OSAC_E2E_CREDENTIALS_DIR || tmpdir(),
+    `osac-${safeTenantName(tenantName)}-break-glass`,
+  );
 
 /** Return the temporary credential-file path for a tenant. */
 export const tenantCredentialsFilePath = (tenantName: string): string =>
@@ -55,22 +59,13 @@ const credentialFromFile = (contents: string, label: string): string => {
   return value;
 };
 
-// Filesystem errors include the credentials file path, which contains the
-// tenant name (possibly also the replacement password), and testStep logs
-// error messages verbatim. Rethrow them without the path.
+// Filesystem errors can include credential file paths; testStep logs errors
+// verbatim. Rethrow them without the path.
 const readCredentialsFile = async (credentialsFile: string): Promise<string> => {
   try {
     return await readFile(credentialsFile, 'utf8');
   } catch {
     throw new Error('Could not read the tenant credentials file.');
-  }
-};
-
-const writeCredentialsFile = async (credentialsFile: string, contents: string): Promise<void> => {
-  try {
-    await writeFile(credentialsFile, contents, { encoding: 'utf8', mode: 0o600 });
-  } catch {
-    throw new Error('Could not write the tenant credentials file.');
   }
 };
 
@@ -86,35 +81,51 @@ export const readTenantCredentials = async (
   };
 };
 
-/** Replace a temporary tenant password after the first successful login. */
-export const updateTenantCredentialsPassword = async (
+/** Use a configured password or generate an unpredictable replacement. */
+export const tenantReplacementPassword = (password?: string): string =>
+  password?.trim() || `Aa1!${randomBytes(24).toString('base64url')}`;
+
+/** Stage the replacement before login, retaining it if submission or promotion fails. */
+export const loginWithStagedTenantPassword = async (
   credentialsFile: string,
-  password?: string,
+  password: string,
+  login: () => Promise<boolean>,
 ): Promise<void> => {
-  logProgress('tenant-credentials', 'Updating the generated tenant credentials.');
   const contents = await readCredentialsFile(credentialsFile);
-  const tenantName = credentialFromFile(contents, 'Tenant');
-  const replacementPassword = password?.trim() || tenantName;
-  logProgress(
-    'tenant-credentials',
-    password?.trim()
-      ? 'Using the configured replacement password.'
-      : 'Using the tenant name as the replacement password.',
-  );
-  const updatedContents = contents.replace(
-    /^Password: .*$/m,
-    () => `Password: ${replacementPassword}`,
-  );
-  if (updatedContents === contents) {
+  if (!password.trim()) {
+    throw new Error('Tenant replacement password is empty.');
+  }
+  if (/[\r\n\u2028\u2029]/.test(password)) {
+    throw new Error('Tenant replacement password must be a single line.');
+  }
+  if (!/^Password: .*$/m.test(contents)) {
     throw new Error('Tenant credentials file is missing Password.');
   }
-  await writeCredentialsFile(credentialsFile, updatedContents);
+  const updatedContents = contents.replace(/^Password: .*$/m, () => `Password: ${password}`);
+  const stagedFile = `${credentialsFile}.pending`;
+  try {
+    await writeFile(stagedFile, updatedContents, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  } catch {
+    throw new Error('Could not stage the tenant replacement credentials.');
+  }
+
+  const passwordUpdated = await login();
+  try {
+    if (passwordUpdated) {
+      await rename(stagedFile, credentialsFile);
+    } else {
+      await rm(stagedFile);
+    }
+  } catch {
+    throw new Error('Could not finish updating the tenant credentials.');
+  }
 };
 
 /** Remove the saved credentials for a tenant, if present. */
 export const removeTenantCredentials = async (tenantName: string): Promise<void> => {
   logProgress('tenant-credentials', `Removing credentials for tenant "${tenantName}".`);
   await rm(tenantCredentialsFilePath(tenantName), { force: true });
+  await rm(`${tenantCredentialsFilePath(tenantName)}.pending`, { force: true });
   try {
     await rmdir(tenantCredentialsDirectoryPath(tenantName));
   } catch (error) {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AUTH_FILE } from './src/auth-file';
+import '../../libs/test-utils/src/general/suppress_sensitive_snapshots';
 import {
   readVmaasFullFlowRunState,
   writeVmaasFullFlowRunState,

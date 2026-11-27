@@ -18,7 +18,6 @@ from tests.e2e.core.helpers import (
     unique_name,
     wait_for_cr,
     wait_for_deletion,
-    wait_for_grpc_removal,
     wait_for_new_vmi,
     wait_for_provision,
     wait_for_restart,
@@ -444,6 +443,28 @@ def test_compute_instance_happy_path(
                 wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
 
 
+def _wait_for_instance_record_removal(*, grpc: GRPCClient, ci_uuid: str) -> None:
+    def is_removed() -> bool:
+        try:
+            grpc.get_compute_instance(ci_id=ci_uuid)
+        except subprocess.CalledProcessError as exc:
+            output = f"{exc.stderr or ''}\n{exc.stdout or ''}"
+            if re.search(r"(?m)^\s*Code:\s*NotFound\s*$", output):
+                return True
+            raise
+        return False
+
+    poll_until(
+        fn=is_removed,
+        until=lambda removed: removed,
+        retries=30,
+        delay=2,
+        description=f"{ci_uuid} removed from Fulfillment",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_uuid,
+    )
+
+
 def test_compute_instance_deletion_protection(
     cli: OsacCLI,
     private_cli: OsacCLI,
@@ -464,7 +485,7 @@ def test_compute_instance_deletion_protection(
             network_attachments=[default_network_attachment],
             instance_type=active_instance_type,
         )
-        assert ci_uuid in grpc.list_compute_instance_ids(), f"ComputeInstance {ci_uuid} not found in list after create"
+        assert grpc.get_compute_instance(ci_id=ci_uuid)["object"]["id"] == ci_uuid
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
 
         output, rc = run_unchecked(
@@ -481,7 +502,7 @@ def test_compute_instance_deletion_protection(
             if ci_name is not None:
                 wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
             # The instance type stays in use until Fulfillment finishes deleting the instance record.
-            wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid)
+            _wait_for_instance_record_removal(grpc=grpc, ci_uuid=ci_uuid)
 
 
 def test_compute_instance_deprecated_warning(

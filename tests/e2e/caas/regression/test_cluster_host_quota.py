@@ -166,13 +166,14 @@ def test_cluster_hosts_count_once_at_a_full_tenant(
 
         # A second cluster of the same size is refused upfront: the check
         # runs in the request's transaction, so nothing is stored.
+        # The server resolves the template name after assigning the cluster's tenant.
         output, return_code = grpc.call_unchecked(
             service=f"{PUBLIC_API}.Clusters/Create",
             data={
                 "object": {
                     "metadata": {"name": refused_name},
                     "spec": {
-                        "template": {"name": cluster_template},
+                        "template": {"name": cluster_template, "tenant": "shared"},
                         "version": {"name": caas_disk_image_version},
                         "node_sets": {
                             NODE_SET: {"size": NODE_SET_SIZE, "baremetal_instance_type": {"name": WORKER_INSTANCE_TYPE}}

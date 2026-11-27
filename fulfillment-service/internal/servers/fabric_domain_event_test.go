@@ -27,13 +27,14 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// These boundary checks need neither a database nor Kafka: committed outbox rows
-// must map to a typed private event before the reconciler can receive them.
+// TestFabricDomainEventDispatch checks typed outbox event conversion and public privacy boundaries
+// without a database or Kafka broker.
 func TestFabricDomainEventDispatch(t *testing.T) {
 	g := NewWithT(t)
 	publicStatusFields := (&publicv1.FabricDomainStatus{}).ProtoReflect().Descriptor().Fields()
 	g.Expect(publicStatusFields.ByName("backend_id")).To(BeNil(), "Netris identifiers are private implementation details")
 	g.Expect(publicStatusFields.ByName("vpc_id")).To(BeNil(), "Netris identifiers are private implementation details")
+	g.Expect(publicStatusFields.ByName("hub")).To(BeNil(), "hub placement is private")
 	privateStatusFields := (&privatev1.FabricDomainStatus{}).ProtoReflect().Descriptor().Fields()
 	g.Expect(privateStatusFields.ByName("backend_id")).NotTo(BeNil())
 	builder := NewEventPublisher()
@@ -45,7 +46,10 @@ func TestFabricDomainEventDispatch(t *testing.T) {
 	g.Expect(field).NotTo(BeNil(), "FabricDomain changes must be publishable from the transactional outbox")
 	g.Expect(string(field.Name())).To(Equal("fabric_domain"))
 	g.Expect(int(field.Number())).To(Equal(38))
-	g.Expect((&publicv1.Event{}).ProtoReflect().Descriptor().Fields().ByName("fabric_domain")).To(BeNil())
+	publicField := (&publicv1.Event{}).ProtoReflect().Descriptor().Fields().ByName("fabric_domain")
+	g.Expect(publicField).NotTo(BeNil(), "public FabricDomain events must retain their payload")
+	g.Expect(publicField.Number()).To(Equal(field.Number()))
+	g.Expect(string(publicField.Message().FullName())).To(Equal("osac.public.v1.FabricDomain"))
 	publisher := &EventPublisher{payloadOneof: oneof, payloadFields: fields}
 	timestamp := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 

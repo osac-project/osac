@@ -18,6 +18,56 @@ controller_projects: # noqa: var-naming[no-role-prefix]
     update_project: true
     wait: true
 
+# The dispatcher registers credential types and credentials before job templates.
+aap_fulfillment_reader_enabled: "{{ aap_fulfillment_reader_issuer_url | default('') | length > 0 }}"
+aap_fulfillment_reader_credential_name: "{{ aap_prefix }}-fulfillment-secret-reader"
+controller_configuration_credentials_secure_logging: true # noqa: var-naming[no-role-prefix]
+controller_credential_types: >- # noqa: var-naming[no-role-prefix]
+  {{ [aap_fulfillment_reader_credential_type] if aap_fulfillment_reader_enabled | bool else [] }}
+controller_credentials: >- # noqa: var-naming[no-role-prefix]
+  {{ [aap_fulfillment_reader_credential] if aap_fulfillment_reader_enabled | bool else [] }}
+aap_fulfillment_reader_credential_type:
+  name: "{{ aap_fulfillment_reader_credential_name }}"
+  kind: cloud
+  inputs:
+    fields:
+      - id: client_id
+        label: Keycloak client ID
+        type: string
+      - id: client_secret
+        label: Keycloak client secret
+        type: string
+        secret: true
+      - id: issuer_url
+        label: Keycloak issuer URL
+        type: string
+      - id: api_url
+        label: Fulfillment internal API URL
+        type: string
+    required: [client_id, client_secret, issuer_url, api_url]
+  # The controller credential types role restores the split opening braces.
+  injectors: >-
+    {
+      "file": {"template": "{  { client_secret }}"},
+      "env": {
+        "OSAC_FULFILLMENT_CLIENT_SECRET_FILE": "{  { tower.filename }}",
+        "OSAC_FULFILLMENT_CLIENT_ID": "{  { client_id }}",
+        "OSAC_FULFILLMENT_ISSUER_URL": "{  { issuer_url }}",
+        "OSAC_FULFILLMENT_INTERNAL_API_URL": "{  { api_url }}",
+        "OSAC_FULFILLMENT_CA_FILE": "/etc/ca-bundle/bundle.pem"
+      }
+    }
+aap_fulfillment_reader_credential:
+  name: "{{ aap_fulfillment_reader_credential_name }}"
+  organization: "{{ aap_organization_name }}"
+  credential_type: "{{ aap_fulfillment_reader_credential_name }}"
+  update_secrets: true
+  inputs:
+    client_id: osac-aap-secret-reader
+    client_secret: "{{ lookup('ansible.builtin.env', 'OSAC_AAP_SECRET_READER_CLIENT_SECRET') }}"
+    issuer_url: "{{ aap_fulfillment_reader_issuer_url }}"
+    api_url: "{{ aap_fulfillment_reader_api_url }}"
+
 # Create cluster-fulfillment templates and a config-as-code template
 controller_templates: # noqa: var-naming[no-role-prefix]
   - name: "{{ aap_prefix }}-create-hosted-cluster"
@@ -591,6 +641,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
       - "{{ aap_prefix }}-storage-operations-ig"
     allow_simultaneous: false
     ask_variables_on_launch: true
+    ask_tags_on_launch: false
     verbosity: 0
   - name: "{{ aap_prefix }}-delete-tenant-cluster-storage"
     project: "{{ aap_prefix }}"

@@ -87,7 +87,16 @@ spec:
         envFrom:
         - secretRef:
             name: {{ .Values.configAsCode.secret }}
+        - configMapRef:
+            name: aap-fulfillment-secret-reader
+            optional: true
         env:
+        - name: OSAC_AAP_SECRET_READER_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: aap-fulfillment-secret-reader
+              key: client-secret
+              optional: true
         - name: AAP_PASSWORD
           valueFrom:
             secretKeyRef:

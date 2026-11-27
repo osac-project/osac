@@ -96,7 +96,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		tenant, _ := createCatalogItemTenantAdminFixture(ctx)
 		conn := createCatalogItemMemberFixture(ctx, tenant)
-		network := createCatalogItemNetworkFixture(ctx, tenant, "")
+		network := createNetworkFixture(ctx, tenant, "")
 		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
 			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},

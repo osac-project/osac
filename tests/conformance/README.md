@@ -23,26 +23,24 @@ says whether a failure can fail a check.
 | `conformance_bmaas` | selected by the `bmaas` selector (`baremetal` profile) |
 | `conformance_caas` | selected by the `caas` selector (`cluster` profile) |
 | `conformance_netris` | selected by the `netris` selector (`netris` profile) |
-| `conformance_blocking` | a failure fails the blocking check; this is the default |
-| `conformance_informing` | a failure is reported in `tests[]` but never fails a check |
+| `conformance_non_blocking` | a failure is reported in `tests[]` but never fails a check; tests are blocking by default |
 
-An informing settings check:
+A non-blocking settings check:
 
 ```python
 import pytest
 
 @pytest.mark.conformance_netris
-@pytest.mark.conformance_informing
+@pytest.mark.conformance_non_blocking
 def test_netris_settings_are_present() -> None:
     ...
 ```
 
-A blocking test that counts toward both `generic` and `vm`:
+A blocking test that counts toward both `generic` and `vm` (no classification marker needed):
 
 ```python
 @pytest.mark.conformance_generic
 @pytest.mark.conformance_vmaas
-@pytest.mark.conformance_blocking
 def test_vm_lifecycle() -> None:
     ...
 ```
@@ -106,16 +104,10 @@ target:
   kubeconfig: /config/hub.kubeconfig         # target installation kubeconfig
   apiURL: https://fulfillment-internal-api-osac-e2e-ci.example
   tokenFile: /config/admin-token             # bearer token for apiURL
-  caFile: /config/api-ca.pem                 # CA that signed apiURL's certificate
-  # Optional: read job output from AAP when a profile fails.
-  # aap:
-  #   url: https://aap.example
-  #   tokenFile: /config/aap-token
-timeouts: {}                                 # optional duration overrides, e.g. {delete: 30m}
 ```
 
-`tokenFile` and `caFile` are paths inside the container, not values, so the
-credentials stay out of the configuration file.
+`tokenFile` is a path inside the container, not a value, so the credential
+stays out of the configuration file.
 
 ## Commands
 
@@ -154,16 +146,14 @@ target:
   kubeconfig: /config/hub.kubeconfig
   apiURL: https://fulfillment-internal-api-osac-e2e-ci.example
   tokenFile: /config/admin-token
-  caFile: /config/api-ca.pem
 ```
 
-The three target paths are container paths. Put the files they name under
+The two target paths are container paths. Put the files they name under
 `config/`:
 
 ```sh
 cp ~/.kube/config config/hub.kubeconfig
 kubectl create token <service-account> -n osac-e2e-ci --duration=12h > config/admin-token
-cp <ca-bundle>.pem config/api-ca.pem
 ```
 
 ### Step 3: Pull and run the image

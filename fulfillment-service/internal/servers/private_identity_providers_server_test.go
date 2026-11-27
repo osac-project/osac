@@ -1353,6 +1353,145 @@ var _ = Describe("Private identity providers server", func() {
 				Expect(status.Message()).To(ContainSubstring("spec.oidc.authorization_url must be an absolute URL"))
 			})
 
+			It("Accepts create with acr_values authorization query parameters", func() {
+				response, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc-query",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth?acr_values=mfa%20loa2",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetOidc().GetAuthorizationUrl()).To(
+					Equal("https://example.com/auth?acr_values=mfa%20loa2"))
+			})
+
+			It("Rejects query components on the issuer URL", func() {
+				err := validateOidcUrls(privatev1.OidcConfig_builder{
+					AuthorizationUrl: "https://example.com/auth?acr_values=mfa",
+					TokenUrl:         "https://example.com/token",
+					Issuer:           "https://example.com?tenant_hint=engineering",
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(
+					"spec.oidc.issuer must not contain a query component"))
+			})
+
+			It("Rejects fragments, including an empty fragment", func() {
+				for _, authorizationURL := range []string{
+					"https://example.com/auth#section",
+					"https://example.com/auth?acr_values=mfa#",
+				} {
+					err := validateOidcUrl(authorizationURL, "spec.oidc.authorization_url", true, true)
+					Expect(err).To(HaveOccurred(), authorizationURL)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must not contain a fragment"))
+				}
+			})
+
+			It("Rejects authorization query parameters other than acr_values", func() {
+				for _, parameter := range []string{
+					"client_id",
+					"redirect_uri",
+					"response_type",
+					"scope",
+					"state",
+					"login_hint",
+					"tenant_hint",
+					"ui_locales",
+					"%63lient_id",
+				} {
+					authorizationURL := "https://example.com/auth?" + parameter + "=custom"
+					err := validateOidcUrl(authorizationURL, "spec.oidc.authorization_url", true, true)
+					Expect(err).To(HaveOccurred(), parameter)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("is not allowed"))
+				}
+			})
+
+			It("Rejects malformed query encoding and repeated acr_values parameters", func() {
+				for _, authorizationURL := range []string{
+					"https://example.com/auth?acr_values=%ZZ",
+					"https://example.com/auth?acr_values=mfa&acr_values=loa2",
+				} {
+					err := validateOidcUrl(authorizationURL, "spec.oidc.authorization_url", true, true)
+					Expect(err).To(HaveOccurred(), authorizationURL)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				}
+			})
+
+			It("Validates OIDC URLs on updates without an update mask", func() {
+				createResp, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc-nil-mask",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth?acr_values=mfa",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				// A nil mask is a full-object replacement in the generic server, so the
+				// URLs it carries must be validated instead of skipping the mask walk.
+				updateWithoutMask := func(authorizationURL string) (*privatev1.IdentityProvidersUpdateResponse, error) {
+					return server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+						Object: privatev1.IdentityProvider_builder{
+							Id: createResp.GetObject().GetId(),
+							Metadata: privatev1.Metadata_builder{
+								Name:   "test-oidc-nil-mask",
+								Tenant: "my-tenant",
+							}.Build(),
+							Spec: privatev1.IdentityProviderSpec_builder{
+								Title:   "Test OIDC",
+								Enabled: true,
+								Oidc: privatev1.OidcConfig_builder{
+									AuthorizationUrl: authorizationURL,
+									TokenUrl:         "https://example.com/token",
+									ClientId:         "client-id",
+									Issuer:           "https://example.com",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build())
+				}
+
+				_, err = updateWithoutMask("https://example.com/auth?tenant_hint=engineering")
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("is not allowed"))
+
+				updateResp, err := updateWithoutMask("https://example.com/auth?acr_values=loa2")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.GetObject().GetSpec().GetOidc().GetAuthorizationUrl()).To(
+					Equal("https://example.com/auth?acr_values=loa2"))
+				// A full replacement may change the spec, so the phase resets to UNKNOWN
+				// like any other spec update and the provider is reconciled again.
+				Expect(updateResp.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN))
+			})
+
 			It("Accepts create with valid optional user_info_url", func() {
 				response, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
 					Object: privatev1.IdentityProvider_builder{
@@ -1495,6 +1634,24 @@ var _ = Describe("Private identity providers server", func() {
 				status := grpcstatus.Convert(err)
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("spec.oidc.authorization_url must use HTTPS"))
+
+				// A valid URL with query parameters is accepted by the same masked update path.
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: createResp.Object.Id,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth?acr_values=mfa",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.oidc.authorization_url"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.GetObject().GetSpec().GetOidc().GetAuthorizationUrl()).To(
+					Equal("https://example.com/auth?acr_values=mfa"))
 			})
 
 			It("Accepts valid single-URL update without requiring other fields", func() {

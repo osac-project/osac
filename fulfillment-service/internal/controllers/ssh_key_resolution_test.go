@@ -16,6 +16,7 @@ package controllers_test
 
 import (
 	"context"
+	"errors"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -28,23 +29,35 @@ import (
 )
 
 var _ = Describe("ResolveSSHKey", func() {
-	It("classifies a missing Secret as permanent", func() {
+	DescribeTable("classifies lookup failures by reason", func(code codes.Code, reason string, permanent bool) {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 
 		secretsClient := controllers.NewMockSecretsClient(ctrl)
 		secretsClient.EXPECT().
 			Get(gomock.Any(), gomock.Any()).
-			Return(nil, status.Error(codes.NotFound, "secret not found"))
+			Return(nil, status.Error(code, "lookup failed"))
 
-		_, resolutionErr := controllers.ResolveSSHKey(
+		_, err := controllers.ResolveSSHKey(
 			context.Background(),
 			secretsClient,
 			privatev1.SecretReference_builder{Id: "secret-id"}.Build(),
 		)
 
-		Expect(resolutionErr).To(HaveOccurred())
-		Expect(resolutionErr.Permanent).To(BeTrue())
-		Expect(resolutionErr.Reason).To(Equal("SecretNotFound"))
-	})
+		var resolutionErr *controllers.SSHKeyResolutionError
+		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
+		Expect(resolutionErr.Reason).To(Equal(reason))
+		Expect(resolutionErr.Permanent()).To(Equal(permanent))
+		// OSAC-7245: the resolver classifies only; callers decide the retry
+		// policy by wrapping the error with RequeueAfter.
+		Expect(controllers.IsRequeueable(err)).To(BeFalse())
+	},
+		Entry("not found", codes.NotFound, controllers.SSHKeyResolutionReasonSecretNotFound, true),
+		Entry("invalid", codes.InvalidArgument, controllers.SSHKeyResolutionReasonSecretInvalid, true),
+		Entry("unavailable", codes.Unavailable, controllers.SSHKeyResolutionReasonSecretUnavailable, false),
+		Entry("deadline exceeded", codes.DeadlineExceeded, controllers.SSHKeyResolutionReasonSecretUnavailable, false),
+		Entry("resource exhausted", codes.ResourceExhausted, controllers.SSHKeyResolutionReasonSecretUnavailable, false),
+		Entry("canceled", codes.Canceled, controllers.SSHKeyResolutionReasonInternalError, false),
+		Entry("internal", codes.Internal, controllers.SSHKeyResolutionReasonInternalError, false),
+	)
 })

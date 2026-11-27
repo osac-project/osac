@@ -10,3 +10,9 @@
     align-items: center;
     display: inline-flex;
 }
+
+.list-page-card__icon .pf-v6-icon-rh-standard {
+    color: var(--pf-t--global--icon--color--regular);
+    width: 1em;
+    height: 1em;
+}

@@ -964,6 +964,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			network := createNetworkFixture(ctx, usersGroup, "")
 			firstVersion := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			secondVersion := createCatalogItemClusterVersionFixture(ctx, "4.21.0")
+			// Ordinary updates must remain strictly newer than the stored version.
+			thirdVersion := createCatalogItemClusterVersionFixture(ctx, "4.21.1")
+			fourthVersion := createCatalogItemClusterVersionFixture(ctx, "4.21.2")
+			fifthVersion := createCatalogItemClusterVersionFixture(ctx, "4.21.3")
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			items := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
@@ -1037,10 +1041,13 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			_, e = createClusterFixture(ctx, tool.ExternalView().UserConn(), request)
 			expectCatalogItemStatusCode(e, codes.NotFound)
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
-				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: firstVersion}.Build()}.Build()}.Build(),
+				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: thirdVersion}.Build()}.Build()}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.version"),
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
+			liveAfterUnpublish, e := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: first.GetId()}.Build())
+			Expect(e).NotTo(HaveOccurred())
+			Expect(liveAfterUnpublish.GetObject().GetSpec().GetVersion().GetId()).To(Equal(thirdVersion))
 
 			By("updating through the public API after catalog deletion")
 			// The stored catalog reference is provenance; ordinary updates use the materialized inputs.
@@ -1051,7 +1058,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					Id: first.GetId(),
 					Spec: publicv1.ClusterSpec_builder{
 						CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
-						Version:     publicv1.ClusterVersionReference_builder{Id: secondVersion}.Build(),
+						Version:     publicv1.ClusterVersionReference_builder{Id: fourthVersion}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.catalog_item",
@@ -1060,7 +1067,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(e).NotTo(HaveOccurred())
 			updated, e := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: first.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
-			Expect(updated.GetObject().GetSpec().GetVersion().GetId()).To(Equal(secondVersion))
+			Expect(updated.GetObject().GetSpec().GetVersion().GetId()).To(Equal(fourthVersion))
 
 			internal := privatev1.NewClustersClient(tool.InternalView().AdminConn())
 			By("updating through the private API after catalog deletion")
@@ -1069,7 +1076,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					Id: first.GetId(),
 					Spec: privatev1.ClusterSpec_builder{
 						CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
-						Version:     privatev1.ClusterVersionReference_builder{Id: firstVersion}.Build(),
+						Version:     privatev1.ClusterVersionReference_builder{Id: fifthVersion}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.catalog_item",
@@ -1078,7 +1085,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(e).NotTo(HaveOccurred())
 			privateUpdated, e := internal.Get(ctx, privatev1.ClustersGetRequest_builder{Id: first.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
-			Expect(privateUpdated.GetObject().GetSpec().GetVersion().GetId()).To(Equal(firstVersion))
+			Expect(privateUpdated.GetObject().GetSpec().GetVersion().GetId()).To(Equal(fifthVersion))
 
 			By("rejecting provenance mutation through the public API")
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{

@@ -267,7 +267,15 @@ func sameCaller(source, target *jwt.Token) error {
 	}
 	sourceContext, sourceErr := auth.ExtractAuthContext(source)
 	targetContext, targetErr := auth.ExtractAuthContext(target)
-	if sourceErr != nil || targetErr != nil || !reflect.DeepEqual(sourceContext, targetContext) {
+	if sourceErr != nil || targetErr != nil {
+		return errors.New("OAuth token exchange changed the caller permissions")
+	}
+	// Each token's audience is validated separately. The exchange can change the
+	// OAuth client and audience while preserving the caller's permissions.
+	sourceContext.AuthorizedParty, targetContext.AuthorizedParty = "", ""
+	sourceContext.ClientID, targetContext.ClientID = "", ""
+	sourceContext.Audiences, targetContext.Audiences = nil, nil
+	if !reflect.DeepEqual(sourceContext, targetContext) {
 		return errors.New("OAuth token exchange changed the caller permissions")
 	}
 	targetExpiry, err := target.Claims.GetExpirationTime()

@@ -283,7 +283,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 
-	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.Cluster]().
 		SetLogger(b.logger).
 		SetService(privatev1.Clusters_ServiceDesc.ServiceName).
@@ -475,9 +474,6 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	if err = s.validateNoDuplicateConditions(request.GetObject()); err != nil {
 		return
 	}
-	if err = s.validateClusterStateForSpecUpdate(ctx, request); err != nil {
-		return
-	}
 	// Version validation canonicalizes selected references; keep the caller's request intact.
 	request = proto.Clone(request).(*privatev1.ClustersUpdateRequest)
 	resolvedTarget, err := s.validateClusterUpdateRequest(ctx, request)
@@ -489,6 +485,11 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	// Merge the stored audit fields before validating the completed candidate.
 	err = s.generic.updateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context,
 		current, candidate *privatev1.Cluster) error {
+		// The generic path holds the cluster's row lock here, so the state check and the
+		// candidate see the row the update writes:
+		if err := validateClusterStateForSpecUpdate(request.GetUpdateMask(), current); err != nil {
+			return err
+		}
 		return s.prepareUpdatedCluster(ctx, current, candidate, request, resolvedTarget)
 	}, true)
 	return
@@ -905,36 +906,17 @@ func (s *PrivateClustersServer) getExistingCluster(ctx context.Context,
 	return existingCluster, true, nil
 }
 
-// validateClusterStateForSpecUpdate rejects spec modifications when the cluster is in a
-// terminal or non-reconcilable state. The reconciler processes UNSPECIFIED (by transitioning
-// to PROGRESSING via setDefaults), PROGRESSING, and READY clusters — it returns nil for
-// every other state — so spec changes outside those states would be silently ignored.
-//
-// This uses SetLock(true) (SELECT ... FOR UPDATE) so the row lock is held for the
-// remainder of the transaction, preventing a concurrent status transition from
-// bypassing the check before GenericServer.Update writes the spec changes.
-func (s *PrivateClustersServer) validateClusterStateForSpecUpdate(ctx context.Context,
-	request *privatev1.ClustersUpdateRequest) error {
-	if !updateIncludesField(request.GetUpdateMask(), "spec") {
+// validateClusterStateForSpecUpdate rejects a spec change while the cluster is in a terminal or
+// non-reconcilable state. The reconciler processes UNSPECIFIED (by transitioning to PROGRESSING
+// via setDefaults), PROGRESSING, and READY clusters — it returns nil for every other state — so a
+// spec change outside those states would be silently ignored. The caller passes the stored
+// cluster, read under the update's row lock, so a concurrent status change can't slip under the
+// check before the update writes the spec.
+func validateClusterStateForSpecUpdate(mask *fieldmaskpb.FieldMask, current *privatev1.Cluster) error {
+	if !updateIncludesField(mask, "spec") {
 		return nil
 	}
-	cluster := request.GetObject()
-	if cluster == nil {
-		return nil
-	}
-	id := cluster.GetId()
-	if id == "" {
-		return nil
-	}
-	getResponse, err := s.generic.dao.Get().
-		SetId(id).
-		SetLock(true).
-		Do(ctx)
-	if err != nil {
-		return err
-	}
-	existingCluster := getResponse.GetObject()
-	state := existingCluster.GetStatus().GetState()
+	state := current.GetStatus().GetState()
 	if state != privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED &&
 		state != privatev1.ClusterState_CLUSTER_STATE_PROGRESSING &&
 		state != privatev1.ClusterState_CLUSTER_STATE_READY {
@@ -1561,7 +1543,10 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 			Metadata: privatev1.Metadata_builder{
 				Name:   fmt.Sprintf("auto-eip-%s-%s", clusterID, endpoint.name),
 				Tenant: tenant,
-				Labels: eipLabels,
+				// The address counts in the cluster's project, so a project's external-IP
+				// limit binds it:
+				Project: cluster.GetMetadata().GetProject(),
+				Labels:  eipLabels,
 				Annotations: map[string]string{
 					tenantAnnotation:         tenant,
 					ownerReferenceAnnotation: clusterID,

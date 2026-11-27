@@ -5,7 +5,8 @@
 
 In the OSAC-managed model, OSAC provisions and manages the storage resources
 that tenants consume. The Cloud Provider Admin registers the storage system
-and its credentials; OSAC does the rest.
+in the storage catalog. A VAST backend can be registered with its endpoint
+alone. OSAC checks the protocol when a tier selects that backend.
 
 ## What OSAC manages
 
@@ -24,9 +25,9 @@ operator dispatches the backend and tier definitions to provider roles.
 
 ## Requirements
 
-- The StorageBackend **must** include a management `endpoint` and
-  `credentials`. See [concepts/storagebackend.md](../concepts/storagebackend.md)
-  for the validation rules.
+- Every OSAC-managed backend requires a management `endpoint`. For VAST
+  CLaaS NFS, the endpoint alone is sufficient for catalog registration.
+  See the [StorageBackend registration rules](../concepts/storagebackend.md).
 - The management endpoint must be reachable from the management cluster's
   automation infrastructure.
 - The credentials must have sufficient rights on the storage system to
@@ -38,8 +39,8 @@ operator dispatches the backend and tier definitions to provider roles.
 
 ## Credentials
 
-Credentials are required and actively used: OSAC resolves them when
-provisioning tenant storage. Rotation happens by updating the backend or its
+When provisioning uses a backend-wide login, OSAC resolves those credentials
+for tenant storage. Rotation happens by updating the backend or its
 referenced Secret; the next reconciliation uses the new value. See
 [concepts/storagebackend.md](../concepts/storagebackend.md#rotation).
 

@@ -26,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/add_on_operator_type.proto.
  */
 export const file_osac_public_v1_add_on_operator_type: GenFile = /*@__PURE__*/
-  fileDesc("Cilvc2FjL3B1YmxpYy92MS9hZGRfb25fb3BlcmF0b3JfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEi0AIKDUFkZE9uT3BlcmF0b3ISCgoCaWQYASABKAkSKgoIbWV0YWRhdGEYAiABKAsyGC5vc2FjLnB1YmxpYy52MS5NZXRhZGF0YRIWCgV0aXRsZRgDIAEoCUIHukgEcgIQARITCgtkZXNjcmlwdGlvbhgEIAEoCRIXCg9taW5fb2NwX3ZlcnNpb24YBSABKAkSFwoPbWF4X29jcF92ZXJzaW9uGAYgASgJEj8KCmV4Y2x1c2lvbnMYByADKAsyKy5vc2FjLnB1YmxpYy52MS5BZGRPbk9wZXJhdG9yTG9jYWxSZWZlcmVuY2USQQoMZGVwZW5kZW5jaWVzGAggAygLMisub3NhYy5wdWJsaWMudjEuQWRkT25PcGVyYXRvckxvY2FsUmVmZXJlbmNlEhYKCXB1Ymxpc2hlZBgJIAEoCEgAiAEBQgwKCl9wdWJsaXNoZWQiUwoWQWRkT25PcGVyYXRvclJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIIjcKG0FkZE9uT3BlcmF0b3JMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJYgZwcm90bzM", [file_buf_validate_validate, file_osac_public_v1_metadata_type]);
+  fileDesc("Cilvc2FjL3B1YmxpYy92MS9hZGRfb25fb3BlcmF0b3JfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEi0AIKDUFkZE9uT3BlcmF0b3ISCgoCaWQYASABKAkSKgoIbWV0YWRhdGEYAiABKAsyGC5vc2FjLnB1YmxpYy52MS5NZXRhZGF0YRIWCgV0aXRsZRgDIAEoCUIHukgEcgIQARITCgtkZXNjcmlwdGlvbhgEIAEoCRIXCg9taW5fb2NwX3ZlcnNpb24YBSABKAkSFwoPbWF4X29jcF92ZXJzaW9uGAYgASgJEj8KCmV4Y2x1c2lvbnMYByADKAsyKy5vc2FjLnB1YmxpYy52MS5BZGRPbk9wZXJhdG9yTG9jYWxSZWZlcmVuY2USQQoMZGVwZW5kZW5jaWVzGAggAygLMisub3NhYy5wdWJsaWMudjEuQWRkT25PcGVyYXRvckxvY2FsUmVmZXJlbmNlEhYKCXB1Ymxpc2hlZBgJIAEoCEgAiAEBQgwKCl9wdWJsaXNoZWQiUwoWQWRkT25PcGVyYXRvclJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGdGVuYW50GAQgASgJIjcKG0FkZE9uT3BlcmF0b3JMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJYgZwcm90bzM", [file_buf_validate_validate, file_osac_public_v1_metadata_type]);
 
 /**
  * An add-on operator represents a platform-supported OLM operator that can be installed on CaaS clusters. The resource
@@ -133,9 +133,11 @@ export type AddOnOperatorReference = Message<"osac.public.v1.AddOnOperatorRefere
   project: string;
 
   /**
-   * @generated from field: bool shared = 4;
+   * Tenant where the referenced object lives. If omitted, the owner tenant is used.
+   *
+   * @generated from field: string tenant = 4;
    */
-  shared: boolean;
+  tenant: string;
 };
 
 /**

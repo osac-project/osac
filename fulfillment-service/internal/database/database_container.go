@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"math/rand/v2"
@@ -517,33 +518,95 @@ func (c *Container) Stop(ctx context.Context) error {
 		}
 	}
 
-	// Stop the database server and wait for the foreground run command to exit so that all remaining output is
-	// flushed through the writers.
-	if c.runDone != nil {
-		shouldKill := true
-		select {
-		case <-c.runDone:
-			shouldKill = c.runErr != nil
-		default:
+	return c.stopRun(ctx)
+}
+
+func (c *Container) stopRun(ctx context.Context) error {
+	if c.runDone == nil {
+		return nil
+	}
+	select {
+	case <-c.runDone:
+		if c.runErr == nil {
+			return nil
 		}
-		if shouldKill {
-			killCmd := exec.CommandContext(ctx, c.tool, "kill", c.id)
-			killCmd.Stdout = c.outWriter
-			killCmd.Stderr = c.errWriter
-			killCmd.WaitDelay = time.Second
-			err := killCmd.Run()
-			if err != nil {
-				c.logger.ErrorContext(ctx, "Failed to kill database container", slog.Any("error", err))
-			}
-		}
-		select {
-		case <-c.runDone:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	default:
 	}
 
-	return nil
+	// Startup may already have timed out. Give cleanup its own budget, including Podman's default stop grace for rm.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 16*time.Second)
+	defer cancel()
+	killCtx, cancelKill := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelKill()
+	killCmd := exec.CommandContext(killCtx, c.tool, "kill", c.id)
+	killCmd.Stdout = c.outWriter
+	killCmd.Stderr = c.errWriter
+	killCmd.WaitDelay = time.Second
+	killErr := killCmd.Run()
+	if killErr != nil {
+		c.logger.DebugContext(ctx, "Failed to kill database container by name", slog.Any("error", killErr))
+	}
+
+	var reapErr error
+	select {
+	case <-c.runDone:
+		// ErrWaitDelay means the kill command succeeded but a descendant held an output pipe open.
+		if killErr == nil || errors.Is(killErr, exec.ErrWaitDelay) {
+			return nil
+		}
+	case <-killCtx.Done():
+		// A named kill can miss while run is still creating the container. Terminate the launcher itself before
+		// removing by name again. Wait for its existing Wait goroutine to reap it and drain its output.
+		if err := c.runCmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			reapErr = fmt.Errorf("failed to kill database container launcher: %w", err)
+		}
+		reapCtx, cancelReap := context.WithTimeout(ctx, 2*time.Second)
+		select {
+		case <-c.runDone:
+		case <-reapCtx.Done():
+			reapErr = errors.Join(reapErr, fmt.Errorf("waiting for database container launcher: %w", reapCtx.Err()))
+		}
+		cancelReap()
+	}
+
+	return errors.Join(reapErr, c.removeRunContainer(ctx))
+}
+
+func (c *Container) removeRunContainer(ctx context.Context) error {
+	// A daemon can finish an in-flight create after the local launcher has exited. Recheck a missing name briefly.
+	retryUntil := time.Now().Add(2 * time.Second)
+	for {
+		// Force removal also handles containers that never started. Remove their anonymous volumes as run --rm would.
+		var stdout, stderr bytes.Buffer
+		cmd := exec.CommandContext(ctx, c.tool, "rm", "-f", "-v", c.id)
+		cmd.Stdout = io.MultiWriter(c.outWriter, &stdout)
+		cmd.Stderr = io.MultiWriter(c.errWriter, &stderr)
+		cmd.WaitDelay = time.Second
+		err := cmd.Run()
+		if err == nil && stdout.Len() != 0 {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// Podman and recent Docker print a removed ID or name, and accept a missing name with no output.
+		// Older Docker reports it on stderr. Auto-removal can also be in progress concurrently.
+		diagnostic := stderr.String()
+		missing := err == nil || strings.Contains(diagnostic, "No such container: "+c.id)
+		removing := strings.Contains(diagnostic, "removal of container "+c.id+" is already in progress")
+		if (!missing && !removing) || !time.Now().Before(retryUntil) {
+			if missing {
+				return nil
+			}
+			return fmt.Errorf("failed to remove database container: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // InstanceBuilder contains the data and logic needed to create a database instance. Don't create instances of this

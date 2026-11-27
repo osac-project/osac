@@ -24,6 +24,7 @@ import (
 	"log/slog"
 
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -598,10 +599,10 @@ func (t *task) delete(ctx context.Context) error {
 		}
 	}
 
-	// If we're removing the finalizer, clean up the IDP assignment first
+	// If we're removing the finalizer, clean up the IDP assignment first.
 	if len(updated) < len(currentFinalizers) {
 		if err := t.cleanupProjectMembership(ctx); err != nil {
-			return err
+			return controllers.RequeueAfter(err, time.Second)
 		}
 		t.signalProject(ctx)
 	}

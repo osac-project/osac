@@ -19,18 +19,13 @@ from tests.conformance.testtree import PytestTestTree
 _REDACTION_MARKER = "redaction-marker"
 
 
-def _config(path: Path, token: Path, ca: Path, hub: Path) -> Path:
+def _config(path: Path, token: Path, hub: Path) -> Path:
     path.write_text(
         yaml.safe_dump(
             {
                 "osacRelease": "1.4.0",
                 "profiles": ["vm"],
-                "target": {
-                    "kubeconfig": str(hub),
-                    "apiURL": "http://target.example.test",
-                    "tokenFile": str(token),
-                    "caFile": str(ca),
-                },
+                "target": {"kubeconfig": str(hub), "apiURL": "http://target.example.test", "tokenFile": str(token)},
             },
             sort_keys=False,
         )
@@ -59,12 +54,10 @@ def _tree(path: Path) -> Path:
         "import pytest\n"
         "@pytest.mark.conformance_generic\n"
         "@pytest.mark.conformance_vmaas\n"
-        "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
         f"    print('{_REDACTION_MARKER}')\n"
         "@pytest.mark.conformance_generic\n"
         "@pytest.mark.conformance_vmaas\n"
-        "@pytest.mark.conformance_blocking\n"
         "def test_also_passes():\n"
         f"    print('{_REDACTION_MARKER}')\n"
     )
@@ -74,11 +67,9 @@ def _tree(path: Path) -> Path:
 def _runtime(tmp_path: Path, results: Path, tree_dir: Path) -> Runtime:
     token = tmp_path / "token"
     token.write_text("admin")
-    ca = tmp_path / "ca.pem"
-    ca.write_text("ca")
     hub = tmp_path / "hub"
     hub.write_text("hub")
-    config = load_config(_config(tmp_path / "conformance.yaml", token, ca, hub))
+    config = load_config(_config(tmp_path / "conformance.yaml", token, hub))
     redactor = Redactor(secrets=(_REDACTION_MARKER,))
     return Runtime(
         config=config,
@@ -146,8 +137,6 @@ def test_empty_plan_is_a_config_error(tmp_path: Path, capsys: pytest.CaptureFixt
 def test_unknown_profile_is_a_config_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     token = tmp_path / "token"
     token.write_text("admin")
-    ca = tmp_path / "ca.pem"
-    ca.write_text("ca")
     hub = tmp_path / "hub"
     hub.write_text("hub")
     config_path = tmp_path / "conformance.yaml"
@@ -156,12 +145,7 @@ def test_unknown_profile_is_a_config_error(tmp_path: Path, capsys: pytest.Captur
             {
                 "osacRelease": "1.4.0",
                 "profiles": ["frobnicate"],
-                "target": {
-                    "kubeconfig": str(hub),
-                    "apiURL": "http://target.example.test",
-                    "tokenFile": str(token),
-                    "caFile": str(ca),
-                },
+                "target": {"kubeconfig": str(hub), "apiURL": "http://target.example.test", "tokenFile": str(token)},
             },
             sort_keys=False,
         )
@@ -200,11 +184,9 @@ def test_list_leaves_no_artifact_that_blocks_a_plan_run(tmp_path: Path) -> None:
     tree_dir = _tree(tmp_path / "tree")
     token = tmp_path / "token"
     token.write_text("admin")
-    ca = tmp_path / "ca.pem"
-    ca.write_text("ca")
     hub = tmp_path / "hub"
     hub.write_text("hub")
-    config = _config(tmp_path / "conformance.yaml", token, ca, hub)
+    config = _config(tmp_path / "conformance.yaml", token, hub)
     catalog = tmp_path / "catalog.yaml"
     catalog.write_text(
         yaml.safe_dump(

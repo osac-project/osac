@@ -347,6 +347,8 @@ aap:
     eeImage: ""
     projectGitUri: ""
     projectGitBranch: ""
+    # Override with the internal API Route when AAP runs on a separate cluster.
+    fulfillmentInternalApiUrl: "https://fulfillment-internal-api:8001"
     remoteClusterKubeconfigSecretName: ""
     remoteClusterKubeconfigSecretKey: kubeconfig
   instanceGroups:

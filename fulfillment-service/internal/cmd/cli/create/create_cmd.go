@@ -54,7 +54,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
-	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func Cmd() *cobra.Command {
@@ -233,17 +232,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 				"Created %s with identifier '%s'.\n",
 				objectSingular, objectId,
 			)
-		}
-		if tenant, ok := object.(*privatev1.Tenant); ok {
-			if tenant.HasStatus() && tenant.GetStatus().HasBreakGlassCredentials() {
-				creds := tenant.GetStatus().GetBreakGlassCredentials()
-				c.console.Infof(ctx, "\n")
-				c.console.Infof(ctx, "Break-glass account credentials (shown only once, save them now):\n")
-				c.console.Infof(ctx, "  Username: %s\n", creds.GetUsername())
-				c.console.Infof(ctx, "  Password: %s\n", creds.GetPassword())
-				c.console.Infof(ctx, "\n")
-				c.console.Infof(ctx, "This is a temporary password that must be changed on first login.\n")
-			}
 		}
 	}
 

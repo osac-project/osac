@@ -140,6 +140,7 @@ type GenericServer[O dao.Object] struct {
 	pathCache        map[string]*masks.Path[O]
 	pathCacheLock    *sync.Mutex
 	validator        protovalidate.Validator
+	quota            *quotaEnforcer
 }
 
 type objectIface interface {
@@ -288,6 +289,15 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		return
 	}
 
+	// Create the quota enforcer. It decides per kind whether a request is checked, so servers
+	// of kinds that use nothing carry it without ever running it. The installation's uncreated
+	// kinds come from the shared parts, so every server skips them with no wiring of its own:
+	quota, err := newQuotaEnforcer(b.logger, b.metricsRegisterer)
+	if err != nil {
+		err = fmt.Errorf("failed to create the quota enforcer: %w", err)
+		return
+	}
+
 	// Create the object early so that we can use its methods as callbacks:
 	s := &GenericServer[O]{
 		logger:           b.logger,
@@ -299,6 +309,7 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		pathCache:        map[string]*masks.Path[O]{},
 		pathCacheLock:    &sync.Mutex{},
 		validator:        validator,
+		quota:            quota,
 	}
 
 	// Create the DAO:
@@ -317,6 +328,10 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		err = fmt.Errorf("failed to create DAO: %w", err)
 		return
 	}
+
+	// The enforcer reads the stored objects of this kind through the DAO, so its reads apply
+	// the caller's visibility:
+	s.quota.objects = &quotaDAO[O]{objects: s.dao}
 
 	// Find the descriptor:
 	service, err := b.findService()
@@ -531,6 +546,13 @@ func (s *GenericServer[O]) CreateWithCandidatePreparation(
 		return err
 	}
 
+	// Open the quota gate before the fill-in, so the tenant lock comes before every other row
+	// of the request:
+	gate, err := s.quota.GateCreate(ctx, requestObject)
+	if err != nil {
+		return err
+	}
+
 	var nilObject O
 	if prepareCandidate != nil {
 		preparedID := requestObject.GetId()
@@ -541,11 +563,15 @@ func (s *GenericServer[O]) CreateWithCandidatePreparation(
 		}
 		if err != nil {
 			// The callback may have written to the database, so roll back.
-			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
-				tx.ReportError(&err)
-			}
-			return err
+			return failWithRollback(ctx, err)
 		}
+	}
+
+	// Close the gate after the fill-in, so the check sees the final candidate. The dry run
+	// returns before the write, not before the check, and a refusal rolls the fill-in's
+	// writes back with it:
+	if err = gate.CloseCreate(ctx, requestObject); err != nil {
+		return err
 	}
 
 	return s.createPrepared(ctx, requestObject, response)
@@ -881,6 +907,13 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		return grpcstatus.Errorf(grpccodes.Internal, "object identifier is mandatory")
 	}
 
+	// Open the quota gate first. It reads the tenant of the stored object the way the caller
+	// can see it, and locks that tenant before the update takes any other row:
+	gate, err := s.quota.GateUpdate(ctx, requestObject, requestMsg.GetUpdateMask())
+	if err != nil {
+		return err
+	}
+
 	// Fetch the current representation of the object:
 	getResponse, err := s.dao.Get().
 		SetId(requestId).
@@ -994,11 +1027,15 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		err = s.prepareUpdateCandidate(ctx, currentObject, tmpObject, prepareCandidate)
 		if err != nil {
 			// The callback may have written to the database, so roll back.
-			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
-				tx.ReportError(&err)
-			}
-			return err
+			return failWithRollback(ctx, err)
 		}
+	}
+
+	// Close the gate after the fill-in, so the check sees the final candidate. An update adds
+	// the difference between the new and the old version of the resource, and a refusal rolls
+	// the fill-in's writes back with it:
+	if err = gate.CloseUpdate(ctx, currentObject, tmpObject); err != nil {
+		return err
 	}
 
 	// Save the object only if there is any actual difference:
@@ -1078,6 +1115,16 @@ func (s *GenericServer[O]) UpdateWithValidation(
 		}, true)
 }
 
+// failWithRollback returns the failure and marks the request's transaction to roll back with
+// it. Reporting the error makes the transaction's End roll back instead of commit, so whatever
+// a fill-in wrote before the failure doesn't survive the request.
+func failWithRollback(ctx context.Context, err error) error {
+	if tx, txErr := database.TxFromContext(ctx); txErr == nil {
+		tx.ReportError(&err)
+	}
+	return err
+}
+
 func (s *GenericServer[O]) translateUpdateError(ctx context.Context, requestId string, err error) error {
 	return ConvertDAOErrorToGRPC(err, "update", requestId)
 }
@@ -1110,22 +1157,10 @@ func (s *GenericServer[O]) compilePath(path string) (result *masks.Path[O], err 
 }
 
 func (s *GenericServer[O]) Delete(ctx context.Context, request any, response any) error {
-	// Extract object identifier from the request:
-	type requestIface interface {
-		GetId() string
-	}
-	requestMsg := request.(requestIface)
-	requestId := requestMsg.GetId()
-	if requestId == "" {
-		return grpcstatus.Errorf(grpccodes.Internal, "object identifier is mandatory")
-	}
-
 	// Delete the object:
-	_, err := s.dao.Delete().
-		SetId(requestId).
-		Do(ctx)
+	_, err := s.deleteObject(ctx, request)
 	if err != nil {
-		return ConvertDAOErrorToGRPC(err, "delete", requestId)
+		return err
 	}
 
 	// Create the response message:
@@ -1133,6 +1168,34 @@ func (s *GenericServer[O]) Delete(ctx context.Context, request any, response any
 	s.setPointer(response, responseMsg)
 
 	return nil
+}
+
+// deleteObject deletes the object and returns it as it was when the deletion
+// was requested. Objects with pending finalizers are returned with their
+// deletion timestamp set and remain visible until the finalizers clear; the
+// object is archived and removed otherwise.
+func (s *GenericServer[O]) deleteObject(ctx context.Context, request any) (object O, err error) {
+	// Extract object identifier from the request:
+	type requestIface interface {
+		GetId() string
+	}
+	requestMsg := request.(requestIface)
+	requestId := requestMsg.GetId()
+	if requestId == "" {
+		err = grpcstatus.Errorf(grpccodes.Internal, "object identifier is mandatory")
+		return
+	}
+
+	// Delete the object:
+	daoResponse, err := s.dao.Delete().
+		SetId(requestId).
+		Do(ctx)
+	if err != nil {
+		err = ConvertDAOErrorToGRPC(err, "delete", requestId)
+		return
+	}
+	object = daoResponse.GetObject()
+	return
 }
 
 func (s *GenericServer[O]) Signal(ctx context.Context, request any, response any) error {

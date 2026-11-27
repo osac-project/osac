@@ -1192,9 +1192,22 @@ var _ = Describe("Clusters server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
+			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
+				Id: "unmasked-update-target",
+				Metadata: privatev1.Metadata_builder{
+					Name: "4-18-0-unmasked", Tenant: testTenant,
+				}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
+					Enabled: proto.Bool(true), Version: "4.18.0",
+				}.Build(),
+			}.Build())
 			object := proto.Clone(createResponse.GetObject()).(*publicv1.Cluster)
 			originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachment()).(*publicv1.ClusterNetworkAttachment)
 			object.GetMetadata().SetLabels(map[string]string{"test": "unmasked-update"})
+			object.GetSpec().SetVersion(publicv1.ClusterVersionReference_builder{
+				Name: "4-18-0-unmasked",
+			}.Build())
 			object.SetStatus(publicv1.ClusterStatus_builder{
 				ApiUrl:     "https://forged.api",
 				ConsoleUrl: "https://forged.console",
@@ -1515,12 +1528,13 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).NotTo(HaveOccurred())
 			full := proto.Clone(updated.GetObject()).(*publicv1.Cluster)
 			full.GetMetadata().SetLabels(map[string]string{"example.com/review": "updated"})
+			full.GetSpec().GetNodeSets()["compute"].SetSize(4)
 			for _, attempt := range full.GetStatus().GetUpgradeHistory() {
 				attempt.SetState(publicv1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED)
 			}
 			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object:     full,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "spec"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "spec.node_sets"}},
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			after, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())

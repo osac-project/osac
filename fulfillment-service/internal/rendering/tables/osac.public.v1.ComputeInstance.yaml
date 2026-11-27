@@ -35,6 +35,18 @@ columns:
   value: this.status.state
   type: osac.public.v1.ComputeInstanceState
 
+- header: PROVISIONING
+  value: >-
+    has(this.status) && has(this.status.conditions) &&
+    this.status.conditions.exists(c,
+      c.type == osac.public.v1.ComputeInstanceConditionType.COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED &&
+      c.status == osac.public.v1.ConditionStatus.CONDITION_STATUS_FALSE &&
+      c.reason in ['RetryScheduled', 'RetryRunning']) ? 'Retrying' : '-'
+
+- header: LAST FAILURE
+  value: "has(this.status) && has(this.status.last_provisioning_failure) ? dyn(this.status.last_provisioning_failure.reason) : '-'"
+  type: osac.public.v1.ComputeInstanceProvisioningFailureReason
+
 - header: INTERNAL IP ADDRESS
   value: this.status.internal_ip_address
 

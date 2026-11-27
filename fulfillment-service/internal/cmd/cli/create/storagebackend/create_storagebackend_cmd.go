@@ -107,7 +107,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("endpoint is required")
 	}
 	var credentials *privatev1.StorageBackendCredentials
-	if !c.cspManaged || c.username != "" || c.password != "" {
+	loginFlagsSet := cmd.Flags().Changed("username") || cmd.Flags().Changed("password")
+	needsLogin := !c.cspManaged && (c.provider != "vast" || loginFlagsSet)
+	if needsLogin || c.username != "" || c.password != "" {
 		if c.username == "" {
 			return fmt.Errorf("username is required")
 		}
@@ -166,7 +168,13 @@ Tenants interact with storage indirectly through storage tiers.
 Use {{ bt }}--csp-managed{{ bt }} when the Cloud Provider Admin manages the storage resources.
 Endpoint and credentials are optional in this mode. Ownership cannot be changed after creation.
 
-To create a storage backend:
+For an OSAC-managed VAST backend serving only NFS tiers, the endpoint is sufficient:
+
+{{ bt 3 }}shell
+{{ binary }} create storagebackend --name vast-nfs --provider vast --endpoint https://vast.example.com
+{{ bt 3 }}
+
+To register VAST with backend credentials for block or NFS tiers:
 
 {{ bt 3 }}shell
 {{ binary }} create storagebackend --name vast-prod \
@@ -201,12 +209,12 @@ Optional with {{ bt }}--csp-managed{{ bt }}.
 
 const usernameFlagHelp = `
 _USERNAME_ - Username for storage management API authentication.
-Optional with {{ bt }}--csp-managed{{ bt }}. If supplied, password is required.
+Optional for VAST NFS or with {{ bt }}--csp-managed{{ bt }}. If supplied, password is required.
 `
 
 const passwordFlagHelp = `
 _PASSWORD_ - Password for storage management API authentication.
-Optional with {{ bt }}--csp-managed{{ bt }}. If supplied, username is required.
+Optional for VAST NFS or with {{ bt }}--csp-managed{{ bt }}. If supplied, username is required.
 `
 
 const descriptionFlagHelp = `

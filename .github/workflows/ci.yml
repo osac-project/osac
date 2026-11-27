@@ -88,8 +88,17 @@ jobs:
         run: |
           set -euo pipefail
           # A leg runs when every filter it names matched. Only the legs that run become jobs of this workflow run.
-          tests=$(yq -o=json -I=0 '.' .github/ci-tests.yml | jq -c --arg changed "${CHANGED}" '
-            [ .[] | select(all(.filters[]; . as $f | ($changed | contains("|" + $f + "|")))) ]')
+          # A leg that names pr_repetitions runs that many times, in parallel, on a pull request: the suite goes
+          # through the same commit more than once, so a flake shows up before the change merges instead of after.
+          # The merge queue, the schedule and the manual runs keep one execution, so a queued or hand-started run
+          # never multiplies.
+          tests=$(yq -o=json -I=0 '.' .github/ci-tests.yml | jq -c --arg changed "${CHANGED}" --arg event "${GITHUB_EVENT_NAME}" '
+            [ .[]
+              | select(all(.filters[]; . as $f | ($changed | contains("|" + $f + "|"))))
+              | if $event == "pull_request" and (.pr_repetitions // 1) > 1
+                then .pr_repetitions as $n | range(1; $n + 1) as $i
+                  | . + {id: "\(.id) (\($i)/\($n))", repeat: $i}
+                else . end ]')
           echo "tests=${tests}" >> "$GITHUB_OUTPUT"
           echo "Tests that run: $(jq -r 'map(.id) | join(", ") | if . == "" then "none" else . end' <<<"${tests}")" >> "$GITHUB_STEP_SUMMARY"
 
@@ -203,7 +212,8 @@ jobs:
     uses: ./.github/workflows/osac-ui-typecheck.yaml
 
   # Every unit and integration test the change needs, one job per leg (a matrix built by `plan` from .github/ci-tests.yml).
-  # A test that is not needed has no job, so the pull request shows no skipped row for it.
+  # A test that is not needed has no job, so the pull request shows no skipped row for it. A leg that repeats on a pull
+  # request has one job per repetition, all of them at once.
   tests:
     name: ${{ matrix.id }}
     needs: plan
@@ -220,6 +230,8 @@ jobs:
       dir: ${{ matrix.dir || '' }}
       cmd: ${{ matrix.cmd || '' }}
       timeout: ${{ matrix.timeout || 360 }}
+      # The repetitions of one leg upload the same artifact name; name them apart so none overwrites another.
+      artifact_suffix: ${{ matrix.repeat != null && format('-repeat-{0}', matrix.repeat) || '' }}
 
   # The one required check. It also runs when a check failed, and fails then;
   # a check that was skipped because it did not apply does not count against it.

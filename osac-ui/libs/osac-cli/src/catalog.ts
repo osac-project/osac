@@ -4,7 +4,7 @@ export const catalogItemResource = 'computeinstancecatalogitems';
 
 export interface CatalogItemReference {
   name?: string;
-  shared?: boolean;
+  tenant?: string;
 }
 
 export interface CatalogItemFields {

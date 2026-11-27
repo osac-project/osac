@@ -1375,6 +1375,12 @@
               "type": "string",
               "description": "Git branch for config-as-code project"
             },
+            "fulfillmentInternalApiUrl": {
+              "type": "string",
+              "pattern": "^https://[^/?#@\\s]+/?$",
+              "description": "HTTPS origin for Fulfillment's private API as seen by the ComputeInstance runner",
+              "default": "https://fulfillment-internal-api:8001"
+            },
             "remoteClusterKubeconfigSecretName": {
               "type": "string",
               "description": "Secret name provided to AAP config-as-code for VM operations on a remote cluster.",

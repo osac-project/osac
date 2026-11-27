@@ -27,7 +27,7 @@ export interface ClusterWizardValues {
     project: string;
   };
   spec: {
-    sshPublicKey: ProvisioningFieldValue<string>;
+    sshKey: ProvisioningFieldValue<string>;
     pullSecretSecret: ProvisioningFieldValue<string>;
     /** Selected ClusterVersion metadata.name (e.g. "4-17-0"); wrapped into spec.version at payload build. */
     versionName: ProvisioningFieldValue<string>;
@@ -41,8 +41,8 @@ export interface ClusterWizardValues {
   };
 }
 
-export const CLUSTER_SSH_KEY_WIRE_PATH = 'ssh_public_key';
-export const CLUSTER_SSH_KEY_FORM_PATH = 'spec.sshPublicKey';
+export const CLUSTER_SSH_KEY_WIRE_PATH = 'ssh_key';
+export const CLUSTER_SSH_KEY_FORM_PATH = 'spec.sshKey';
 export const CLUSTER_PULL_SECRET_WIRE_PATH = 'pull_secret_secret.name';
 export const CLUSTER_PULL_SECRET_FORM_PATH = 'spec.pullSecretSecret';
 export const CLUSTER_VERSION_WIRE_PATH = 'version';
@@ -76,7 +76,7 @@ export const createEmptyClusterValues = (): ClusterWizardValues => ({
   catalogItemReference: { name: '', id: '' },
   metadata: { name: '', project: '' },
   spec: {
-    sshPublicKey: provisioningFieldValue(''),
+    sshKey: provisioningFieldValue(''),
     pullSecretSecret: provisioningFieldValue(''),
     versionName: provisioningFieldValue(''),
     nodeSetRows: provisioningFieldValue([createEmptyNodeSetRow()]),
@@ -105,7 +105,10 @@ export const getInitialFormValues = (catalogItem?: ClusterCatalogItem): ClusterW
 
     spec: {
       ...values.spec,
-      sshPublicKey: getFieldFromCatalogItemPolicy(fields?.sshPublicKey, ''),
+      sshKey: (() => {
+        const field = getFieldFromCatalogItemPolicy<{ name: string }>(fields?.sshKey, { name: '' });
+        return provisioningFieldValue(field.value.name ?? '', field.locked);
+      })(),
       pullSecretSecret: (() => {
         const field = getFieldFromCatalogItemPolicy<{ name: string }>(fields?.pullSecretSecret, {
           name: '',

@@ -38,6 +38,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/regenerate"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/scale"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/tenant"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/upgrade"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/version"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/volumes"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/whoami"
@@ -121,6 +122,7 @@ func Root() (result *cobra.Command, err error) {
 	result.AddCommand(logout.Cmd())
 	result.AddCommand(regenerate.Cmd())
 	result.AddCommand(scale.Cmd())
+	result.AddCommand(upgrade.Cmd())
 	result.AddCommand(project.Cmd())
 	result.AddCommand(tenant.Cmd())
 	result.AddCommand(version.Cmd())

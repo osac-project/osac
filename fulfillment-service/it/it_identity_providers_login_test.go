@@ -16,12 +16,14 @@ package it
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -161,38 +163,88 @@ var _ = Describe("Identity provider login flow", func() {
 		Expect(tool.PatchKCIdPDisableTrustManager(ctx, idpAlias)).To(Succeed())
 	})
 
-	// provisionAndLogin creates a user in both the ext realm (credentials) and the
-	// osac KC realm (federated identity link + org membership), then drives the full
-	// OIDC authorization code redirect chain to obtain a Keycloak JWT.
-	//
-	// This mirrors what `osac login` + `osac get <resource>` does.
-	provisionAndLogin := func(ctx context.Context, tenantName, idpAlias string) string {
-		username := fmt.Sprintf("idp-user-%s", uuid.New())
-		password := uuid.New()
+	// provisionUser creates a user in both the ext realm (credentials) and the
+	// osac KC realm (federated identity link + org membership), returning the
+	// credentials to use for login.
+	provisionUser := func(ctx context.Context, tenantName, idpAlias string) (username, password string) {
+		GinkgoHelper()
+		username = fmt.Sprintf("idp-user-%s", uuid.New())
+		password = uuid.New()
 		email := username + "@example.com"
 
 		// Step 1: create the user in the ext realm with real credentials.
 		extUserID, err := extRealm.AddUser(ctx, username, password, email)
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		Expect(err).ToNot(HaveOccurred())
 
 		// Step 2: link the user in KC osac realm so first-broker-login finds them
 		// without prompting for profile review. extUserID is the `sub` claim KC will
 		// receive from the ext realm when the user authenticates.
 		_, err = tool.ProvisionOIDCUser(ctx, username, email, tenantName, idpAlias, extUserID)
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		Expect(err).ToNot(HaveOccurred())
+		return username, password
+	}
+
+	// provisionAndLogin provisions a user and drives the full OIDC authorization
+	// code redirect chain to obtain a Keycloak JWT.
+	//
+	// This mirrors what `osac login` + `osac get <resource>` does.
+	provisionAndLogin := func(ctx context.Context, tenantName, idpAlias string) string {
+		GinkgoHelper()
+		username, password := provisionUser(ctx, tenantName, idpAlias)
 
 		// Step 3: drive the full OIDC redirect chain — test runner follows KC's
 		// redirect to the ext realm login page, submits credentials, and KC exchanges
 		// the code with the ext realm (server-to-server, cluster-internal).
 		token, loginErr := tool.SimulateOIDCLogin(ctx, idpAlias, username, password)
-		ExpectWithOffset(1, loginErr).ToNot(HaveOccurred())
-		ExpectWithOffset(1, token).ToNot(BeEmpty())
+		Expect(loginErr).ToNot(HaveOccurred())
+		Expect(token).ToNot(BeEmpty())
 		return token
 	}
 
 	It("Allows an IdP-linked user to authenticate and obtain a token", func() {
 		token := provisionAndLogin(ctx, tenantName, idpAlias)
 		Expect(token).ToNot(BeEmpty(), "expected a non-empty KC access token from the full OIDC flow")
+	})
+
+	It("Uses only the configured authorization URL parameters", func() {
+		_, err := client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: osacIdpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl: extRealm.AuthorizationURL() + "?acr_values=urn%3Aexample%3Aconfigured-mfa",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"spec.oidc.authorization_url"},
+			},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, getErr := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetPhase()).To(
+				Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				"wait for the query-configured authorization URL to reconcile",
+			)
+		}, 2*time.Minute, time.Second).Should(Succeed())
+		Expect(tool.PatchKCIdPDisableTrustManager(ctx, idpAlias)).To(Succeed())
+
+		username, password := provisionUser(ctx, tenantName, idpAlias)
+
+		const requestParamName = "osac_it_request_param"
+		var upstreamQuery url.Values
+		token, err := tool.simulateOIDCLoginWithRequestParams(
+			ctx, "osac-cli", "http://localhost", "", idpAlias, username, password, url.Values{
+				"acr_values":     {"urn:example:request-acr"},
+				requestParamName: {"must-not-forward"},
+			}, &upstreamQuery,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token).ToNot(BeEmpty())
+		Expect(upstreamQuery["acr_values"]).To(Equal([]string{"urn:example:configured-mfa"}))
+		Expect(upstreamQuery).ToNot(HaveKey(requestParamName))
 	})
 
 	It("Scopes IdP user access to their tenant", func() {

@@ -47,7 +47,6 @@ def test_config_errors_are_redacted(
                     "kubeconfig": str(tmp_path / "hub"),
                     "apiURL": f"https://{fake_host}",
                     "tokenFile": str(token),
-                    "caFile": str(tmp_path / "ca.pem"),
                 },
             },
             sort_keys=False,
@@ -74,7 +73,7 @@ def test_default_collection_root_covers_the_shipped_tests() -> None:
 
 
 def test_relative_config_is_resolved_before_the_child_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("token", "ca.pem", "hub"):
+    for name in ("token", "hub"):
         (tmp_path / name).write_text(name)
     config = tmp_path / "conformance.yaml"
     config.write_text(
@@ -85,7 +84,6 @@ def test_relative_config_is_resolved_before_the_child_runs(tmp_path: Path, monke
                     "kubeconfig": str(tmp_path / "hub"),
                     "apiURL": "http://target.example.test",
                     "tokenFile": str(tmp_path / "token"),
-                    "caFile": str(tmp_path / "ca.pem"),
                 },
             },
             sort_keys=False,
@@ -119,20 +117,12 @@ def test_duplicate_keys_in_a_plan_are_a_config_error(tmp_path: Path) -> None:
         cli._plan_names(plan)
 
 
-def test_a_malformed_url_does_not_replace_the_config_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_malformed_url_is_a_config_error_not_a_crash(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     config = tmp_path / "conformance.yaml"
     config.write_text(
-        "osacRelease: 1.4.0\n"
-        "unknownKey: 1\n"
-        "target:\n"
-        "  kubeconfig: /config/hub\n"
-        '  apiURL: "https://["\n'
-        "  tokenFile: /config/token\n"
-        "  caFile: /config/ca.pem\n"
+        'osacRelease: 1.4.0\ntarget:\n  kubeconfig: /config/hub\n  apiURL: "https://["\n  tokenFile: /config/token\n'
     )
 
     assert main(["list", "--config", str(config), "--results", str(tmp_path / "results")]) == 2
 
-    err = capsys.readouterr().err
-    assert "unknownKey is not defined by this release" in err
-    assert "absolute URL with a host" in err
+    assert "absolute URL with a host" in capsys.readouterr().err

@@ -42,6 +42,11 @@ on:
         required: false
         type: string
         default: ""
+      inventory-backend:
+        description: "Inventory backend flavor: metal3 (default) or netbox"
+        required: false
+        type: string
+        default: "metal3"
     secrets:
       # Passed by a caller (the merge queue, for its ci-observe capture).
       # Empty when the workflow runs on its own schedule; a run without the
@@ -83,6 +88,14 @@ on:
         description: "pytest -m marker expression. Empty selects the marker matching test-suite."
         required: false
         default: ""
+      inventory-backend:
+        description: "Inventory backend flavor: metal3 or netbox (default metal3)"
+        required: false
+        type: choice
+        default: "metal3"
+        options:
+          - "metal3"
+          - "netbox"
       test-infra-ref:
         description: "Branch/ref of osac-test-infra"
         required: false
@@ -99,6 +112,7 @@ jobs:
       # PR/merge queue: service root with the sanity marker. Schedule: full
       # service suite, including serial and reference coverage. The service
       # root forces -n 0 in tests/e2e/conftest.py. Manual: selected tier.
+      inventory-backend: ${{ inputs.inventory-backend || 'metal3' }}
       test-suite: >-
         ${{
           inputs.sha != '' && 'bmaas' ||

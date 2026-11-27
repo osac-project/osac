@@ -53,7 +53,15 @@ type ResourceServerDeps struct {
 
 	Services *services.Flags
 
-	// NetworkingSettings are the networking installation settings.
+	// QuotaDefaultLimitScanner is the shared worker that writes the warnings a default limit
+	// change leaves behind. Both default limits servers, the public one and the private one,
+	// schedule their after-commit scans on it, so one worker serializes every scan. Optional:
+	// without it the servers change defaults but schedule no scan.
+	QuotaDefaultLimitScanner *servers.QuotaDefaultLimitScanner
+
+	// NetworkingSettings are the networking settings of this installation. The
+	// startup publishes them before it builds any server. Set them; a zero
+	// value means networking and BMaaS are off, not that defaults apply.
 	NetworkingSettings servers.NetworkingSettings
 }
 
@@ -957,6 +965,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetScanner(deps.QuotaDefaultLimitScanner).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create quota default limits server: %w", err)
@@ -970,6 +979,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetScanner(deps.QuotaDefaultLimitScanner).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private quota default limits server: %w", err)

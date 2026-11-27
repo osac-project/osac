@@ -35,7 +35,7 @@ describe('buildClusterCreatePayload', () => {
       metadata: { name: 'my-cluster', project: '' },
       spec: {
         ...createEmptyClusterValues().spec,
-        sshPublicKey: provisioningFieldValue('ssh-rsa AAAA'),
+        sshKey: provisioningFieldValue('tenant-ssh-key'),
         pullSecretSecret: provisioningFieldValue('pull-secret'),
         versionName: provisioningFieldValue('4-17-0'),
         nodeSetRows: provisioningFieldValue([
@@ -57,7 +57,7 @@ describe('buildClusterCreatePayload', () => {
       metadata: { name: 'my-cluster', project: '' },
       spec: {
         catalogItem: { id: clusterCatalogItem.id },
-        sshPublicKey: 'ssh-rsa AAAA',
+        sshKey: { name: 'tenant-ssh-key' },
         pullSecretSecret: { name: 'pull-secret' },
         version: { name: '4-17-0' },
         nodeSets: {
@@ -308,7 +308,7 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
       spec: {
         ...createEmptyClusterValues().spec,
         pullSecretSecret: provisioningFieldValue('secret'),
-        sshPublicKey: provisioningFieldValue('ssh-ed25519 AAAA', true),
+        sshKey: provisioningFieldValue('tenant-ssh-key', true),
         nodeSetRows: provisioningFieldValue(
           [
             {
@@ -329,7 +329,7 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
     };
 
     const payload = buildClusterCreatePayload(values);
-    expect(payload.spec).not.toHaveProperty('sshPublicKey');
+    expect(payload.spec).not.toHaveProperty('sshKey');
     expect(payload.spec).not.toHaveProperty('nodeSets');
     expect(payload.spec).not.toHaveProperty('network');
     expect(payload.spec).not.toHaveProperty('autoExternalIpAttachment');

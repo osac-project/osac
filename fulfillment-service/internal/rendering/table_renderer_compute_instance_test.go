@@ -16,6 +16,8 @@ package rendering
 import (
 	"bytes"
 	"context"
+	"regexp"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -150,5 +152,139 @@ var _ = Describe("Compute instance table rendering", func() {
 			"my-name",
 			"my-name",
 		),
+	)
+})
+
+var _ = Describe("Compute instance provisioning columns", func() {
+	var render func(context.Context, *publicv1.ComputeInstanceStatus) map[string]string
+
+	BeforeEach(func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		descriptor := (&publicv1.ComputeInstance{}).ProtoReflect().Descriptor()
+		objectHelper := reflection.NewMockObjectHelper(ctrl)
+		objectHelper.EXPECT().FullName().Return(descriptor.FullName()).AnyTimes()
+		objectHelper.EXPECT().Descriptor().Return(descriptor).AnyTimes()
+		objectHelper.EXPECT().String().Return(string(descriptor.FullName())).AnyTimes()
+		objectHelper.EXPECT().IsTenantScoped().Return(true).AnyTimes()
+		lookupHelper := reflection.NewMockObjectHelper(ctrl)
+		lookupHelper.EXPECT().List(gomock.Any(), gomock.Any()).Return(reflection.ListResult{}, nil).AnyTimes()
+		lookupHelper.EXPECT().IsTenantScoped().Return(false).AnyTimes()
+		helper := reflection.NewMockHelper(ctrl)
+		helper.EXPECT().Lookup(string(descriptor.FullName())).Return(objectHelper).AnyTimes()
+		helper.EXPECT().Lookup(gomock.Any()).Return(lookupHelper).AnyTimes()
+		buffer := &bytes.Buffer{}
+		renderer, err := NewTableRenderer().SetLogger(logger).SetHelper(helper).SetWriter(buffer).Build()
+		Expect(err).NotTo(HaveOccurred())
+		render = func(ctx context.Context, status *publicv1.ComputeInstanceStatus) map[string]string {
+			buffer.Reset()
+			instance := publicv1.ComputeInstance_builder{
+				Id: "instance-1", Status: status,
+				Spec: publicv1.ComputeInstanceSpec_builder{
+					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "template-1"}.Build(),
+				}.Build(),
+			}.Build()
+			Expect(renderer.Render(ctx, []proto.Message{instance})).To(Succeed())
+			lines := strings.Split(strings.TrimSpace(buffer.String()), "\n")
+			Expect(lines).To(HaveLen(2))
+			separator := regexp.MustCompile(`\s{2,}`)
+			headers := separator.Split(strings.TrimSpace(lines[0]), -1)
+			Expect(headers).To(ContainElements("PROVISIONING", "LAST FAILURE"))
+			result := map[string]string{}
+			for i, header := range headers {
+				start := strings.Index(lines[0], header)
+				end := len(lines[1])
+				if i+1 < len(headers) {
+					end = min(end, strings.Index(lines[0], headers[i+1]))
+				}
+				if start < end {
+					result[header] = strings.TrimSpace(lines[1][start:end])
+				}
+			}
+			return result
+		}
+	})
+
+	condition := func(kind publicv1.ComputeInstanceConditionType, status publicv1.ConditionStatus, reason string) *publicv1.ComputeInstanceCondition {
+		return publicv1.ComputeInstanceCondition_builder{
+			Type: kind, Status: status, Reason: proto.String(reason),
+			Message: proto.String("retrying after a failure"),
+		}.Build()
+	}
+	provisioned := publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED
+	falseStatus := publicv1.ConditionStatus_CONDITION_STATUS_FALSE
+
+	DescribeTable("uses only explicit active retry conditions",
+		func(ctx context.Context, conditions []*publicv1.ComputeInstanceCondition, expected string) {
+			row := render(ctx, publicv1.ComputeInstanceStatus_builder{
+				State:      publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+				Conditions: conditions,
+			}.Build())
+			Expect(row["STATE"]).To(Equal("RUNNING"))
+			Expect(row["PROVISIONING"]).To(Equal(expected))
+			Expect(row["LAST FAILURE"]).To(Equal("-"))
+		},
+		Entry("scheduled legacy retry without failure", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "RetryScheduled")}, "Retrying"),
+		Entry("running retry without failure", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "RetryRunning")}, "Retrying"),
+		Entry("true condition is not retrying", []*publicv1.ComputeInstanceCondition{condition(provisioned, publicv1.ConditionStatus_CONDITION_STATUS_TRUE, "RetryScheduled")}, "-"),
+		Entry("unknown status is not retrying", []*publicv1.ComputeInstanceCondition{condition(provisioned, publicv1.ConditionStatus(99), "RetryRunning")}, "-"),
+		Entry("unspecified status is not retrying", []*publicv1.ComputeInstanceCondition{condition(provisioned, publicv1.ConditionStatus(0), "RetryRunning")}, "-"),
+		Entry("different condition type is not retrying", []*publicv1.ComputeInstanceCondition{condition(publicv1.ComputeInstanceConditionType(0), falseStatus, "RetryScheduled")}, "-"),
+		Entry("terminal failure is not retrying", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "ProvisioningFailed")}, "-"),
+		Entry("message alone is not retrying", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "WaitingForVM")}, "-"),
+		Entry("unknown reason is not retrying", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "FutureReason")}, "-"),
+		Entry("missing reason is not retrying", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "")}, "-"),
+		Entry("missing conditions is not retrying", nil, "-"),
+	)
+
+	DescribeTable("labels failures independently of active retry",
+		func(ctx context.Context, reason publicv1.ComputeInstanceProvisioningFailureReason, expected string) {
+			for _, retryReason := range []string{"RetryScheduled", "RetryRunning", "ProvisioningFailed", ""} {
+				row := render(ctx, publicv1.ComputeInstanceStatus_builder{
+					Conditions:              []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, retryReason)},
+					LastProvisioningFailure: publicv1.ComputeInstanceProvisioningFailure_builder{Reason: reason, Attempt: 2}.Build(),
+				}.Build())
+				Expect(row["LAST FAILURE"]).To(Equal(expected))
+				if strings.HasPrefix(retryReason, "Retry") {
+					Expect(row["PROVISIONING"]).To(Equal("Retrying"))
+				} else {
+					Expect(row["PROVISIONING"]).To(Equal("-"))
+				}
+			}
+		},
+		Entry("unspecified", publicv1.ComputeInstanceProvisioningFailureReason(0), "UNSPECIFIED"),
+		Entry("provider reported", publicv1.ComputeInstanceProvisioningFailureReason(1), "PROVIDER_REPORTED"),
+		Entry("result rejected", publicv1.ComputeInstanceProvisioningFailureReason(2), "RESULT_REJECTED"),
+		Entry("timed out", publicv1.ComputeInstanceProvisioningFailureReason(3), "TIMED_OUT"),
+		Entry("job lost", publicv1.ComputeInstanceProvisioningFailureReason(4), "JOB_LOST"),
+		Entry("job not started", publicv1.ComputeInstanceProvisioningFailureReason(5), "JOB_NOT_STARTED"),
+		Entry("invalid result", publicv1.ComputeInstanceProvisioningFailureReason(6), "INVALID_RESULT"),
+		Entry("provider error", publicv1.ComputeInstanceProvisioningFailureReason(7), "PROVIDER_ERROR"),
+		Entry("unknown numeric value", publicv1.ComputeInstanceProvisioningFailureReason(99), "UNKNOWN:99"),
+	)
+
+	It("handles an absent status", func(ctx context.Context) {
+		row := render(ctx, nil)
+		Expect(row["PROVISIONING"]).To(Equal("-"))
+		Expect(row["LAST FAILURE"]).To(Equal("-"))
+	})
+
+	DescribeTable("clears the presentation after success without waiting for readiness",
+		func(ctx context.Context, reason string, status publicv1.ConditionStatus) {
+			retry := render(ctx, publicv1.ComputeInstanceStatus_builder{
+				Conditions:              []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "RetryRunning")},
+				LastProvisioningFailure: publicv1.ComputeInstanceProvisioningFailure_builder{Reason: publicv1.ComputeInstanceProvisioningFailureReason(1)}.Build(),
+			}.Build())
+			Expect(retry["PROVISIONING"]).To(Equal("Retrying"))
+			Expect(retry["LAST FAILURE"]).To(Equal("PROVIDER_REPORTED"))
+			cleared := render(ctx, publicv1.ComputeInstanceStatus_builder{
+				Conditions: []*publicv1.ComputeInstanceCondition{condition(provisioned, status, reason)},
+			}.Build())
+			Expect(cleared["PROVISIONING"]).To(Equal("-"))
+			Expect(cleared["LAST FAILURE"]).To(Equal("-"))
+		},
+		Entry("waiting for VM", "WaitingForVM", falseStatus),
+		Entry("provisioning storage", "ProvisioningStorage", falseStatus),
+		Entry("infrastructure ready", "InfrastructureReady", publicv1.ConditionStatus_CONDITION_STATUS_TRUE),
 	)
 })

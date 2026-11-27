@@ -32,6 +32,7 @@ type QuotaDefaultLimitsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	scanner           *QuotaDefaultLimitScanner
 }
 
 var _ publicv1.QuotaDefaultLimitsServer = (*QuotaDefaultLimitsServer)(nil)
@@ -70,6 +71,13 @@ func (b *QuotaDefaultLimitsServerBuilder) SetMetricsRegisterer(value prometheus.
 	return b
 }
 
+// SetScanner sets the worker the private delegate schedules its after-commit scans on. It is
+// optional, like the private builder's own setter.
+func (b *QuotaDefaultLimitsServerBuilder) SetScanner(value *QuotaDefaultLimitScanner) *QuotaDefaultLimitsServerBuilder {
+	b.scanner = value
+	return b
+}
+
 func (b *QuotaDefaultLimitsServerBuilder) Build() (result *QuotaDefaultLimitsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -103,6 +111,7 @@ func (b *QuotaDefaultLimitsServerBuilder) Build() (result *QuotaDefaultLimitsSer
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.QuotaDefaultLimit)(nil).ProtoReflect().Descriptor()).
+		SetScanner(b.scanner).
 		Build()
 	if err != nil {
 		return

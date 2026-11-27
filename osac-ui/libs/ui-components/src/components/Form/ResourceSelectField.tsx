@@ -47,6 +47,10 @@ export interface ResourceSelectFieldProps<TResource extends ResourceListItem = R
   filterItems?: (item: TResource) => boolean;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
   formatOptionLabel?: (item: TResource) => string;
+  /**
+   * Secondary text under the option label in the open list (PatternFly
+   * description). Not shown in the closed toggle.
+   */
   getOptionDescription?: (item: TResource) => string | undefined;
 }
 
@@ -106,7 +110,8 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
       const detail = getOptionDescription?.(item);
       return {
         value: item.id,
-        content: detail ? `${baseLabel} · ${detail}` : baseLabel,
+        content: baseLabel,
+        ...(detail ? { description: detail } : {}),
         selected: item.id === selectedId,
       };
     });

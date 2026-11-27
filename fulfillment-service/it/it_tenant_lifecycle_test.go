@@ -389,8 +389,8 @@ func loginAsBreakGlass(
 	name, id string,
 ) (*grpc.ClientConn, auth.TokenSource) {
 	var breakGlassUserId string
-	var breakGlassUsername string
-	var breakGlassPassword string
+	var testBreakGlassUsername string
+	var testBreakGlassPassword string
 	Eventually(
 		func(g Gomega) {
 			getResponse, err := client.Get(ctx, privatev1.TenantsGetRequest_builder{
@@ -403,26 +403,21 @@ func loginAsBreakGlass(
 			)
 			g.Expect(status.GetBreakGlassUserId()).ToNot(BeEmpty())
 			breakGlassUserId = status.GetBreakGlassUserId()
-			creds := status.GetBreakGlassCredentials()
-			if creds != nil {
-				breakGlassUsername = creds.GetUsername()
-				breakGlassPassword = creds.GetPassword()
-			}
 		},
 		time.Minute,
 		time.Second,
 	).Should(Succeed())
 
-	if breakGlassPassword == "" {
-		breakGlassPassword = "test-break-glass-pass-123!"
-		breakGlassUsername = fmt.Sprintf("%s-osac-break-glass", name)
+	if testBreakGlassPassword == "" {
+		testBreakGlassPassword = "test-break-glass-pass-123!"
+		testBreakGlassUsername = fmt.Sprintf("%s-osac-break-glass", name)
 	}
 
 	code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPut,
 		fmt.Sprintf("/users/%s/reset-password", breakGlassUserId),
 		map[string]any{
 			"type":      "password",
-			"value":     breakGlassPassword,
+			"value":     testBreakGlassPassword,
 			"temporary": false,
 		})
 	Expect(err).ToNot(HaveOccurred())
@@ -436,7 +431,7 @@ func loginAsBreakGlass(
 	Expect(err).ToNot(HaveOccurred())
 	Expect(code).To(Equal(http.StatusNoContent))
 
-	tokenSource, err := tool.makeKeycloakTokenSource(ctx, breakGlassUsername, breakGlassPassword)
+	tokenSource, err := tool.makeKeycloakTokenSource(ctx, testBreakGlassUsername, testBreakGlassPassword)
 	Expect(err).ToNot(HaveOccurred())
 
 	conn, err := tool.makeGrpcConn(internalServiceAddr, tokenSource)
@@ -712,7 +707,6 @@ var _ = Describe("Tenant lifecycle", func() {
 		Expect(ref.GetName()).To(Equal(breakGlassSecretName))
 
 		By("Verifying inline break-glass credentials are not present in status")
-		Expect(object.GetStatus().GetBreakGlassCredentials()).To(BeNil())
 		Expect(object.GetStatus().GetBreakGlassUserId()).ToNot(BeEmpty())
 
 		By("Fetching the referenced secret and verifying it contains the password")

@@ -195,6 +195,10 @@ Read the [osac-csi-driver suite guide](testing/osac-csi-driver.md).
 
 Read the [osac-metering suite guide](testing/osac-metering.md).
 
+## osac-ui
+
+Read the [osac-ui suite guide](testing/osac-ui.md).
+
 ## tests/e2e
 
 Read the [tests/e2e suite guide](testing/e2e.md).

@@ -7,7 +7,14 @@ from typing import Any
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
-from tests.e2e.core.helpers import assert_grpc_rejected, unique_name, wait_for_cr, wait_for_deletion, wait_for_provision
+from tests.e2e.core.helpers import (
+    assert_grpc_rejected,
+    unique_name,
+    wait_for_cr,
+    wait_for_deletion,
+    wait_for_provision,
+    wait_for_running,
+)
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
@@ -130,6 +137,7 @@ def test_compute_instance_multiple_disks_different_tiers(
     try:
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
         wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+        wait_for_running(k8s=k8s_hub_client, name=ci_name)
 
         # Verify CR has the correct storage tiers
         cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
@@ -151,6 +159,21 @@ def test_compute_instance_multiple_disks_different_tiers(
 
         vm_namespace = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
         assert vm_namespace, f"ComputeInstance {ci_name} has no VM namespace"
+        tenant_annotation = "osac.openshift.io/tenant"
+        tenant = cr.get("metadata", {}).get("annotations", {}).get(tenant_annotation)
+        assert tenant, f"ComputeInstance {ci_name} has no tenant annotation"
+
+        vm = k8s_virt_client.get_json(resource="virtualmachine", name=ci_name, namespace=vm_namespace)
+        vmi = k8s_virt_client.get_vmi_json(vmi_namespace=vm_namespace, compute_instance_name=ci_name)
+        for resource, annotations in (
+            ("VM", vm.get("metadata", {}).get("annotations", {})),
+            ("VM template", vm.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations", {})),
+            ("VMI", vmi.get("metadata", {}).get("annotations", {})),
+        ):
+            assert annotations.get(tenant_annotation) == tenant, (
+                f"{resource} tenant annotation does not match {ci_name}"
+            )
+
         dv_names = {"boot": f"{ci_name}-root-disk", "disk-1": f"{ci_name}-disk-1", "disk-2": f"{ci_name}-disk-2"}
         for key, dv_name in dv_names.items():
             volume = private_grpc.call(service=f"{PRIVATE_API}.Volumes/Get", data={"id": volume_ids[key]})["object"]
@@ -158,6 +181,9 @@ def test_compute_instance_multiple_disks_different_tiers(
 
             dv = k8s_virt_client.get_json(resource="datavolume", name=dv_name, namespace=vm_namespace)
             assert dv["metadata"]["annotations"]["osac.openshift.io/storage-volume-id"] == volume_ids[key]
+            assert dv["metadata"]["annotations"].get(tenant_annotation) == tenant, (
+                f"DataVolume {dv_name} tenant annotation does not match {ci_name}"
+            )
     finally:
         grpc.delete_compute_instance(ci_id=uuid)
         if ci_name is not None:

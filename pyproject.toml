@@ -12,6 +12,14 @@ dependencies = [
     "pytest-xdist>=3.0",
     "pyyaml>=6.0",
     "websocket-client>=1.6",
+    # NetBox inventory client for the e2e backend abstraction. Pinned exactly
+    # per the supply-chain review policy: 7.8.0 is the last release supporting
+    # python3.11 (7.9.x requires >=3.12). Bump to 7.9.x (matched to NetBox
+    # 4.7) when CI moves to python >=3.12.
+    "pynetbox==7.8.0",
+    # requests is imported directly by tests/e2e/core/netbox_client.py for the
+    # TLS session and is also a pynetbox dependency.
+    "requests==2.34.2",
 ]
 
 [project.scripts]
@@ -31,8 +39,7 @@ markers = [
     "conformance_bmaas: test selected by the bmaas selector",
     "conformance_caas: test selected by the caas selector",
     "conformance_netris: test selected by the netris selector",
-    "conformance_blocking: blocking conformance test",
-    "conformance_informing: informing conformance test",
+    "conformance_non_blocking: a failure is reported but never fails a check",
     "sig_networking: test belongs to the networking domain",
 ]
 pythonpath = ["."]

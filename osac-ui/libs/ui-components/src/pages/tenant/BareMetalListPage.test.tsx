@@ -35,10 +35,15 @@ const tenantSession = { role: 'tenant-user' as const };
 
 const instance = {
   id: 'bmi-1',
-  metadata: { name: 'worker-01', project: 'default' },
+  metadata: { name: 'worker-01', tenant: 'tenant-a', project: 'default' },
   spec: {
-    catalogItem: { id: 'catalog-1', name: 'RHEL 9 bare metal', project: 'default', shared: false },
-    instanceType: { id: 'gpu-large', name: 'gpu-large', project: 'default', shared: false },
+    catalogItem: {
+      id: 'catalog-1',
+      name: 'RHEL 9 bare metal',
+      tenant: 'tenant-a',
+      project: 'default',
+    },
+    instanceType: { id: 'gpu-large', name: 'gpu-large', tenant: 'tenant-a', project: 'default' },
     diskImage: { id: 'disk-rhel', name: 'RHEL 9.4' },
     runStrategy: BareMetalInstanceRunStrategy.ALWAYS,
     restartTrigger: 0n,

@@ -62,19 +62,38 @@ jobs:
     variant_of: bmaas
     tier: full
     label: "BMaaS Full Install · sanity + regression"
-  # Netris suites use a real lab, so they are started only by hand and do not block the E2E check.
+  # The NetBox flavor is not validated end to end yet: started only by hand, never blocking the E2E check.
+  e2e-bmaas-netbox:
+    kind: e2e
+    check: "E2E / BMaaS NetBox Full Install"
+    suite: bmaas-netbox
+    workflow: e2e-pr-bmaas-netbox.yml
+    manual_only: true
+  # The sanity + regression flavor of the NetBox suite, the equivalent of e2e-bmaas-full for metal3.
+  # The variant mechanism only fits suites the decision chooses (a variant reuses its suite's check
+  # line and workflow), so this follows the netris pattern instead: a suite of its own, manual only,
+  # never blocking the E2E check.
+  e2e-bmaas-netbox-full:
+    kind: e2e
+    check: "E2E / BMaaS NetBox Full Install · sanity + regression"
+    suite: bmaas-netbox-full
+    workflow: e2e-pr-bmaas-netbox-full.yml
+    manual_only: true
+  # The BMaaS and VMaaS Netris suites (a real lab) run for networking changes only: the `connectivity` filter of
+  # ci-filters.yml. Like the others they count in the E2E check and run in the merge queue; any other change does not
+  # run them (`/test bmaas-netris` still does). The stretched suite is started only by hand.
   e2e-bmaas-netris:
     kind: e2e
     check: "E2E / BMaaS Netris Full Install"
     suite: bmaas-netris
     workflow: e2e-pr-bmaas-netris.yml
-    manual_only: true
+    filters: [connectivity]
   e2e-vmaas-netris:
     kind: e2e
     check: "E2E / VMaaS Netris Full Install"
     suite: vmaas-netris
     workflow: e2e-pr-vmaas-netris.yml
-    manual_only: true
+    filters: [connectivity]
   e2e-stretched-netris:
     kind: e2e
     check: "E2E / Stretched Netris Full Install"

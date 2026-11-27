@@ -24,8 +24,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -37,8 +39,9 @@ import (
 )
 
 type memorySecretStore struct {
-	mu   sync.Mutex
-	data map[string]map[string][]byte
+	mu     sync.Mutex
+	data   map[string]map[string][]byte
+	stores int
 }
 
 func newMemorySecretStore() *memorySecretStore {
@@ -52,8 +55,15 @@ func (s *memorySecretStore) key(tenant, project, name string) string {
 func (s *memorySecretStore) Store(_ context.Context, tenant, project, name string, data map[string][]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stores++
 	s.data[s.key(tenant, project, name)] = data
 	return nil
+}
+
+func (s *memorySecretStore) storeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stores
 }
 
 func (s *memorySecretStore) Fetch(_ context.Context, tenant, project, name string) (map[string][]byte, error) {
@@ -112,15 +122,19 @@ var _ = Describe("Private secrets server", func() {
 	})
 
 	Describe("Behaviour", func() {
-		var server *PrivateSecretsServer
+		var (
+			secretStore *memorySecretStore
+			server      *PrivateSecretsServer
+		)
 
 		BeforeEach(func() {
 			var err error
+			secretStore = newMemorySecretStore()
 			server, err = NewPrivateSecretsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetSecretStore(newMemorySecretStore()).
+				SetSecretStore(secretStore).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -322,6 +336,87 @@ var _ = Describe("Private secrets server", func() {
 			Expect(getResponse.GetObject().GetData()).To(
 				HaveKeyWithValue("new-key", []byte("new-value")))
 		})
+
+		DescribeTable("Persists Vault data only when the update mask selects data",
+			func(
+				secretType privatev1.SecretType,
+				initialData map[string][]byte,
+				updateData map[string][]byte,
+				labels map[string]string,
+				updateMask *fieldmaskpb.FieldMask,
+				expectedData map[string][]byte,
+				expectedLabels map[string]string,
+				expectedStores int,
+			) {
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "masked-secret-" + uuid.NewString(),
+						}.Build(),
+						Type: secretType,
+						Data: initialData,
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				updated := proto.Clone(created.GetObject()).(*privatev1.Secret)
+				updated.SetData(updateData)
+				updated.GetMetadata().SetLabels(labels)
+				storesBefore := secretStore.storeCount()
+				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object:     updated,
+					UpdateMask: updateMask,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(secretStore.storeCount()).To(Equal(storesBefore + expectedStores))
+
+				getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				stored := getResponse.GetObject()
+				Expect(stored.GetMetadata().GetLabels()).To(Equal(expectedLabels))
+				Expect(stored.GetData()).To(Equal(expectedData))
+				Expect(secretStore.data).To(HaveKeyWithValue(
+					secretStore.key(
+						stored.GetMetadata().GetTenant(),
+						stored.GetMetadata().GetProject(),
+						stored.GetMetadata().GetName(),
+					),
+					expectedData,
+				))
+			},
+			Entry("metadata-only user-data update preserves stored data",
+				privatev1.SecretType_SECRET_TYPE_USER_DATA,
+				map[string][]byte{"userdata": []byte("original")},
+				map[string][]byte{"userdata": []byte("changed")},
+				map[string]string{"updated": "true"},
+				&fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+				map[string][]byte{"userdata": []byte("original")},
+				map[string]string{"updated": "true"},
+				0,
+			),
+			Entry("data mask updates opaque data",
+				privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				map[string][]byte{"key": []byte("original")},
+				map[string][]byte{"key": []byte("changed")},
+				nil,
+				&fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				map[string][]byte{"key": []byte("changed")},
+				map[string]string{},
+				1,
+			),
+			Entry("nil mask replaces opaque data",
+				privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				map[string][]byte{"key": []byte("original")},
+				map[string][]byte{"key": []byte("changed")},
+				nil,
+				nil,
+				map[string][]byte{"key": []byte("changed")},
+				map[string]string{},
+				1,
+			),
+		)
 
 		It("Delete removes the object", func() {
 			created := createVaultSecret()
@@ -1284,6 +1379,81 @@ var _ = Describe("Private secrets server", func() {
 		})
 
 		Describe("Get", func() {
+			It("limits the authorized AAP reader to ordinary Secrets across tenant scopes", func() {
+				const issuer = "https://keycloak.example/realms/osac"
+				const clientID = "osac-aap-secret-reader"
+				const username = "service-account-" + clientID
+				evaluator, err := auth.NewEvaluator().SetAAPSecretReaderIssuer(issuer).Build()
+				Expect(err).NotTo(HaveOccurred())
+				interceptor, err := auth.NewGrpcAuthzInterceptor().SetLogger(logger).SetEvaluator(evaluator).Build()
+				Expect(err).NotTo(HaveOccurred())
+				readTenancy, err := auth.NewDefaultTenancyLogic().SetLogger(logger).Build()
+				Expect(err).NotTo(HaveOccurred())
+				reader, err := NewPrivateSecretsServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(readTenancy).
+					SetSecretStore(mockStore).
+					Build()
+				Expect(err).NotTo(HaveOccurred())
+				readerCtx := auth.ContextWithToken(ctx, &jwt.Token{Claims: jwt.MapClaims{
+					"iss": issuer, "azp": clientID, "client_id": clientID,
+					"aud":                auth.Audience,
+					"preferred_username": username,
+					"realm_access":       map[string]any{"roles": []any{"tenant-admin"}},
+				}})
+
+				create := func(tenant, name string, secretType privatev1.SecretType, data map[string][]byte) *privatev1.Secret {
+					mockStore.EXPECT().Store(gomock.Any(), tenant, "", name, data).Return(nil)
+					created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+						Object: privatev1.Secret_builder{
+							Metadata: privatev1.Metadata_builder{Tenant: tenant, Name: name}.Build(),
+							Type:     secretType,
+							Data:     data,
+						}.Build(),
+					}.Build())
+					Expect(err).NotTo(HaveOccurred())
+					return created.GetObject()
+				}
+				get := func(callerCtx context.Context, secret *privatev1.Secret) (any, error) {
+					request := privatev1.SecretsGetRequest_builder{Id: secret.GetId()}.Build()
+					return interceptor.UnaryServer(callerCtx, request,
+						&grpc.UnaryServerInfo{FullMethod: privatev1.Secrets_Get_FullMethodName},
+						func(ctx context.Context, _ any) (any, error) { return reader.Get(ctx, request) })
+				}
+
+				opaque := privatev1.SecretType_SECRET_TYPE_OPAQUE
+				ordinaryData := map[string][]byte{"value": []byte("fixture")}
+				for _, tenant := range []string{testTenant, auth.SharedTenant, auth.SystemTenant} {
+					secret := create(tenant, "aap-readable", opaque, ordinaryData)
+					mockStore.EXPECT().Fetch(gomock.Any(), tenant, "", "aap-readable").Return(ordinaryData, nil)
+					response, err := get(readerCtx, secret)
+					Expect(err).NotTo(HaveOccurred(), "tenant %s", tenant)
+					Expect(response.(*privatev1.SecretsGetResponse).GetObject().GetData()).To(Equal(ordinaryData))
+				}
+
+				credentialData := map[string][]byte{"client_secret": []byte("fixture")}
+				credential := create(auth.SharedTenant, "service-account-credential",
+					privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL, credentialData)
+				for _, protected := range []*privatev1.Secret{
+					create(testTenant, breakGlassCredentialsSecretName, opaque, map[string][]byte{"password": []byte("fixture")}),
+					credential,
+				} {
+					// No Vault fetch is expected for any denied read.
+					_, err := get(readerCtx, protected)
+					Expect(status.Code(err)).To(Equal(codes.PermissionDenied), "secret %s", protected.GetMetadata().GetName())
+				}
+
+				adminCtx := auth.ContextWithToken(ctx, &jwt.Token{Claims: jwt.MapClaims{
+					"iss": issuer, "azp": "another-client", "preferred_username": username,
+					"groups": []any{"admins"},
+				}})
+				mockStore.EXPECT().Fetch(gomock.Any(), auth.SharedTenant, "", "service-account-credential").Return(credentialData, nil)
+				response, err := get(adminCtx, credential)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(response.(*privatev1.SecretsGetResponse).GetObject().GetData()).To(Equal(credentialData))
+			})
+
 			It("Fetches data from vault", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).

@@ -82,6 +82,9 @@ type TenantConfig struct {
 	// Enabled indicates whether the tenant should be enabled in the identity provider. Nil defaults to true.
 	Enabled *bool
 
+	// CreateBreakGlassAccount controls whether the tenant gets a break-glass account.
+	CreateBreakGlassAccount bool
+
 	// Domains is the list of e-mail domains associated with the tenant.
 	Domains []string
 
@@ -171,6 +174,9 @@ func (m *TenantManager) CreateTenant(ctx context.Context, config *TenantConfig) 
 	m.logger.InfoContext(ctx, "Tenant created in IdP",
 		slog.String("tenant", createdTenant.Name),
 	)
+	if !config.CreateBreakGlassAccount {
+		return nil, nil
+	}
 
 	// Step 2: Create break-glass account
 	credentials, err = m.createBreakGlassAccount(ctx, config)

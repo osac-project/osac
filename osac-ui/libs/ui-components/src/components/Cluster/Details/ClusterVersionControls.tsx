@@ -12,8 +12,8 @@ import { useGetResource, useListAllResources } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceStatusLabel } from '../../Resource/ResourceStatusLabel';
 import {
-  getActiveControlPlaneUpgradeTarget,
-  getControlPlaneUpgradeHistory,
+  getActiveClusterUpgradeTarget,
+  getClusterUpgradeHistory,
 } from '../ListPage/clusterDisplay';
 
 interface ClusterVersionControlsProps {
@@ -48,21 +48,16 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
     cluster.status?.state === ClusterState.FAILED ||
     cluster.status?.state === ClusterState.DELETING ||
     cluster.status?.state === ClusterState.DELETE_FAILED;
-  const latestUpgrade = cluster.status?.upgradeHistory[0];
-  const controlPlaneUpgradeHistory = getControlPlaneUpgradeHistory(cluster);
-  const latestControlPlaneUpgrade = controlPlaneUpgradeHistory[0];
+  const clusterUpgradeHistory = getClusterUpgradeHistory(cluster);
+  const latestClusterUpgrade = clusterUpgradeHistory[0];
   const observedVersion = cluster.status?.observedVersion;
-  const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
-  const upgradePending = latestControlPlaneUpgrade?.state === ClusterUpgradeState.PENDING;
-  const upgradeProgressing = latestControlPlaneUpgrade?.state === ClusterUpgradeState.PROGRESSING;
-  const upgradeFailed = latestControlPlaneUpgrade?.state === ClusterUpgradeState.FAILED;
-  const upgradeTimedOut = latestControlPlaneUpgrade?.state === ClusterUpgradeState.TIMED_OUT;
+  const activeTarget = getActiveClusterUpgradeTarget(cluster);
+  const upgradePending = latestClusterUpgrade?.state === ClusterUpgradeState.PENDING;
+  const upgradeProgressing = latestClusterUpgrade?.state === ClusterUpgradeState.PROGRESSING;
+  const upgradeFailed = latestClusterUpgrade?.state === ClusterUpgradeState.FAILED;
+  const upgradeTimedOut = latestClusterUpgrade?.state === ClusterUpgradeState.TIMED_OUT;
   const upgradeInProgress = upgradePending || upgradeProgressing;
-  const latestAttemptInProgress =
-    latestUpgrade?.state === ClusterUpgradeState.PENDING ||
-    latestUpgrade?.state === ClusterUpgradeState.PROGRESSING;
-  const latestAttemptTimedOut = latestUpgrade?.state === ClusterUpgradeState.TIMED_OUT;
-  const timedOut = upgradeTimedOut || latestAttemptTimedOut;
+  const timedOut = upgradeTimedOut;
   const configuredVersionQuery = useGetResource(
     ClusterVersions,
     { id: configuredVersionId ?? '' },
@@ -77,14 +72,12 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   let action: UpgradeActionState;
   if (hideUpgradeControls) {
     action = { kind: 'hidden' };
-  } else if (upgradeInProgress || latestAttemptInProgress) {
+  } else if (upgradeInProgress) {
     action = { kind: 'in-progress' };
   } else if (timedOut) {
     action = {
       kind: 'blocked',
-      reason:
-        (upgradeTimedOut ? latestControlPlaneUpgrade?.message : latestUpgrade?.message) ||
-        t('No definitive result within the timeout.'),
+      reason: latestClusterUpgrade?.message || t('No definitive result within the timeout.'),
     };
   } else if (!configuredVersionId || (upgradeFailed && !observedVersion)) {
     action = { kind: 'blocked', reason: t('Upgrade eligibility is unavailable.') };
@@ -98,7 +91,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
     action = { kind: 'blocked', reason: t('Could not load upgrade options.') };
   } else {
     const failedVersions = new Set(
-      controlPlaneUpgradeHistory
+      clusterUpgradeHistory
         .filter((entry) => entry.state === ClusterUpgradeState.FAILED)
         .map((entry) => entry.targetVersion),
     );
@@ -136,17 +129,17 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   let explanation: string | undefined;
   if (upgradeFailed) {
     explanation =
-      latestControlPlaneUpgrade?.message || t('HyperShift reported a terminal error and stopped.');
+      latestClusterUpgrade?.message || t('HyperShift reported a terminal error and stopped.');
   } else if (timedOut) {
     explanation = t('HyperShift may still complete the upgrade.');
   } else if (upgradeInProgress) {
-    explanation = latestControlPlaneUpgrade?.message || undefined;
+    explanation = latestClusterUpgrade?.message || undefined;
   } else if (action.kind === 'blocked') {
     explanation = action.reason;
   } else if (action.kind === 'loading') {
     explanation = t('Checking upgrade options');
   } else if (action.kind === 'in-progress') {
-    explanation = latestUpgrade?.message || undefined;
+    explanation = latestClusterUpgrade?.message || undefined;
   }
 
   return (

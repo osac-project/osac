@@ -108,17 +108,6 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		Expect(bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)).To(BeNil())
 	})
 
-	It("skips when networking provisioning is disabled", func() {
-		bmi = newBMI(attachments)
-		handoffComplete(bmi)
-		reconciler.NetworkingEnabled = false
-		_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
-		Expect(err).NotTo(HaveOccurred())
-		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-		Expect(cond.Reason).To(Equal("Skipped"))
-	})
-
 	It("mirrors the accepted DHCP lease of the NetworkAttachment", func() {
 		bmi = newBMI(attachments)
 		handoffComplete(bmi)

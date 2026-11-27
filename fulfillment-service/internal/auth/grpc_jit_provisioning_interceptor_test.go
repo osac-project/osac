@@ -299,7 +299,7 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			Expect(mockProvisioner.callCount).To(Equal(0))
 		})
 
-		It("Does not provision platform admins with universal visibility", func() {
+		It("Provisions platform admins with universal visibility", func() {
 			token := createKeycloakUserToken("tenant1", "frank", nil)
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
@@ -319,10 +319,13 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handlerCalled).To(BeTrue())
-			Expect(mockProvisioner.callCount).To(Equal(0))
+			// Verify provisioner was called:
+			Expect(mockProvisioner.callCount).To(Equal(1))
+			Expect(mockProvisioner.lastUsername).To(Equal("frank"))
+			Expect(mockProvisioner.lastTenant).To(Equal(SystemTenant))
 		})
 
-		It("Does not provision users with system tenant", func() {
+		It("Provisions users with system tenant", func() {
 			token := createKeycloakUserToken(SystemTenant, "admin", nil)
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
@@ -341,7 +344,10 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handlerCalled).To(BeTrue())
-			Expect(mockProvisioner.callCount).To(Equal(0))
+			// Verify provisioner was called:
+			Expect(mockProvisioner.callCount).To(Equal(1))
+			Expect(mockProvisioner.lastUsername).To(Equal("admin"))
+			Expect(mockProvisioner.lastTenant).To(Equal(SystemTenant))
 		})
 
 		It("Does not provision users with shared tenant", func() {

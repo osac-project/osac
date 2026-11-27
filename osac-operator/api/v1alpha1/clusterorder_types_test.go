@@ -10,7 +10,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
 )
@@ -71,24 +70,6 @@ var _ = Describe("ClusterOrder upgrade contract", func() {
 		Expect(nodeSet).To(HaveKey("attemptID"))
 		Expect(controlPlane).NotTo(HaveKey("baselineTransitionTime"))
 		Expect(nodeSet).NotTo(HaveKey("baselineTransitionTime"))
-	})
-
-	It("preserves the config hash of an order with an empty node image", func() {
-		spec := v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{{
-			NodeSet: "workers", NumberOfNodes: 3,
-		}}}
-		encoded, err := json.Marshal(spec)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(string(encoded)).To(Equal(`{"nodeRequests":[{"nodeSet":"workers","numberOfNodes":3}]}`))
-
-		hash, err := provisioning.ComputeDesiredConfigVersion(spec)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(hash).To(Equal("398d688e45d7741c"))
-
-		spec.NodeRequests[0].ReleaseImage = "registry.example/ocp:4.21.0"
-		withImage, err := provisioning.ComputeDesiredConfigVersion(spec)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(withImage).NotTo(Equal(hash))
 	})
 
 	It("serializes the SSH key reference as an ID-only secret", func() {

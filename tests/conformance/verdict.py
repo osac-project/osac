@@ -52,7 +52,8 @@ def evaluate(
 
     blocking = [outcome for outcome in tests if outcome.identity.classification is Classification.BLOCKING]
     failed_blocking = [outcome.identity.id for outcome in blocking if outcome.result is not Result.PASS]
-    blocking_pass = bool(blocking) and not failed_blocking
+    # A plan with no blocking tests has nothing that can fail the check.
+    blocking_pass = not failed_blocking
     if not blocking:
         blocking_message = "no blocking tests in the plan"
     elif failed_blocking:

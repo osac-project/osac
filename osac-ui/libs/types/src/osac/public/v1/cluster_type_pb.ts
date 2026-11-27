@@ -21,8 +21,6 @@ import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Any } from "../../../google/protobuf/any_pb";
 import { file_google_protobuf_any } from "../../../google/protobuf/any_pb";
-import type { Empty } from "../../../google/protobuf/empty_pb";
-import { file_google_protobuf_empty } from "../../../google/protobuf/empty_pb";
 import type { Timestamp } from "../../../google/protobuf/timestamp_pb";
 import { file_google_protobuf_timestamp } from "../../../google/protobuf/timestamp_pb";
 import type { AddOnOperatorReference } from "./add_on_operator_type_pb";
@@ -41,7 +39,7 @@ import type { ConditionStatus } from "./condition_status_type_pb";
 import { file_osac_public_v1_condition_status_type } from "./condition_status_type_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
-import type { SecretLocalReference } from "./secret_type_pb";
+import type { SecretLocalReference, SecretReference } from "./secret_type_pb";
 import { file_osac_public_v1_secret_type } from "./secret_type_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -49,7 +47,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/cluster_type.proto.
  */
 export const file_osac_public_v1_cluster_type: GenFile = /*@__PURE__*/
-  fileDesc("CiFvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIqEBCgdDbHVzdGVyEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESKQoEc3BlYxgDIAEoCzIbLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTcGVjEjMKBnN0YXR1cxgEIAEoCzIdLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTdGF0dXNCBOJBAQMi4QcKC0NsdXN0ZXJTcGVjEjoKCHRlbXBsYXRlGAEgASgLMigub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlUmVmZXJlbmNlElAKE3RlbXBsYXRlX3BhcmFtZXRlcnMYAiADKAsyMy5vc2FjLnB1YmxpYy52MS5DbHVzdGVyU3BlYy5UZW1wbGF0ZVBhcmFtZXRlcnNFbnRyeRJyCglub2RlX3NldHMYAyADKAsyKS5vc2FjLnB1YmxpYy52MS5DbHVzdGVyU3BlYy5Ob2RlU2V0c0VudHJ5QjS6SDGaAS4iLHIqEAEYPzIkXlthLXowLTldKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEhsKDnNzaF9wdWJsaWNfa2V5GAUgASgJSACIAQESOAoHdmVyc2lvbhgGIAEoCzInLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlEjQKB25ldHdvcmsYByABKAsyHi5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTmV0d29ya0gBiAEBEkEKDGNhdGFsb2dfaXRlbRgIIAEoCzIrLm9zYWMucHVibGljLnYxLkNsdXN0ZXJDYXRhbG9nSXRlbVJlZmVyZW5jZRJKChJuZXR3b3JrX2F0dGFjaG1lbnQYCSABKAsyKC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTmV0d29ya0F0dGFjaG1lbnRCBOJBAQUSLgobYXV0b19leHRlcm5hbF9pcF9hdHRhY2htZW50GAogASgIQgTiQQEFSAKIAQESQAoScHVsbF9zZWNyZXRfc2VjcmV0GAsgASgLMiQub3NhYy5wdWJsaWMudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2USTgoQYWRkX29uX29wZXJhdG9ycxgMIAMoCzImLm9zYWMucHVibGljLnYxLkFkZE9uT3BlcmF0b3JSZWZlcmVuY2VCDOJBAQW6SAWSAQIQIBpPChdUZW1wbGF0ZVBhcmFtZXRlcnNFbnRyeRILCgNrZXkYASABKAkSIwoFdmFsdWUYAiABKAsyFC5nb29nbGUucHJvdG9idWYuQW55OgI4ARpPCg1Ob2RlU2V0c0VudHJ5EgsKA2tleRgBIAEoCRItCgV2YWx1ZRgCIAEoCzIeLm9zYWMucHVibGljLnYxLkNsdXN0ZXJOb2RlU2V0OgI4AUIRCg9fc3NoX3B1YmxpY19rZXlCCgoIX25ldHdvcmtCHgocX2F1dG9fZXh0ZXJuYWxfaXBfYXR0YWNobWVudEoECAQQBVILcHVsbF9zZWNyZXQibgoTQWRkT25PcGVyYXRvclN0YXR1cxIMCgRuYW1lGAEgASgJEjgKBXN0YXRlGAIgASgOMikub3NhYy5wdWJsaWMudjEuQWRkT25PcGVyYXRvckluc3RhbGxTdGF0ZRIPCgdtZXNzYWdlGAMgASgJIoYHCg1DbHVzdGVyU3RhdHVzEisKBXN0YXRlGAEgASgOMhwub3NhYy5wdWJsaWMudjEuQ2x1c3RlclN0YXRlEjQKCmNvbmRpdGlvbnMYAiADKAsyIC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyQ29uZGl0aW9uEg8KB2FwaV91cmwYAyABKAkSEwoLY29uc29sZV91cmwYBCABKAkSdAoJbm9kZV9zZXRzGAUgAygLMisub3NhYy5wdWJsaWMudjEuQ2x1c3RlclN0YXR1cy5Ob2RlU2V0c0VudHJ5QjS6SDGaAS4iLHIqEAEYPzIkXlthLXowLTldKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEhQKDGFwaV9lbmRwb2ludBgGIAEoCRIYChBpbmdyZXNzX2VuZHBvaW50GAcgASgJEj4KFXN0YXRlX3RyYW5zaXRpb25fdGltZRgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBIAIgBARI/ChFrdWJlY29uZmlnX3NlY3JldBgJIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlEj0KD3Bhc3N3b3JkX3NlY3JldBgKIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlEj0KEGFkZF9vbl9vcGVyYXRvcnMYDCADKAsyIy5vc2FjLnB1YmxpYy52MS5BZGRPbk9wZXJhdG9yU3RhdHVzEh4KEG9ic2VydmVkX3ZlcnNpb24YDSABKAlCBOJBAQMSSQoPdXBncmFkZV9oaXN0b3J5GA8gAygLMioub3NhYy5wdWJsaWMudjEuQ2x1c3RlclVwZ3JhZGVIaXN0b3J5RW50cnlCBOJBAQMSRgoXdmVyc2lvbl90cmFuc2l0aW9uX3RpbWUYECABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wQgTiQQEDSAGIAQEaTwoNTm9kZVNldHNFbnRyeRILCgNrZXkYASABKAkSLQoFdmFsdWUYAiABKAsyHi5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTm9kZVNldDoCOAFCGAoWX3N0YXRlX3RyYW5zaXRpb25fdGltZUIaChhfdmVyc2lvbl90cmFuc2l0aW9uX3RpbWVKBAgOEA9SB3VwZ3JhZGUiewoXQ2x1c3RlclVwZ3JhZGVDb21wb25lbnQSLwoNY29udHJvbF9wbGFuZRgBIAEoCzIWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eUgAEh4KC25vZGVfc2V0X2lkGAIgASgJQge6SARyAhABSABCDwoGdGFyZ2V0EgW6SAIIASLDAgoaQ2x1c3RlclVwZ3JhZGVIaXN0b3J5RW50cnkSQgoJY29tcG9uZW50GAEgASgLMicub3NhYy5wdWJsaWMudjEuQ2x1c3RlclVwZ3JhZGVDb21wb25lbnRCBrpIA8gBARIWCg5zb3VyY2VfdmVyc2lvbhgCIAEoCRIWCg50YXJnZXRfdmVyc2lvbhgDIAEoCRIxCg1hY2NlcHRlZF90aW1lGAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBI5ChVzdGF0ZV90cmFuc2l0aW9uX3RpbWUYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjIKBXN0YXRlGAYgASgOMiMub3NhYy5wdWJsaWMudjEuQ2x1c3RlclVwZ3JhZGVTdGF0ZRIPCgdtZXNzYWdlGAcgASgJIvMBChBDbHVzdGVyQ29uZGl0aW9uEjIKBHR5cGUYASABKA4yJC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyQ29uZGl0aW9uVHlwZRIvCgZzdGF0dXMYAiABKA4yHy5vc2FjLnB1YmxpYy52MS5Db25kaXRpb25TdGF0dXMSOAoUbGFzdF90cmFuc2l0aW9uX3RpbWUYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhMKBnJlYXNvbhgEIAEoCUgAiAEBEhQKB21lc3NhZ2UYBSABKAlIAYgBAUIJCgdfcmVhc29uQgoKCF9tZXNzYWdlIvcBCg5DbHVzdGVyTm9kZVNldBIaCgRzaXplGAIgASgFQge6SAQaAiAASACIAQESVQoXYmFyZW1ldGFsX2luc3RhbmNlX3R5cGUYBCABKAsyLi5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZVR5cGVSZWZlcmVuY2VCBOJBAQUSOAoHdmVyc2lvbhgFIAEoCzInLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlEh4KEG9ic2VydmVkX3ZlcnNpb24YBiABKAlCBOJBAQNCBwoFX3NpemVKBAgBEAJSCWhvc3RfdHlwZSIxChVDbHVzdGVyTG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSr6AQoZQWRkT25PcGVyYXRvckluc3RhbGxTdGF0ZRItCilBRERfT05fT1BFUkFUT1JfSU5TVEFMTF9TVEFURV9VTlNQRUNJRklFRBAAEikKJUFERF9PTl9PUEVSQVRPUl9JTlNUQUxMX1NUQVRFX1BFTkRJTkcQARIsCihBRERfT05fT1BFUkFUT1JfSU5TVEFMTF9TVEFURV9JTlNUQUxMSU5HEAISKwonQUREX09OX09QRVJBVE9SX0lOU1RBTExfU1RBVEVfSU5TVEFMTEVEEAMSKAokQUREX09OX09QRVJBVE9SX0lOU1RBTExfU1RBVEVfRkFJTEVEEAQqngIKE0NsdXN0ZXJVcGdyYWRlU3RhdGUSJQohQ0xVU1RFUl9VUEdSQURFX1NUQVRFX1VOU1BFQ0lGSUVEEAASIQodQ0xVU1RFUl9VUEdSQURFX1NUQVRFX1BFTkRJTkcQARIlCiFDTFVTVEVSX1VQR1JBREVfU1RBVEVfUFJPR1JFU1NJTkcQAhIjCh9DTFVTVEVSX1VQR1JBREVfU1RBVEVfVElNRURfT1VUEAMSIwofQ0xVU1RFUl9VUEdSQURFX1NUQVRFX1NVQ0NFRURFRBAEEiAKHENMVVNURVJfVVBHUkFERV9TVEFURV9GQUlMRUQQBRIqCiZDTFVTVEVSX1VQR1JBREVfU1RBVEVfTk9ERV9TRVRfUkVNT1ZFRBAGKrwBCgxDbHVzdGVyU3RhdGUSHQoZQ0xVU1RFUl9TVEFURV9VTlNQRUNJRklFRBAAEh0KGUNMVVNURVJfU1RBVEVfUFJPR1JFU1NJTkcQARIXChNDTFVTVEVSX1NUQVRFX1JFQURZEAISGAoUQ0xVU1RFUl9TVEFURV9GQUlMRUQQAxIaChZDTFVTVEVSX1NUQVRFX0RFTEVUSU5HEAQSHwobQ0xVU1RFUl9TVEFURV9ERUxFVEVfRkFJTEVEEAUqvwIKFENsdXN0ZXJDb25kaXRpb25UeXBlEiYKIkNMVVNURVJfQ09ORElUSU9OX1RZUEVfVU5TUEVDSUZJRUQQABImCiJDTFVTVEVSX0NPTkRJVElPTl9UWVBFX1BST0dSRVNTSU5HEAESIAocQ0xVU1RFUl9DT05ESVRJT05fVFlQRV9SRUFEWRACEiEKHUNMVVNURVJfQ09ORElUSU9OX1RZUEVfRkFJTEVEEAMSIwofQ0xVU1RFUl9DT05ESVRJT05fVFlQRV9ERUdSQURFRBAEEjUKMUNMVVNURVJfQ09ORElUSU9OX1RZUEVfV09SS0VSX1BST1ZJU0lPTklOR19GQUlMRUQQBRI2CjJDTFVTVEVSX0NPTkRJVElPTl9UWVBFX1dPUktFUl9QUk9WSVNJT05JTkdfQkxPQ0tFRBAGYgZwcm90bzM", [file_buf_validate_validate, file_google_api_field_behavior, file_google_protobuf_any, file_google_protobuf_empty, file_google_protobuf_timestamp, file_osac_public_v1_add_on_operator_type, file_osac_public_v1_baremetal_instance_type_type, file_osac_public_v1_cluster_catalog_item_type, file_osac_public_v1_cluster_common_type, file_osac_public_v1_cluster_template_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_condition_status_type, file_osac_public_v1_metadata_type, file_osac_public_v1_secret_type]);
+  fileDesc("CiFvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIqEBCgdDbHVzdGVyEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESKQoEc3BlYxgDIAEoCzIbLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTcGVjEjMKBnN0YXR1cxgEIAEoCzIdLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTdGF0dXNCBOJBAQMi/wcKC0NsdXN0ZXJTcGVjEjoKCHRlbXBsYXRlGAEgASgLMigub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlUmVmZXJlbmNlElAKE3RlbXBsYXRlX3BhcmFtZXRlcnMYAiADKAsyMy5vc2FjLnB1YmxpYy52MS5DbHVzdGVyU3BlYy5UZW1wbGF0ZVBhcmFtZXRlcnNFbnRyeRJyCglub2RlX3NldHMYAyADKAsyKS5vc2FjLnB1YmxpYy52MS5DbHVzdGVyU3BlYy5Ob2RlU2V0c0VudHJ5QjS6SDGaAS4iLHIqEAEYPzIkXlthLXowLTldKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEjYKB3NzaF9rZXkYDyABKAsyHy5vc2FjLnB1YmxpYy52MS5TZWNyZXRSZWZlcmVuY2VCBOJBAQUSOAoHdmVyc2lvbhgGIAEoCzInLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlEjQKB25ldHdvcmsYByABKAsyHi5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTmV0d29ya0gAiAEBEkEKDGNhdGFsb2dfaXRlbRgIIAEoCzIrLm9zYWMucHVibGljLnYxLkNsdXN0ZXJDYXRhbG9nSXRlbVJlZmVyZW5jZRJKChJuZXR3b3JrX2F0dGFjaG1lbnQYCSABKAsyKC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTmV0d29ya0F0dGFjaG1lbnRCBOJBAQUSLgobYXV0b19leHRlcm5hbF9pcF9hdHRhY2htZW50GAogASgIQgTiQQEFSAGIAQESQAoScHVsbF9zZWNyZXRfc2VjcmV0GAsgASgLMiQub3NhYy5wdWJsaWMudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2USTgoQYWRkX29uX29wZXJhdG9ycxgMIAMoCzImLm9zYWMucHVibGljLnYxLkFkZE9uT3BlcmF0b3JSZWZlcmVuY2VCDOJBAQW6SAWSAQIQIBpPChdUZW1wbGF0ZVBhcmFtZXRlcnNFbnRyeRILCgNrZXkYASABKAkSIwoFdmFsdWUYAiABKAsyFC5nb29nbGUucHJvdG9idWYuQW55OgI4ARpPCg1Ob2RlU2V0c0VudHJ5EgsKA2tleRgBIAEoCRItCgV2YWx1ZRgCIAEoCzIeLm9zYWMucHVibGljLnYxLkNsdXN0ZXJOb2RlU2V0OgI4AUIKCghfbmV0d29ya0IeChxfYXV0b19leHRlcm5hbF9pcF9hdHRhY2htZW50SgQIBBAFSgQIBRAGUgtwdWxsX3NlY3JldFIOc3NoX3B1YmxpY19rZXkibgoTQWRkT25PcGVyYXRvclN0YXR1cxIMCgRuYW1lGAEgASgJEjgKBXN0YXRlGAIgASgOMikub3NhYy5wdWJsaWMudjEuQWRkT25PcGVyYXRvckluc3RhbGxTdGF0ZRIPCgdtZXNzYWdlGAMgASgJIowHCg1DbHVzdGVyU3RhdHVzEisKBXN0YXRlGAEgASgOMhwub3NhYy5wdWJsaWMudjEuQ2x1c3RlclN0YXRlEjQKCmNvbmRpdGlvbnMYAiADKAsyIC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyQ29uZGl0aW9uEg8KB2FwaV91cmwYAyABKAkSEwoLY29uc29sZV91cmwYBCABKAkSdAoJbm9kZV9zZXRzGAUgAygLMisub3NhYy5wdWJsaWMudjEuQ2x1c3RlclN0YXR1cy5Ob2RlU2V0c0VudHJ5QjS6SDGaAS4iLHIqEAEYPzIkXlthLXowLTldKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEhQKDGFwaV9lbmRwb2ludBgGIAEoCRIYChBpbmdyZXNzX2VuZHBvaW50GAcgASgJEj4KFXN0YXRlX3RyYW5zaXRpb25fdGltZRgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBIAIgBARI/ChFrdWJlY29uZmlnX3NlY3JldBgJIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlEj0KD3Bhc3N3b3JkX3NlY3JldBgKIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlEj0KEGFkZF9vbl9vcGVyYXRvcnMYDCADKAsyIy5vc2FjLnB1YmxpYy52MS5BZGRPbk9wZXJhdG9yU3RhdHVzEh4KEG9ic2VydmVkX3ZlcnNpb24YDSABKAlCBOJBAQMSSQoPdXBncmFkZV9oaXN0b3J5GA8gAygLMioub3NhYy5wdWJsaWMudjEuQ2x1c3RlclVwZ3JhZGVIaXN0b3J5RW50cnlCBOJBAQMSRgoXdmVyc2lvbl90cmFuc2l0aW9uX3RpbWUYECABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wQgTiQQEDSAGIAQEaVQoNTm9kZVNldHNFbnRyeRILCgNrZXkYASABKAkSMwoFdmFsdWUYAiABKAsyJC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTm9kZVNldFN0YXR1czoCOAFCGAoWX3N0YXRlX3RyYW5zaXRpb25fdGltZUIaChhfdmVyc2lvbl90cmFuc2l0aW9uX3RpbWVKBAgOEA9SB3VwZ3JhZGUi/wEKGkNsdXN0ZXJVcGdyYWRlSGlzdG9yeUVudHJ5EhYKDnNvdXJjZV92ZXJzaW9uGAEgASgJEhYKDnRhcmdldF92ZXJzaW9uGAIgASgJEjEKDWFjY2VwdGVkX3RpbWUYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjkKFXN0YXRlX3RyYW5zaXRpb25fdGltZRgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMgoFc3RhdGUYBSABKA4yIy5vc2FjLnB1YmxpYy52MS5DbHVzdGVyVXBncmFkZVN0YXRlEg8KB21lc3NhZ2UYBiABKAki8wEKEENsdXN0ZXJDb25kaXRpb24SMgoEdHlwZRgBIAEoDjIkLm9zYWMucHVibGljLnYxLkNsdXN0ZXJDb25kaXRpb25UeXBlEi8KBnN0YXR1cxgCIAEoDjIfLm9zYWMucHVibGljLnYxLkNvbmRpdGlvblN0YXR1cxI4ChRsYXN0X3RyYW5zaXRpb25fdGltZRgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoGcmVhc29uGAQgASgJSACIAQESFAoHbWVzc2FnZRgFIAEoCUgBiAEBQgkKB19yZWFzb25CCgoIX21lc3NhZ2UirAEKDkNsdXN0ZXJOb2RlU2V0EhoKBHNpemUYAiABKAVCB7pIBBoCIABIAIgBARJVChdiYXJlbWV0YWxfaW5zdGFuY2VfdHlwZRgEIAEoCzIuLm9zYWMucHVibGljLnYxLkJhcmVNZXRhbEluc3RhbmNlVHlwZVJlZmVyZW5jZUIE4kEBBUIHCgVfc2l6ZUoECAEQAkoECAUQBlIJaG9zdF90eXBlUgd2ZXJzaW9uIqwBChRDbHVzdGVyTm9kZVNldFN0YXR1cxIaCgRzaXplGAIgASgFQge6SAQaAiAASACIAQESTwoXYmFyZW1ldGFsX2luc3RhbmNlX3R5cGUYBCABKAsyLi5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZVR5cGVSZWZlcmVuY2USHgoQb2JzZXJ2ZWRfdmVyc2lvbhgGIAEoCUIE4kEBA0IHCgVfc2l6ZSIxChVDbHVzdGVyTG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSr6AQoZQWRkT25PcGVyYXRvckluc3RhbGxTdGF0ZRItCilBRERfT05fT1BFUkFUT1JfSU5TVEFMTF9TVEFURV9VTlNQRUNJRklFRBAAEikKJUFERF9PTl9PUEVSQVRPUl9JTlNUQUxMX1NUQVRFX1BFTkRJTkcQARIsCihBRERfT05fT1BFUkFUT1JfSU5TVEFMTF9TVEFURV9JTlNUQUxMSU5HEAISKwonQUREX09OX09QRVJBVE9SX0lOU1RBTExfU1RBVEVfSU5TVEFMTEVEEAMSKAokQUREX09OX09QRVJBVE9SX0lOU1RBTExfU1RBVEVfRkFJTEVEEAQq8gEKE0NsdXN0ZXJVcGdyYWRlU3RhdGUSJQohQ0xVU1RFUl9VUEdSQURFX1NUQVRFX1VOU1BFQ0lGSUVEEAASIQodQ0xVU1RFUl9VUEdSQURFX1NUQVRFX1BFTkRJTkcQARIlCiFDTFVTVEVSX1VQR1JBREVfU1RBVEVfUFJPR1JFU1NJTkcQAhIjCh9DTFVTVEVSX1VQR1JBREVfU1RBVEVfVElNRURfT1VUEAMSIwofQ0xVU1RFUl9VUEdSQURFX1NUQVRFX1NVQ0NFRURFRBAEEiAKHENMVVNURVJfVVBHUkFERV9TVEFURV9GQUlMRUQQBSq8AQoMQ2x1c3RlclN0YXRlEh0KGUNMVVNURVJfU1RBVEVfVU5TUEVDSUZJRUQQABIdChlDTFVTVEVSX1NUQVRFX1BST0dSRVNTSU5HEAESFwoTQ0xVU1RFUl9TVEFURV9SRUFEWRACEhgKFENMVVNURVJfU1RBVEVfRkFJTEVEEAMSGgoWQ0xVU1RFUl9TVEFURV9ERUxFVElORxAEEh8KG0NMVVNURVJfU1RBVEVfREVMRVRFX0ZBSUxFRBAFKr8CChRDbHVzdGVyQ29uZGl0aW9uVHlwZRImCiJDTFVTVEVSX0NPTkRJVElPTl9UWVBFX1VOU1BFQ0lGSUVEEAASJgoiQ0xVU1RFUl9DT05ESVRJT05fVFlQRV9QUk9HUkVTU0lORxABEiAKHENMVVNURVJfQ09ORElUSU9OX1RZUEVfUkVBRFkQAhIhCh1DTFVTVEVSX0NPTkRJVElPTl9UWVBFX0ZBSUxFRBADEiMKH0NMVVNURVJfQ09ORElUSU9OX1RZUEVfREVHUkFERUQQBBI1CjFDTFVTVEVSX0NPTkRJVElPTl9UWVBFX1dPUktFUl9QUk9WSVNJT05JTkdfRkFJTEVEEAUSNgoyQ0xVU1RFUl9DT05ESVRJT05fVFlQRV9XT1JLRVJfUFJPVklTSU9OSU5HX0JMT0NLRUQQBmIGcHJvdG8z", [file_buf_validate_validate, file_google_api_field_behavior, file_google_protobuf_any, file_google_protobuf_timestamp, file_osac_public_v1_add_on_operator_type, file_osac_public_v1_baremetal_instance_type_type, file_osac_public_v1_cluster_catalog_item_type, file_osac_public_v1_cluster_common_type, file_osac_public_v1_cluster_template_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_condition_status_type, file_osac_public_v1_metadata_type, file_osac_public_v1_secret_type]);
 
 /**
  * Contains the details of the cluster.
@@ -205,18 +203,23 @@ export type ClusterSpec = Message<"osac.public.v1.ClusterSpec"> & {
    * availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
    * `DEGRADED` condition.
    *
+   * Quota: for each node set, as many hosts as its size, of the node set's bare metal instance type.
+   *
    * @generated from field: map<string, osac.public.v1.ClusterNodeSet> node_sets = 3;
    */
   nodeSets: { [key: string]: ClusterNodeSet };
 
   /**
-   * SSH public key installed into the `authorized_keys` file on cluster worker nodes.
+   * Reference to a Secret containing an OpenSSH public key installed into the
+   * `authorized_keys` file on cluster worker nodes.
    *
+   * The Secret must have type SECRET_TYPE_SSH_PUBLIC_KEY and a non-empty
+   * data["public_key"] entry. The reference is resolved to its canonical values.
    * If not provided, the provider's default SSH key is used.
    *
-   * @generated from field: optional string ssh_public_key = 5;
+   * @generated from field: osac.public.v1.SecretReference ssh_key = 15;
    */
-  sshPublicKey?: string | undefined;
+  sshKey?: SecretReference | undefined;
 
   /**
    * Reference to a ClusterVersion resource.
@@ -270,6 +273,8 @@ export type ClusterSpec = Message<"osac.public.v1.ClusterSpec"> & {
    * The ExternalIP pool is selected automatically based on available capacity.
    *
    * This field is immutable after creation — it cannot be changed on update.
+   *
+   * Quota: two external IP addresses, one for the cluster's API and one for its apps.
    *
    * @generated from field: optional bool auto_external_ip_attachment = 10;
    */
@@ -413,9 +418,9 @@ export type ClusterStatus = Message<"osac.public.v1.ClusterStatus"> & {
    *
    * The key of the map is the unique identifier of the node set for this cluster.
    *
-   * @generated from field: map<string, osac.public.v1.ClusterNodeSet> node_sets = 5;
+   * @generated from field: map<string, osac.public.v1.ClusterNodeSetStatus> node_sets = 5;
    */
-  nodeSets: { [key: string]: ClusterNodeSet };
+  nodeSets: { [key: string]: ClusterNodeSetStatus };
 
   /**
    * Internal API server VIP allocated by MetalLB for the cluster.
@@ -486,7 +491,7 @@ export type ClusterStatus = Message<"osac.public.v1.ClusterStatus"> & {
   observedVersion: string;
 
   /**
-   * Component upgrade attempts, newest first. Earlier entries retain their place as their state changes.
+   * Whole-cluster upgrade history, newest first.
    *
    * @generated from field: repeated osac.public.v1.ClusterUpgradeHistoryEntry upgrade_history = 15;
    */
@@ -513,92 +518,50 @@ export const ClusterStatusSchema: GenMessage<ClusterStatus> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_cluster_type, 3);
 
 /**
- * Identifies the control plane or a node set within the Cluster being upgraded.
- *
- * @generated from message osac.public.v1.ClusterUpgradeComponent
- */
-export type ClusterUpgradeComponent = Message<"osac.public.v1.ClusterUpgradeComponent"> & {
-  /**
-   * @generated from oneof osac.public.v1.ClusterUpgradeComponent.target
-   */
-  target: {
-    /**
-     * Selects the Cluster's control plane.
-     *
-     * @generated from field: google.protobuf.Empty control_plane = 1;
-     */
-    value: Empty;
-    case: "controlPlane";
-  } | {
-    /**
-     * ID of the selected node set, as keyed in the Cluster's spec.node_sets.
-     *
-     * @generated from field: string node_set_id = 2;
-     */
-    value: string;
-    case: "nodeSetId";
-  } | { case: undefined; value?: undefined };
-};
-
-/**
- * Describes the message osac.public.v1.ClusterUpgradeComponent.
- * Use `create(ClusterUpgradeComponentSchema)` to create a new message.
- */
-export const ClusterUpgradeComponentSchema: GenMessage<ClusterUpgradeComponent> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_type, 4);
-
-/**
- * State and progress of one component upgrade attempt.
+ * State and result of one whole-cluster upgrade attempt.
  *
  * @generated from message osac.public.v1.ClusterUpgradeHistoryEntry
  */
 export type ClusterUpgradeHistoryEntry = Message<"osac.public.v1.ClusterUpgradeHistoryEntry"> & {
   /**
-   * Control plane or node set selected for this attempt.
+   * OpenShift version observed on the hosted control plane when the attempt was accepted.
    *
-   * @generated from field: osac.public.v1.ClusterUpgradeComponent component = 1;
-   */
-  component?: ClusterUpgradeComponent | undefined;
-
-  /**
-   * OpenShift version observed on the selected component when the attempt was accepted, as a semver string.
-   *
-   * @generated from field: string source_version = 2;
+   * @generated from field: string source_version = 1;
    */
   sourceVersion: string;
 
   /**
-   * OpenShift version requested for the selected component, as a semver string.
+   * OpenShift version requested for the whole cluster.
    *
-   * @generated from field: string target_version = 3;
+   * @generated from field: string target_version = 2;
    */
   targetVersion: string;
 
   /**
-   * Time OSAC accepted the attempt.
+   * Time OSAC accepted the upgrade attempt.
    *
-   * @generated from field: google.protobuf.Timestamp accepted_time = 4;
+   * @generated from field: google.protobuf.Timestamp accepted_time = 3;
    */
   acceptedTime?: Timestamp | undefined;
 
   /**
-   * Time this attempt entered its current state, including a later update after TIMED_OUT.
+   * Time the aggregate attempt entered its current state.
    *
-   * @generated from field: google.protobuf.Timestamp state_transition_time = 5;
+   * @generated from field: google.protobuf.Timestamp state_transition_time = 4;
    */
   stateTransitionTime?: Timestamp | undefined;
 
   /**
-   * Current outcome or progress state of this attempt.
+   * Current outcome or progress of the whole-cluster attempt.
    *
-   * @generated from field: osac.public.v1.ClusterUpgradeState state = 6;
+   * @generated from field: osac.public.v1.ClusterUpgradeState state = 5;
    */
   state: ClusterUpgradeState;
 
   /**
-   * Human-readable explanation of the state, including any failure or timeout reason.
+   * Human-readable explanation of the aggregate state, including any component reason.
    *
-   * @generated from field: string message = 7;
+   * @generated from field: string message = 6;
    */
   message: string;
 };
@@ -608,7 +571,7 @@ export type ClusterUpgradeHistoryEntry = Message<"osac.public.v1.ClusterUpgradeH
  * Use `create(ClusterUpgradeHistoryEntrySchema)` to create a new message.
  */
 export const ClusterUpgradeHistoryEntrySchema: GenMessage<ClusterUpgradeHistoryEntry> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_type, 5);
+  messageDesc(file_osac_public_v1_cluster_type, 4);
 
 /**
  * Contains the details of a condition that describes the status of a cluster.
@@ -661,7 +624,7 @@ export type ClusterCondition = Message<"osac.public.v1.ClusterCondition"> & {
  * Use `create(ClusterConditionSchema)` to create a new message.
  */
 export const ClusterConditionSchema: GenMessage<ClusterCondition> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_type, 6);
+  messageDesc(file_osac_public_v1_cluster_type, 5);
 
 /**
  * Defines a set of cluster nodes sharing the same bare metal instance type.
@@ -684,20 +647,6 @@ export type ClusterNodeSet = Message<"osac.public.v1.ClusterNodeSet"> & {
    * @generated from field: osac.public.v1.BareMetalInstanceTypeReference baremetal_instance_type = 4;
    */
   baremetalInstanceType?: BareMetalInstanceTypeReference | undefined;
-
-  /**
-   * Desired OpenShift version of this node set.
-   *
-   * @generated from field: osac.public.v1.ClusterVersionReference version = 5;
-   */
-  version?: ClusterVersionReference | undefined;
-
-  /**
-   * OpenShift version observed on this node set. Populated only in Cluster status.
-   *
-   * @generated from field: string observed_version = 6;
-   */
-  observedVersion: string;
 };
 
 /**
@@ -705,6 +654,41 @@ export type ClusterNodeSet = Message<"osac.public.v1.ClusterNodeSet"> & {
  * Use `create(ClusterNodeSetSchema)` to create a new message.
  */
 export const ClusterNodeSetSchema: GenMessage<ClusterNodeSet> = /*@__PURE__*/
+  messageDesc(file_osac_public_v1_cluster_type, 6);
+
+/**
+ * Records the server-owned state of one cluster node set.
+ *
+ * @generated from message osac.public.v1.ClusterNodeSetStatus
+ */
+export type ClusterNodeSetStatus = Message<"osac.public.v1.ClusterNodeSetStatus"> & {
+  /**
+   * Number of nodes most recently observed for this set.
+   *
+   * @generated from field: optional int32 size = 2;
+   */
+  size?: number | undefined;
+
+  /**
+   * BareMetalInstanceType most recently observed for this set.
+   *
+   * @generated from field: osac.public.v1.BareMetalInstanceTypeReference baremetal_instance_type = 4;
+   */
+  baremetalInstanceType?: BareMetalInstanceTypeReference | undefined;
+
+  /**
+   * OpenShift version observed on this node set.
+   *
+   * @generated from field: string observed_version = 6;
+   */
+  observedVersion: string;
+};
+
+/**
+ * Describes the message osac.public.v1.ClusterNodeSetStatus.
+ * Use `create(ClusterNodeSetStatusSchema)` to create a new message.
+ */
+export const ClusterNodeSetStatusSchema: GenMessage<ClusterNodeSetStatus> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_cluster_type, 7);
 
 /**
@@ -770,7 +754,8 @@ export const AddOnOperatorInstallStateSchema: GenEnum<AddOnOperatorInstallState>
   enumDesc(file_osac_public_v1_cluster_type, 0);
 
 /**
- * State of a component upgrade attempt, independent of the cluster's readiness state.
+ * State of a whole-cluster upgrade attempt, independent of the cluster's
+ * readiness state.
  *
  * @generated from enum osac.public.v1.ClusterUpgradeState
  */
@@ -783,48 +768,40 @@ export enum ClusterUpgradeState {
   UNSPECIFIED = 0,
 
   /**
-   * OSAC accepted the attempt, but HyperShift has not reported that the selected component started upgrading.
+   * The attempt was accepted, but upgrade progress has not been observed.
    *
    * @generated from enum value: CLUSTER_UPGRADE_STATE_PENDING = 1;
    */
   PENDING = 1,
 
   /**
-   * HyperShift is working toward the requested version of the selected component.
+   * The attempt is underway and has not completed.
    *
    * @generated from enum value: CLUSTER_UPGRADE_STATE_PROGRESSING = 2;
    */
   PROGRESSING = 2,
 
   /**
-   * The attempt did not reach a definitive result within the timeout. This may be recorded as a terminal history
-   * outcome, but observation continues and a later HyperShift result can update this attempt to SUCCEEDED or FAILED.
+   * The current phase exceeded its expected duration. Observation continues;
+   * progress or success can replace this warning.
    *
    * @generated from enum value: CLUSTER_UPGRADE_STATE_TIMED_OUT = 3;
    */
   TIMED_OUT = 3,
 
   /**
-   * HyperShift completed the upgrade and the selected component reached the requested version.
+   * The control plane and all participating node sets reached the requested version.
    *
    * @generated from enum value: CLUSTER_UPGRADE_STATE_SUCCEEDED = 4;
    */
   SUCCEEDED = 4,
 
   /**
-   * HyperShift reported a terminal error and stopped working toward the requested version.
+   * A participating component reported a terminal upgrade failure.
    *
    * @generated from enum value: CLUSTER_UPGRADE_STATE_FAILED = 5;
    */
   FAILED = 5,
-
-  /**
-   * The node set was removed and its NodePool deleted while this attempt was Pending or Progressing.
-   * An attempt already marked TimedOut retains that outcome after removal.
-   *
-   * @generated from enum value: CLUSTER_UPGRADE_STATE_NODE_SET_REMOVED = 6;
-   */
-  NODE_SET_REMOVED = 6,
 }
 
 /**

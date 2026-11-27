@@ -139,6 +139,9 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 
 	// Get the time before calling the handler so that we can later compute the duration of the call:
 	timeBefore := time.Now()
+	customerNetworkMethod := isCustomerNetworkMethod(info.FullMethod)
+	catalogMethod := isCatalogItemsMethod(info.FullMethod)
+	logBodies := i.bodies && !customerNetworkMethod && !catalogMethod
 
 	// Write the details of the request:
 	methodField := slog.String("method", info.FullMethod)
@@ -163,8 +166,7 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 			requestFields = append(requestFields, mdField)
 		}
 	}
-	catalogMethod := isCatalogItemsMethod(info.FullMethod)
-	if i.bodies && request != nil && !catalogMethod {
+	if logBodies && request != nil {
 		bodyField, ok := i.dumpMessage(ctx, "request", request)
 		if ok {
 			requestFields = append(requestFields, bodyField)
@@ -184,14 +186,18 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 		timeField,
 		codeField,
 	}
-	if i.bodies && response != nil && !isCatalogItemsMethod(info.FullMethod) {
+	if logBodies && response != nil {
 		bodyField, ok := i.dumpMessage(ctx, "response", response)
 		if ok {
 			responseFields = append(responseFields, bodyField)
 		}
 	}
-	if err != nil && !catalogMethod {
-		errField := slog.Any("error", err)
+	if err != nil && !customerNetworkMethod && !catalogMethod {
+		loggedError := err
+		if i.redact && isComputeInstancesListMethod(info.FullMethod) {
+			loggedError = errors.New(redactMark)
+		}
+		errField := slog.Any("error", loggedError)
 		responseFields = append(responseFields, errField)
 	}
 	i.logger.DebugContext(ctx, "Sent unary response", responseFields...)
@@ -280,6 +286,9 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 
 	// Get the time before calling the invoker so that we can later compute the duration of the call:
 	timeBefore := time.Now()
+	customerNetworkMethod := isCustomerNetworkMethod(method)
+	catalogMethod := isCatalogItemsMethod(method)
+	logBodies := i.bodies && !customerNetworkMethod && !catalogMethod
 
 	// Write the details of the request:
 	methodField := slog.String("method", method)
@@ -302,8 +311,7 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 			requestFields = append(requestFields, mdField)
 		}
 	}
-	catalogMethod := isCatalogItemsMethod(method)
-	if i.bodies && request != nil && !catalogMethod {
+	if logBodies && request != nil {
 		bodyField, ok := i.dumpMessage(ctx, "request", request)
 		if ok {
 			requestFields = append(requestFields, bodyField)
@@ -326,26 +334,33 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 	if ok {
 		codeField := slog.String("code", status.Code().String())
 		responseFields = append(responseFields, codeField)
-		if !catalogMethod {
+		if !customerNetworkMethod && !catalogMethod {
+			redactStatus := i.redact && isComputeInstancesListMethod(method)
 			message := status.Message()
 			if message != "" {
+				if redactStatus {
+					message = redactMark
+				}
 				messageField := slog.String("message", message)
 				responseFields = append(responseFields, messageField)
 			}
 			details := status.Details()
 			if len(details) > 0 {
+				if redactStatus {
+					details = []any{redactMark}
+				}
 				detailsField := slog.Any("details", details)
 				responseFields = append(responseFields, detailsField)
 			}
 		}
-	} else if catalogMethod {
+	} else if customerNetworkMethod || catalogMethod {
 		codeField := slog.String("code", grpcstatus.Code(err).String())
 		responseFields = append(responseFields, codeField)
 	} else {
 		errField := slog.Any("error", err)
 		responseFields = append(responseFields, errField)
 	}
-	if i.bodies && response != nil && !catalogMethod {
+	if logBodies && response != nil {
 		bodyField, ok := i.dumpMessage(ctx, "response", response)
 		if ok {
 			responseFields = append(responseFields, bodyField)
@@ -359,6 +374,10 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 // isCatalogItemsMethod reports whether a method belongs to a catalog API.
 func isCatalogItemsMethod(method string) bool {
 	return strings.Contains(method, "CatalogItems/")
+}
+
+func isComputeInstancesListMethod(method string) bool {
+	return strings.HasSuffix(method, "ComputeInstances/List")
 }
 
 // StreamClient is the stream client interceptor function.
@@ -421,6 +440,25 @@ func (i *Interceptor) redactMDAuthorization(value string) string {
 	}
 	scheme := value[0:position]
 	return fmt.Sprintf("%s %s", scheme, redactMark)
+}
+
+// isCustomerNetworkMethod reports whether the method handles network data that
+// must be omitted from diagnostic logs.
+func isCustomerNetworkMethod(method string) bool {
+	return strings.Contains(method, "/osac.public.v1.VirtualNetworks/") ||
+		strings.Contains(method, "/osac.public.v1.Subnets/") ||
+		strings.Contains(method, "/osac.public.v1.SecurityGroups/") ||
+		strings.Contains(method, "/osac.public.v1.ExternalIPs/") ||
+		strings.Contains(method, "/osac.public.v1.ExternalIPPools/") ||
+		strings.Contains(method, "/osac.public.v1.ExternalIPAttachments/") ||
+		strings.Contains(method, "/osac.private.v1.ExternalIPAttachments/") ||
+		strings.Contains(method, "/osac.private.v1.ExternalIPs/") ||
+		strings.Contains(method, "/osac.private.v1.ExternalIPPools/") ||
+		strings.Contains(method, "/osac.private.v1.NATGateways/") ||
+		strings.Contains(method, "/osac.private.v1.VirtualNetworks/") ||
+		strings.Contains(method, "/osac.private.v1.Subnets/") ||
+		strings.Contains(method, "/osac.private.v1.SecurityGroups/") ||
+		strings.Contains(method, "/osac.public.v1.NATGateways/")
 }
 
 // messageLogFields returns log fields for a stream message: the serialized size (if debug is enabled) and the
@@ -486,20 +524,82 @@ const (
 
 	publicPermissionRuleMessage  = protoreflect.FullName("osac.public.v1.PermissionRule")
 	privatePermissionRuleMessage = protoreflect.FullName("osac.private.v1.PermissionRule")
+
+	publicComputeInstanceMessage      = protoreflect.FullName("osac.public.v1.ComputeInstance")
+	privateComputeInstanceMessage     = protoreflect.FullName("osac.private.v1.ComputeInstance")
+	publicMetadataMessage             = protoreflect.FullName("osac.public.v1.Metadata")
+	privateMetadataMessage            = protoreflect.FullName("osac.private.v1.Metadata")
+	publicComputeInstancesListRequest = protoreflect.FullName(
+		"osac.public.v1.ComputeInstancesListRequest",
+	)
+	privateComputeInstancesListRequest = protoreflect.FullName(
+		"osac.private.v1.ComputeInstancesListRequest",
+	)
+
+	publicComputeInstanceSpec        = protoreflect.FullName("osac.public.v1.ComputeInstanceSpec")
+	privateComputeInstanceSpec       = protoreflect.FullName("osac.private.v1.ComputeInstanceSpec")
+	publicComputeInstanceStatus      = protoreflect.FullName("osac.public.v1.ComputeInstanceStatus")
+	privateComputeInstanceStatus     = protoreflect.FullName("osac.private.v1.ComputeInstanceStatus")
+	publicComputeInstanceCatalogItem = protoreflect.FullName(
+		"osac.public.v1.ComputeInstanceCatalogItem",
+	)
+	privateComputeInstanceCatalogItem = protoreflect.FullName(
+		"osac.private.v1.ComputeInstanceCatalogItem",
+	)
+	publicComputeInstanceCatalogItemFields = protoreflect.FullName(
+		"osac.public.v1.ComputeInstanceCatalogItemFields",
+	)
+	privateComputeInstanceCatalogItemFields = protoreflect.FullName(
+		"osac.private.v1.ComputeInstanceCatalogItemFields",
+	)
 )
 
-// redactProtoMessage returns a copy of the message with Secret data and permission rule values replaced by the
-// standard log redaction marker. The copy ensures that logging never changes the message sent through gRPC.
+// redactProtoMessage returns a copy with Secret data, permission rule values,
+// metadata, and sensitive ComputeInstance and catalog fields redacted.
+// The copy ensures that logging never changes the message sent through gRPC.
 func redactProtoMessage(message proto.Message) proto.Message {
 	result := proto.Clone(message)
-	redactProtoMessageFields(result.ProtoReflect())
+	redactProtoMessageFields(result.ProtoReflect(), false)
 	return result
 }
 
-func redactProtoMessageFields(message protoreflect.Message) {
+// redactProtoMessageFields redacts Secret payloads and sensitive instance and catalog data in place.
+func redactProtoMessageFields(message protoreflect.Message, redactMetadata bool) {
+	switch message.Descriptor().FullName() {
+	case publicComputeInstanceMessage, privateComputeInstanceMessage,
+		publicComputeInstanceCatalogItem, privateComputeInstanceCatalogItem:
+		redactMetadata = true
+	}
+
 	fields := message.Descriptor().Fields()
 	for index := 0; index < fields.Len(); index++ {
 		field := fields.Get(index)
+		if isSensitiveComputeInstancesListFilter(field) {
+			if message.Has(field) {
+				message.Set(field, protoreflect.ValueOfString(redactMark))
+			}
+			continue
+		}
+		if isSensitiveComputeInstanceField(field) {
+			if field.Kind() == protoreflect.StringKind {
+				message.Set(field, protoreflect.ValueOfString(redactMark))
+			} else {
+				message.Clear(field)
+			}
+			continue
+		}
+		if redactMetadata && isMetadata(message.Descriptor()) {
+			switch field.Name() {
+			case "creator":
+				if message.Has(field) {
+					message.Set(field, protoreflect.ValueOfString(redactMark))
+				}
+				continue
+			case "annotations", "labels":
+				message.Clear(field)
+				continue
+			}
+		}
 		if field.IsMap() {
 			if field.Name() == "data" && isSecret(field.ContainingMessage()) {
 				values := message.Mutable(field).Map()
@@ -511,7 +611,7 @@ func redactProtoMessageFields(message protoreflect.Message) {
 			}
 			if field.MapValue().Kind() == protoreflect.MessageKind || field.MapValue().Kind() == protoreflect.GroupKind {
 				message.Get(field).Map().Range(func(_ protoreflect.MapKey, value protoreflect.Value) bool {
-					redactProtoMessageFields(value.Message())
+					redactProtoMessageFields(value.Message(), redactMetadata)
 					return true
 				})
 			}
@@ -521,7 +621,7 @@ func redactProtoMessageFields(message protoreflect.Message) {
 			if field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind {
 				list := message.Get(field).List()
 				for index := 0; index < list.Len(); index++ {
-					redactProtoMessageFields(list.Get(index).Message())
+					redactProtoMessageFields(list.Get(index).Message(), redactMetadata)
 				}
 				continue
 			}
@@ -540,9 +640,51 @@ func redactProtoMessageFields(message protoreflect.Message) {
 			continue
 		}
 		if (field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind) && message.Has(field) {
-			redactProtoMessageFields(message.Get(field).Message())
+			redactProtoMessageFields(message.Get(field).Message(), redactMetadata)
 		}
 	}
+}
+
+// isMetadata reports whether the descriptor represents public or private metadata.
+func isMetadata(message protoreflect.MessageDescriptor) bool {
+	return message.FullName() == publicMetadataMessage || message.FullName() == privateMetadataMessage
+}
+
+// isSensitiveComputeInstancesListFilter identifies list filters that may expose customer data.
+func isSensitiveComputeInstancesListFilter(field protoreflect.FieldDescriptor) bool {
+	if field.Name() != "filter" {
+		return false
+	}
+	switch field.ContainingMessage().FullName() {
+	case publicComputeInstancesListRequest, privateComputeInstancesListRequest:
+		return true
+	}
+	return false
+}
+
+// isSensitiveComputeInstanceField identifies ComputeInstance fields omitted from body logs.
+func isSensitiveComputeInstanceField(field protoreflect.FieldDescriptor) bool {
+	name := field.Name()
+	switch field.ContainingMessage().FullName() {
+	case publicComputeInstanceSpec, privateComputeInstanceSpec:
+		switch name {
+		case "template_parameters", "user_data_source", "ssh_key", "network_attachments":
+			return true
+		}
+	case publicComputeInstanceStatus, privateComputeInstanceStatus:
+		switch name {
+		case "internal_ip_address", "external_ip_address", "compute_network_attachment_statuses":
+			return true
+		}
+	case publicComputeInstanceCatalogItem, privateComputeInstanceCatalogItem:
+		return name == "description" || name == "template_parameters"
+	case publicComputeInstanceCatalogItemFields, privateComputeInstanceCatalogItemFields:
+		switch name {
+		case "network_attachments", "ssh_key", "user_data_source":
+			return true
+		}
+	}
+	return false
 }
 
 func isSecret(message protoreflect.MessageDescriptor) bool {

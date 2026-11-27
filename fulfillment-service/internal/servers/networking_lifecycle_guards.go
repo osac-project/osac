@@ -23,9 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgerrcode"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -34,7 +31,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -305,32 +301,11 @@ func clearMessagePath(message protoreflect.Message, path string) {
 }
 
 // lockTenantForCreate locks the Tenant record of a create, so a create and the Tenant delete never both succeed, and
-// rejects creates in a Tenant that is being deleted. Tenants without a record (system, shared) aren't locked.
+// rejects creates in a Tenant that is being deleted. Tenants without a record (system, shared) aren't locked. The lock
+// is FOR NO KEY UPDATE, the mode the quota check's tenant lock takes, so a create that already holds it through the
+// check never waits on itself.
 func lockTenantForCreate(ctx context.Context, tenant string) error {
-	if tenant == "" || tenant == auth.SystemTenant || tenant == auth.SharedTenant {
-		return nil
-	}
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
-		return err
-	}
-	var deleting bool
-	err = tx.QueryRow(ctx,
-		`select deletion_timestamp <> 'epoch' from tenants where id = $1 for update`, tenant,
-	).Scan(&deleting)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == pgerrcode.DeadlockDetected {
-			return grpcstatus.Error(grpccodes.Aborted, "concurrent modification detected, please retry")
-		}
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to lock tenant '%s'", tenant)
-	}
-	if deleting {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant '%s' is being deleted", tenant)
-	}
-	return nil
+	return lockTenantRow(ctx, nil, tenant)
 }
 
 // lockNetworkClass finds the deployment NetworkClass, including one being deleted, and locks its record: exclusively

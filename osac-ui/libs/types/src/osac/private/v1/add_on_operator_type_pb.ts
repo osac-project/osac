@@ -27,7 +27,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/add_on_operator_type.proto.
  */
 export const file_osac_private_v1_add_on_operator_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvYWRkX29uX29wZXJhdG9yX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSLTAgoNQWRkT25PcGVyYXRvchIKCgJpZBgBIAEoCRIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRIWCgV0aXRsZRgDIAEoCUIHukgEcgIQARITCgtkZXNjcmlwdGlvbhgEIAEoCRIXCg9taW5fb2NwX3ZlcnNpb24YBSABKAkSFwoPbWF4X29jcF92ZXJzaW9uGAYgASgJEkAKCmV4Y2x1c2lvbnMYByADKAsyLC5vc2FjLnByaXZhdGUudjEuQWRkT25PcGVyYXRvckxvY2FsUmVmZXJlbmNlEkIKDGRlcGVuZGVuY2llcxgIIAMoCzIsLm9zYWMucHJpdmF0ZS52MS5BZGRPbk9wZXJhdG9yTG9jYWxSZWZlcmVuY2USFgoJcHVibGlzaGVkGAkgASgISACIAQFCDAoKX3B1Ymxpc2hlZCJTChZBZGRPbk9wZXJhdG9yUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAgiNwobQWRkT25PcGVyYXRvckxvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAlCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
+  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvYWRkX29uX29wZXJhdG9yX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSLTAgoNQWRkT25PcGVyYXRvchIKCgJpZBgBIAEoCRIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRIWCgV0aXRsZRgDIAEoCUIHukgEcgIQARITCgtkZXNjcmlwdGlvbhgEIAEoCRIXCg9taW5fb2NwX3ZlcnNpb24YBSABKAkSFwoPbWF4X29jcF92ZXJzaW9uGAYgASgJEkAKCmV4Y2x1c2lvbnMYByADKAsyLC5vc2FjLnByaXZhdGUudjEuQWRkT25PcGVyYXRvckxvY2FsUmVmZXJlbmNlEkIKDGRlcGVuZGVuY2llcxgIIAMoCzIsLm9zYWMucHJpdmF0ZS52MS5BZGRPbk9wZXJhdG9yTG9jYWxSZWZlcmVuY2USFgoJcHVibGlzaGVkGAkgASgISACIAQFCDAoKX3B1Ymxpc2hlZCJTChZBZGRPbk9wZXJhdG9yUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZ0ZW5hbnQYBCABKAkiNwobQWRkT25PcGVyYXRvckxvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAlCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
 
 /**
  * An add-on operator represents a platform-supported OLM operator that can be installed on CaaS clusters. The resource
@@ -134,9 +134,11 @@ export type AddOnOperatorReference = Message<"osac.private.v1.AddOnOperatorRefer
   project: string;
 
   /**
-   * @generated from field: bool shared = 4;
+   * Tenant where the referenced object lives. If omitted, the owner tenant is used.
+   *
+   * @generated from field: string tenant = 4;
    */
-  shared: boolean;
+  tenant: string;
 };
 
 /**

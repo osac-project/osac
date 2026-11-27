@@ -90,6 +90,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		annotations map[string]string
 		tenant      string
 		project     string
+		description *string
 	)
 	if metadata != nil {
 		name = metadata.GetName()
@@ -97,6 +98,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		annotations = metadata.GetAnnotations()
 		tenant = metadata.GetTenant()
 		project = metadata.GetProject()
+		description = metadataDescription(metadata)
 	}
 
 	// Validate that tenant is not empty:
@@ -132,18 +134,20 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 	addColumn("annotations", annotationsData)
 	addColumn("tenant", tenant)
 	addColumn("project", project)
+	addColumn("description", description)
 	addColumn("data", data)
 	fmt.Fprintf(&buffer, ` version = version + 1`)
 	fmt.Fprintf(&buffer, ` where %s`, r.sql.filter.String())
-	fmt.Fprintf(&buffer, ` returning creation_timestamp, deletion_timestamp, creator, project, version`)
+	fmt.Fprintf(&buffer, ` returning creation_timestamp, deletion_timestamp, creator, project, description, version`)
 
 	// Run the SQL statement:
 	sql := buffer.String()
 	var (
-		creationTs time.Time
-		deletionTs time.Time
-		creator    string
-		version    int32
+		creationTs        time.Time
+		deletionTs        time.Time
+		creator           string
+		version           int32
+		storedDescription *string
 	)
 	err = func() (err error) {
 		row := r.queryRow(ctx, updateOpType, sql, r.sql.params...)
@@ -156,6 +160,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 			&deletionTs,
 			&creator,
 			&project,
+			&storedDescription,
 			&version,
 		)
 		return
@@ -182,6 +187,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		tenant:      tenant,
 		project:     project,
 		name:        name,
+		description: storedDescription,
 		labels:      labels,
 		annotations: annotations,
 		version:     version,
@@ -199,6 +205,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 			tenant:          tenant,
 			project:         project,
 			name:            name,
+			description:     storedDescription,
 			labelsData:      labelsData,
 			annotationsData: annotationsData,
 			version:         version,

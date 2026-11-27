@@ -701,6 +701,32 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	publicv1.RegisterStorageTiersServer(registrar, storageTiersServer)
 
+	// Create the private documents server:
+	deps.Logger.InfoContext(ctx, "Creating private documents server")
+	privateDocumentsServer, err := servers.NewPrivateDocumentsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private documents server: %w", err)
+	}
+	privatev1.RegisterDocumentsServer(registrar, privateDocumentsServer)
+
+	// Create the documents server:
+	deps.Logger.InfoContext(ctx, "Creating documents server")
+	documentsServer, err := servers.NewDocumentsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create documents server: %w", err)
+	}
+	publicv1.RegisterDocumentsServer(registrar, documentsServer)
+
 	// Create the permission catalog, derived from the proto registry of the running build:
 	deps.Logger.InfoContext(ctx, "Creating permission catalog")
 	permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)

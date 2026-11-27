@@ -74,6 +74,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		tenant      string
 		project     string
 		creator     string
+		description *string
 	)
 	if metadata != nil {
 		name = metadata.GetName()
@@ -82,6 +83,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		tenant = metadata.GetTenant()
 		project = metadata.GetProject()
 		creator = metadata.GetCreator()
+		description = metadataDescription(metadata)
 	}
 
 	// Validate that tenant is not empty:
@@ -112,6 +114,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			creator,
 			tenant,
 			project,
+			description,
 			labels,
 			annotations,
 			data
@@ -124,7 +127,8 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			$6,
 			$7,
 			$8,
-			$9
+			$9,
+			$10
 		)
 		returning
 			creation_timestamp,
@@ -150,6 +154,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			creator,
 			tenant,
 			project,
+			description,
 			labelsData,
 			annotationsData,
 			data,
@@ -177,6 +182,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		tenant:      tenant,
 		project:     project,
 		name:        name,
+		description: description,
 		labels:      labels,
 		annotations: annotations,
 		version:     version,

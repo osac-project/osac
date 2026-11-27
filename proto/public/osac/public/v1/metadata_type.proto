@@ -103,6 +103,5 @@ message Metadata {
   // For organization objects this field is always empty, as organizations don't belong to a project.
   string project = 9;
 
-  reserved 10, 11;
-  reserved "display_name", "description";
+  optional string description = 10;
 }

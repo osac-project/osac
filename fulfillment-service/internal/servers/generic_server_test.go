@@ -31,6 +31,21 @@ import (
 )
 
 var _ = Describe("Generic server", func() {
+	It("treats absent and empty metadata descriptions as different", func() {
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
+			SetLogger(logger).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		absent := privatev1.Metadata_builder{}.Build().ProtoReflect()
+		empty := privatev1.Metadata_builder{Description: proto.String("")}.Build().ProtoReflect()
+		Expect(server.equivalentMetadata(absent, empty)).To(BeFalse())
+		Expect(server.equivalentMetadata(empty, absent)).To(BeFalse())
+	})
+
 	It("preserves reserved metadata from the locked object on public updates", func() {
 		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).

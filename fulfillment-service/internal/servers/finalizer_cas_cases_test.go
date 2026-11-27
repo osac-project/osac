@@ -227,6 +227,28 @@ func finalizerPlatformCases() []finalizerCase {
 				}.Build()
 			},
 		),
+		newFinalizerCase(privatev1.Documents_ServiceDesc,
+			func() *privatev1.Document {
+				return privatev1.Document_builder{
+					Metadata: privatev1.Metadata_builder{Name: finalizerName("document")}.Build(),
+					Spec: privatev1.DocumentSpec_builder{
+						Owner: privatev1.DocumentOwner_builder{
+							Project: privatev1.DocumentProjectOwner_builder{
+								Id:   "project",
+								Name: "project",
+							}.Build(),
+						}.Build(),
+						Fallback: new("en-US"),
+						Variants: map[string]*privatev1.DocumentVariant{
+							"en-US": privatev1.DocumentVariant_builder{
+								Title:   "Guide",
+								Content: []byte("# Guide"),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build()
+			},
+		),
 	}
 }
 

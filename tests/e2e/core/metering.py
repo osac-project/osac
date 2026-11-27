@@ -11,12 +11,13 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from http.client import RemoteDisconnected
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.runner import poll_until
+from tests.e2e.core.runner import StuckState, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
@@ -489,21 +490,32 @@ class MeteringCollector:
 
         The window is polled, not slept through: a late round whose correction
         lands after one final fetch would otherwise pass, and a round that
-        overruns the window would be missed entirely.
+        overruns the window would be missed entirely. A disconnected read can
+        be retried before the deadline, but success requires a read that
+        completes at or after it.
         """
         since_dt = parse_time(since)
         deadline = time.monotonic() + within
         while True:
-            events = self._fetch_events(event_type, resource_id)
-            matching = [ev for ev in events if _matches(ev, event_type, resource_id)]
-            nets = net_usage_past_by_dimension(matching, past=since_dt)
-            if any(abs(net) > _NET_USAGE_TOLERANCE for net in nets.values()):
-                raise AssertionError(
-                    f"Expected no {event_type} events for {resource_id} billing past {since}, "
-                    f"but net usage past it is {nets}"
-                )
-            if time.monotonic() >= deadline:
-                return
+            try:
+                events = self._fetch_events(event_type, resource_id)
+            except RemoteDisconnected as exc:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Could not verify no {event_type} events for {resource_id} billing past {since}: "
+                        f"metering event read failed at the {within}s deadline: {exc}"
+                    ) from exc
+            else:
+                sampled_at = time.monotonic()
+                matching = [ev for ev in events if _matches(ev, event_type, resource_id)]
+                nets = net_usage_past_by_dimension(matching, past=since_dt)
+                if any(abs(net) > _NET_USAGE_TOLERANCE for net in nets.values()):
+                    raise AssertionError(
+                        f"Expected no {event_type} events for {resource_id} billing past {since}, "
+                        f"but net usage past it is {nets}"
+                    )
+                if sampled_at >= deadline:
+                    return
             time.sleep(min(5, max(1, deadline - time.monotonic())))
 
     def get_all_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
@@ -636,9 +648,17 @@ class MeteringCollector:
         starts at or after that moment match, so a check that follows an event
         cannot be satisfied by a heartbeat from before it.
         """
+        last_disconnect: RemoteDisconnected | None = None
 
         def find() -> dict[str, Any] | None:
-            for event in self.get_all_events(HEARTBEAT_TYPE, resource_id):
+            nonlocal last_disconnect
+            try:
+                events = self.get_all_events(HEARTBEAT_TYPE, resource_id)
+            except RemoteDisconnected as exc:
+                last_disconnect = exc
+                return None
+            last_disconnect = None
+            for event in events:
                 dimensions = event.get("data", {}).get("billing_dimensions", {})
                 if not all(dimensions.get(key) == value for key, value in wanted.items()):
                     continue
@@ -647,15 +667,22 @@ class MeteringCollector:
                 return event
             return None
 
-        return poll_until(
-            fn=find,
-            until=lambda event: event is not None,
-            retries=timeout // delay,
-            delay=delay,
-            description=f"heartbeat of {resource_id} with dimensions {wanted}",
-            resource_kind=resource_kind,
-            resource_id=resource_id,
-        )
+        try:
+            return poll_until(
+                fn=find,
+                until=lambda event: event is not None,
+                retries=timeout // delay,
+                delay=delay,
+                description=f"heartbeat of {resource_id} with dimensions {wanted}",
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+            )
+        except StuckState as exc:
+            if last_disconnect is not None:
+                raise StuckState(
+                    exc.description, exc.last_value, exc.elapsed_s, f"RemoteDisconnected: {last_disconnect}"
+                ) from last_disconnect
+            raise
 
     def _fetch_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
         # Resource IDs are unique per test resource. Avoid filtering by a

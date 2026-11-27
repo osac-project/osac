@@ -53,16 +53,16 @@ on:
         required: false
 
 concurrency:
-  # Keyed off the chosen version so two different, unrelated releases can
-  # publish concurrently -- a second dispatch of the *same* version queues
-  # behind the first rather than being rejected outright (GitHub Actions
-  # concurrency groups only support queue or cancel-in-progress, not a
-  # third "reject" option). If the first dispatch already published
-  # osac/v<version> by the time the queued one starts, osac-build-and-
-  # publish.yaml's "Resolve component versions" step explicitly rejects it
-  # (real_tag_exists osac "${RELEASE_VERSION}") rather than silently
-  # republishing.
-  group: osac-release-${{ github.event.inputs.release_version }}
+  # One release at a time per branch, which means per release line (see
+  # RELEASE_LINE). Releases in a line depend on each other's tags: the
+  # forward-only guards compare against the line's latest version, and the
+  # Konflux chart pipelines build the highest chart tag in the line, so two
+  # overlapping releases could build, and record as staged, each other's
+  # chart versions. A second dispatch queues behind the first; by the time
+  # it starts, osac-build-and-publish.yaml's "Resolve component versions"
+  # step sees every tag the first one pushed and rejects a version that is
+  # already published or no longer the highest.
+  group: osac-release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions: {}

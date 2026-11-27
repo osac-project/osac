@@ -16,6 +16,7 @@ import (
 	"github.com/osac-project/osac/tests/integration/caas/internal/simulator/kube"
 	"github.com/osac-project/osac/tests/integration/caas/internal/simulator/loadbalancer"
 	"github.com/osac-project/osac/tests/integration/caas/internal/simulator/metal3"
+	"github.com/osac-project/osac/tests/integration/caas/internal/simulator/ovn"
 	"github.com/osac-project/osac/tests/integration/caas/internal/simulator/scenario"
 )
 
@@ -103,6 +104,10 @@ func setupControllers(mgr ctrl.Manager, reader client.Reader, cfg Config) error 
 
 	services := &loadbalancer.ServiceReconciler{Client: mgr.GetClient(), APIReader: reader}
 	if err := services.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	if err := ovn.SetupWithManager(mgr, reader, cfg.SettingsNamespace); err != nil {
 		return err
 	}
 

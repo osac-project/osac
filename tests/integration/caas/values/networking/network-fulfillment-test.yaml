@@ -1,0 +1,16 @@
+# Values that are safe to check in for the local Netris fake. The fixture URL
+# and per-run password are provided by the profile runner at deployment time.
+aap:
+  instanceGroups:
+    networkFulfillment:
+      enabled: true
+      config:
+        NETRIS_USERNAME: osac
+        NETRIS_VALIDATE_CERTS: "false"
+        NETRIS_SITE_ID: "1"
+        NETRIS_TENANT_ID: "1"
+        NETRIS_TENANT_NAME: Admin
+        NETRIS_MGMT_VPC_ID: "4"
+        NETRIS_MGMT_VPC_NAME: ocp-vpc
+        NETRIS_BM_PROVISIONING_VNET: bm-provisioning
+        NETRIS_RESOURCE_CLASS_MAP: '{"fixture": {}}'

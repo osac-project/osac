@@ -1,0 +1,5 @@
+apiVersion: k8s.ovn.org/v1
+kind: VTEP
+metadata:
+  name: tenant-vtep
+spec: {}

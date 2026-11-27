@@ -454,6 +454,69 @@ var _ = Describe("AWX job observation", func() {
 		Entry("rejects another service account", "", "other-sa", "worker"),
 		Entry("rejects a missing worker container", "", "osac-sa", "other"),
 	)
+
+	It("requires the production networking group and manager settings when networking is enabled", func(ctx SpecContext) {
+		const (
+			commit = "0123456789012345678901234567890123456789"
+			image  = "localhost/osac-aap:it"
+		)
+
+		groupIDs := map[string]int{
+			"osac-bare-metal-fulfillment-ig": 3,
+			"osac-cluster-fulfillment-ig":    5,
+			"osac-networking-operations-ig":  7,
+		}
+		workerPodSpec := `{"spec":{"serviceAccountName":"osac-sa","containers":[
+{"name":"worker","image":"example.invalid/template-default","envFrom":[
+{"configMapRef":{"name":"network-fulfillment-ig"}},
+{"secretRef":{"name":"network-fulfillment-ig"}}]}]}}`
+
+		client := testAWXClient(func(w http.ResponseWriter, r *http.Request) {
+			var result any
+
+			switch r.URL.Path {
+			case "/api/v2/projects/":
+				result = aap.Project{
+					ID: 8, SCMURL: "https://example.com/osac.git", SCMBranch: commit,
+					SCMRevision: commit, SCMType: "git", Status: "successful",
+				}
+			case "/api/v2/execution_environments/":
+				result = aap.ExecutionEnvironment{ID: 4, Image: image, Pull: "never"}
+			case "/api/v2/instance_groups/":
+				name := r.URL.Query().Get("name")
+				result = aap.InstanceGroup{
+					ID:               groupIDs[name],
+					IsContainerGroup: true,
+					PodSpecOverride:  workerPodSpec,
+				}
+			default:
+				Fail("unexpected configuration endpoint: " + r.URL.Path)
+			}
+
+			Expect(json.NewEncoder(w).Encode(map[string]any{"results": []any{result}})).To(Succeed())
+		})
+		environment := &harness.Environment{
+			Namespace: "osac",
+			Kube: kubefake.NewClientset(&corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "caas-it-configuration", Namespace: "osac"},
+				Data: map[string]string{
+					"projectURL": "https://example.com/osac.git", "projectCommit": commit,
+					"eeImage": image, "eePullPolicy": "Never", "networkingEnabled": "true",
+					"profileName": "vmaas-netris-cudn-evpn", "services": "vmaas",
+					"expectedFabricManager": "netris", "expectedK8sManager": "cudn_evpn",
+				},
+			}),
+		}
+
+		selected, err := checkConfiguration(ctx, environment, client)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(selected.NetworkingEnabled).To(BeTrue())
+		Expect(selected.ProfileName).To(Equal("vmaas-netris-cudn-evpn"))
+		Expect(selected.Services).To(Equal("vmaas"))
+		Expect(selected.ExpectedFabric).To(Equal("netris"))
+		Expect(selected.ExpectedK8s).To(Equal("cudn_evpn"))
+		Expect(selected.instanceGroupIDs["osac-networking-operations-ig"]).To(Equal(7))
+	})
 })
 
 // testAWXClient serves one spec's HTTP fixtures through the production AAP client.

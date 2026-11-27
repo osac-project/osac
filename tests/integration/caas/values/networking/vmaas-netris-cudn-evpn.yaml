@@ -1,0 +1,17 @@
+global:
+  services:
+    caas: {enabled: false}
+    bmaas: {enabled: false}
+    vmaas: {enabled: true}
+    maas: {enabled: false}
+  networking:
+    provisioningEnabled: true
+    fabricManager: netris
+    k8sManager: cudn_evpn
+
+operator:
+  controllers:
+    computeInstance: true
+
+bmf:
+  replicaCount: 0

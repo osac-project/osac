@@ -49,13 +49,49 @@ include $(INSTALLER_DIR)/scripts/kind-images.mk
 
 SIMULATOR_IMAGE := localhost/osac-caas-simulator:it
 EE_IMAGE := localhost/osac-aap:it
+networkProfileComma := ,
+NETWORK_PROFILE_SERVICES_HELM = $(subst $(networkProfileComma),\\$(networkProfileComma),$(NETWORK_PROFILE_SERVICES))
 INSTALLER_ARGS = PLATFORM=kind PROFILE=dev NS=osac KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KUBECONFIG="$$KUBECONFIG"
 BOOTSTRAP_IMAGE_ARGS := --set-string images.ee=$(EE_IMAGE) --set images.eePullPolicy=Never
+NETWORK_PROFILE_VALUES ?=
+NETWORK_PROFILE_NAME ?= custom
+NETWORK_PROFILE_SERVICES ?=
+EXPECTED_FABRIC_MANAGER ?=
+EXPECTED_K8S_MANAGER ?=
+NETWORKING_ENABLED ?= $(if $(strip $(NETWORK_PROFILE_VALUES)),true,false)
+NETRIS_CONTROLLER_URL ?=
+NETRIS_USERNAME ?=
+NETRIS_PASSWORD_FILE ?=
+# A networking profile enables the production AWX group and supplies manager settings.
 BOOTSTRAP_ARGS = $(BOOTSTRAP_IMAGE_ARGS) \
+  --set networking.enabled=$(NETWORKING_ENABLED) \
+  --set-string "networking.profileName=$(NETWORK_PROFILE_NAME)" \
+  --set-string "networking.services=$(NETWORK_PROFILE_SERVICES_HELM)" \
+  --set-string "networking.expectedFabricManager=$(EXPECTED_FABRIC_MANAGER)" \
+  --set-string "networking.expectedK8sManager=$(EXPECTED_K8S_MANAGER)" \
   --set-string "project.url=$$PROJECT_URL" --set-string "project.commit=$$PROJECT_COMMIT"
 OSAC_VALUES := -f $(INSTALLER_DIR)/values/dev/kind-instance.yaml -f values/instance.yaml \
   --set-string global.osacDeploymentId=osac/osac
-OSAC_APPLY = helm upgrade --install osac $(INSTALLER_DIR)/charts/osac $(OSAC_VALUES) \
+ifneq ($(strip $(NETWORK_PROFILE_VALUES)),)
+ifeq ($(wildcard $(NETWORK_PROFILE_VALUES)),)
+$(error NETWORK_PROFILE_VALUES does not name an existing profile values file)
+endif
+OSAC_VALUES += -f "$(NETWORK_PROFILE_VALUES)"
+endif
+ifeq ($(NETWORKING_ENABLED),true)
+OSAC_VALUES += -f values/networking/network-fulfillment-test.yaml
+endif
+OSAC_NETWORK_PROFILE_ARGS :=
+ifneq ($(strip $(NETRIS_CONTROLLER_URL)),)
+OSAC_NETWORK_PROFILE_ARGS += --set-string "aap.instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL=$(NETRIS_CONTROLLER_URL)"
+endif
+ifneq ($(strip $(NETRIS_USERNAME)),)
+OSAC_NETWORK_PROFILE_ARGS += --set-string "aap.instanceGroups.networkFulfillment.config.NETRIS_USERNAME=$(NETRIS_USERNAME)"
+endif
+ifneq ($(strip $(NETRIS_PASSWORD_FILE)),)
+OSAC_NETWORK_PROFILE_ARGS += --set-file "aap.instanceGroups.networkFulfillment.secret.NETRIS_PASSWORD=$(NETRIS_PASSWORD_FILE)"
+endif
+OSAC_APPLY = helm upgrade --install osac $(INSTALLER_DIR)/charts/osac $(OSAC_VALUES) $(OSAC_NETWORK_PROFILE_ARGS) \
   --namespace osac --create-namespace --wait --timeout 40m
 
 ifneq ($(filter prepare test _deploy,$(MAKECMDGOALS)),)
@@ -68,6 +104,7 @@ endif
 help:
 	@printf '%s\n' \
 	  'Workflow:' \
+	  '  profile PROFILE=<name> Run one networking profile in a new Kind cluster' \
 	  '  prepare       Create infrastructure, build/load images, deploy and prepare fixtures' \
 	  '  test          Prepare the installation, then run cluster scenarios' \
 	  '  fixtures      Prepare persistent users, tenants and hub on an existing deployment' \
@@ -80,6 +117,8 @@ help:
 	  '' \
 	  'Checks and maintenance:' \
 	  '  check         Check modules, Go code, pinned CRDs and charts (default)' \
+	  '  NETWORK_PROFILE_VALUES=<file> Supply a networking-profile values overlay' \
+	  '  NETWORKING_ENABLED=true|false Set provider-networking mode explicitly' \
 	  '  unit          Run internal unit suites without a cluster' \
 	  '  lint          Check Go code' \
 	  '  lint-fix      Apply formatting and automatic lint fixes' \
@@ -98,7 +137,10 @@ help:
 	  '  _helm-check             Require Helm 3'
 
 # Lifecycle: persistent preparation completes before cluster scenarios start.
-.PHONY: prepare test fixtures run
+.PHONY: prepare test fixtures run profile
+profile:
+	@bash scripts/run-networking-profile.sh "$(PROFILE)"
+
 prepare: _prepare-check _kubeconfig-check
 	@printf 'AWX commit: %s\n' "$$PROJECT_COMMIT"
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
@@ -113,7 +155,7 @@ prepare: _prepare-check _kubeconfig-check
 	  fi; \
 	  echo 'AWX Git revision verified.'
 	$(MAKE) -j2 _prepare-platform _ee-image-build
-	$(call kind-load-image,$(EE_IMAGE))
+	$(MAKE) _ee-image-load
 	$(MAKE) _deploy
 	$(MAKE) fixtures
 
@@ -126,7 +168,7 @@ ifneq ($(strip $(JUNIT_REPORT_DIR)),)
 	rm -f "$(abspath $(JUNIT_REPORT_DIR)/prepare.xml)"
 endif
 	NS=osac KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT=8443 \
-	  ginkgo run --procs=1 --fail-on-empty --timeout=15m -v $(call junit-report,prepare) ./suites/prepare -- --log-level=$(LOG_LEVEL)
+	  ginkgo run --procs=1 --fail-on-empty --timeout=25m -v $(call junit-report,prepare) ./suites/prepare -- --log-level=$(LOG_LEVEL)
 
 run: _kubeconfig-check
 ifneq ($(strip $(JUNIT_REPORT_DIR)),)
@@ -173,7 +215,7 @@ destroy:
 
 # Internal preparation and deployment steps.
 .PHONY: _infrastructure _images _deploy
-.PHONY: _prepare-platform _go-images _ee-image-build
+.PHONY: _prepare-platform _go-images _ee-image-build _ee-image-load
 
 # Create the cluster before building and loading Go images.
 _prepare-platform:
@@ -205,9 +247,13 @@ _go-images:
 _ee-image-build:
 	$(call kind-container-build,-t $(EE_IMAGE) -f $(ROOT_DIR)/osac-aap/Containerfile $(ROOT_DIR))
 
+_ee-image-load: _kubeconfig-check
+	$(call kind-load-image,$(EE_IMAGE))
+
 # Native APIs, AWX inputs and provider infrastructure precede application controller startup.
 _deploy: _prepare-check _helm-check _kubeconfig-check
 	$(MAKE) prepare-crds
+	$(MAKE) _networking-fixture-apis
 	helm upgrade --install caas-it charts/bootstrap --namespace osac --create-namespace $(BOOTSTRAP_ARGS) --set bootstrap.enabled=false --wait --timeout 5m
 	$(MAKE) -C $(INSTALLER_DIR) helm-osac-deps OSAC_CHART="$(INSTALLER_DIR)/charts/osac"
 	$(OSAC_APPLY) --set operator.enabled=false,bmf.replicaCount=0
@@ -228,7 +274,16 @@ _deploy: _prepare-check _helm-check _kubeconfig-check
 	  --set-string images.simulator=$(SIMULATOR_IMAGE) --set images.simulatorPullPolicy=Never \
 	  --set-string images.ignition=$(EE_IMAGE) --set images.ignitionPullPolicy=Never \
 	  --set-string logLevel=$(LOG_LEVEL) --wait --timeout 10m
-	$(OSAC_APPLY) --set operator.enabled=true,operator.replicaCount=1,bmf.replicaCount=1
+	$(OSAC_APPLY) --set operator.enabled=true,operator.replicaCount=1
+
+# OVN APIs are supplied by the pinned CUDN CRD and a small VTEP test contract.
+.PHONY: _networking-fixture-apis
+_networking-fixture-apis:
+	kubectl apply -f fixtures/ovn/clusteruserdefinednetwork-crd.yaml
+	kubectl wait --for=condition=Established --timeout=60s crd/clusteruserdefinednetworks.k8s.ovn.org
+	kubectl apply -f fixtures/ovn/vtep-crd.yaml
+	kubectl wait --for=condition=Established --timeout=60s crd/vteps.k8s.ovn.org
+	kubectl apply -f fixtures/ovn/vtep.yaml
 
 # Simulator-only rebuild/load operations use the common Kind loader.
 .PHONY: _simulator-image-build _simulator-image-load
@@ -251,6 +306,11 @@ _mod-check:
 	go mod verify
 
 _chart-check: BOOTSTRAP_CHECK_ARGS := $(BOOTSTRAP_IMAGE_ARGS) \
+  --set networking.enabled=$(NETWORKING_ENABLED) \
+  --set-string networking.profileName=$(NETWORK_PROFILE_NAME) \
+  --set-string networking.services=$(NETWORK_PROFILE_SERVICES_HELM) \
+  --set-string networking.expectedFabricManager=$(EXPECTED_FABRIC_MANAGER) \
+  --set-string networking.expectedK8sManager=$(EXPECTED_K8S_MANAGER) \
   --set-string project.commit=0000000000000000000000000000000000000000 --set bootstrap.enabled=true
 _chart-check: _helm-check prepare-crds
 	helm lint charts/bootstrap --strict $(BOOTSTRAP_CHECK_ARGS)

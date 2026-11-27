@@ -56,6 +56,8 @@ spec:
               value: {{ .Values.project.url | quote }}
             - name: AAP_PROJECT_GIT_BRANCH
               value: {{ .Values.project.commit | quote }}
+            - name: NETWORKING_ENABLED
+              value: {{ .Values.networking.enabled | quote }}
             - name: CAAS_NODEPORT_ADDRESS
               valueFrom:
                 fieldRef:

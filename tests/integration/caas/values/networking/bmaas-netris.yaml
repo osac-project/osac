@@ -1,0 +1,17 @@
+global:
+  services:
+    caas: {enabled: false}
+    bmaas: {enabled: true}
+    vmaas: {enabled: false}
+    maas: {enabled: false}
+  networking:
+    provisioningEnabled: true
+    fabricManager: netris
+    k8sManager: ""
+
+operator:
+  controllers:
+    computeInstance: false
+
+bmf:
+  replicaCount: 1

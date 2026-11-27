@@ -25,6 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+
+	"github.com/osac-project/osac/tests/integration/caas/internal/simulator/ovn"
 )
 
 var _ = Describe("Simulator startup configuration", func() {
@@ -83,6 +85,7 @@ var _ = DescribeTable("prepares watched kinds before startup", func(ctx SpecCont
 	for _, add := range []func(*runtime.Scheme) error{
 		corev1.AddToScheme, metal3v1.AddToScheme, assistedv1.AddToScheme, installv1.AddToScheme,
 		hivev1.AddToScheme, capiv1.AddToScheme, agentv1.AddToScheme, hypershiftv1.AddToScheme, routev1.AddToScheme,
+		ovn.AddToScheme,
 	} {
 		Expect(add(scheme)).To(Succeed())
 	}
@@ -101,6 +104,8 @@ var _ = DescribeTable("prepares watched kinds before startup", func(ctx SpecCont
 	Expect(err).NotTo(HaveOccurred())
 	Expect(informers.InformersByGVK).To(HaveKey(agentv1.GroupVersion.WithKind("AgentMachineTemplate")))
 	Expect(informers.InformersByGVK).To(HaveKey(routev1.GroupVersion.WithKind("Route")))
+	Expect(informers.InformersByGVK).To(HaveKey(ovn.CUDNObject().GroupVersionKind()))
+	Expect(informers.InformersByGVK).To(HaveKey(ovn.VTEPObject().GroupVersionKind()))
 },
 	Entry("includes the NodePool infrastructure template", false),
 	Entry("propagates informer registration failures", true),

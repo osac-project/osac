@@ -29,6 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	"github.com/osac-project/osac/tests/integration/caas/internal/simulator/ovn"
 )
 
 // prepareCaches registers a Kubernetes watch and local cache for each watched kind.
@@ -56,6 +58,8 @@ func prepareCaches(ctx context.Context, mgr ctrl.Manager) error {
 		&hypershiftv1.HostedCluster{},
 		&hypershiftv1.NodePool{},
 		&metal3v1.BareMetalHost{},
+		ovn.CUDNObject(),
+		ovn.VTEPObject(),
 	} {
 		if _, err := mgr.GetCache().GetInformer(ctx, object, cache.BlockUntilSynced(false)); err != nil {
 			return err
@@ -93,6 +97,7 @@ func Run(ctx context.Context, cfg Config) error {
 		capiv1.AddToScheme,
 		agentv1.AddToScheme,
 		hypershiftv1.AddToScheme,
+		ovn.AddToScheme,
 	} {
 		if err := add(scheme); err != nil {
 			return err

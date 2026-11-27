@@ -75,6 +75,61 @@ var _ = Describe("Observed AWX execution evidence", func() {
 			"osac-aap/playbook_osac_delete_hosted_cluster.yml", 4),
 	)
 
+	It("selects the networking operations group only when networking is enabled", func() {
+		selected.NetworkingEnabled = true
+		selected.instanceGroupIDs["osac-networking-operations-ig"] = 5
+
+		actual, err := selected.executionGroupID("osac-aap/playbook_osac_network_task.yml")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(actual).To(Equal(5))
+
+		selected.NetworkingEnabled = false
+		_, err = selected.executionGroupID("osac-aap/playbook_osac_network_task.yml")
+		Expect(err).To(MatchError("networking execution is disabled"))
+	})
+
+	DescribeTable(
+		"checks manager identity in production network jobs",
+		func(extraVars, wantError string) {
+			selected.ExpectedFabric = "netris"
+			selected.ExpectedK8s = "cudn_evpn"
+
+			err := selected.checkNetworkManager(aap.Job{ID: 7, ExtraVars: extraVars})
+			if wantError != "" {
+				Expect(err).To(MatchError(ContainSubstring(wantError)))
+				return
+			}
+
+			Expect(err).NotTo(HaveOccurred())
+		},
+		Entry(
+			"accepts the selected Fabric Manager",
+			`{"osac_job_vars":{"task":"create_subnet","manager":{"name":"netris","type":"fabric"}}}`,
+			"",
+		),
+		Entry(
+			"accepts the selected Kubernetes Manager",
+			`{"osac_job_vars":{"task":"create_subnet","manager":{"name":"cudn_evpn","type":"kubernetes"}}}`,
+			"",
+		),
+		Entry(
+			"rejects a different manager",
+			`{"osac_job_vars":{"task":"create_subnet","manager":{"name":"other","type":"fabric"}}}`,
+			"profile requires",
+		),
+		Entry(
+			"rejects a missing task",
+			`{"osac_job_vars":{"manager":{"name":"netris","type":"fabric"}}}`,
+			"no production task name",
+		),
+		Entry(
+			"rejects an unknown manager type",
+			`{"osac_job_vars":{"task":"create_subnet","manager":{"name":"netris","type":"other"}}}`,
+			"unsupported manager type",
+		),
+		Entry("rejects invalid job input", `{`, "unreadable task and manager inputs"),
+	)
+
 	DescribeTable(
 		"validates resource scope and selected deployment inputs",
 		func(change func(*aap.Job, *corev1.Pod), wantError string) {

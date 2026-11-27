@@ -83,7 +83,9 @@ def diagnostic_for_result(result):
     reason = status.get("reason")
     safe_code = code if type(code) is int and 400 <= code <= 599 else "unavailable"
     safe_reason = (
-        reason if isinstance(reason, str) and reason in STATUS_REASONS else "unavailable"
+        reason
+        if isinstance(reason, str) and reason in STATUS_REASONS
+        else "unavailable"
     )
     return f"NetApp TBC update failed (HTTP status={safe_code}, Kubernetes reason={safe_reason})"
 

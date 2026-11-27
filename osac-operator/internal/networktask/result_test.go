@@ -106,10 +106,18 @@ func TestReadArtifacts(t *testing.T) {
 		`{"osac_error":{"message":"m"}}`,
 		`{"osac_error":{"message":1,"retryable":true}}`,
 		`{"osac_error":"boom"}`,
+		`{"osac_error":{"message":"m","retryable":"true"}}`,
+		`{"osac_error":{"message":"m","retryable":true,"extra":"x"}}`,
 	} {
 		if a := readArtifacts(json.RawMessage(bad)); a.osacError != nil || !a.malformedError {
 			t.Fatalf("%s accepted", bad)
 		}
+	}
+	if a := readArtifacts(json.RawMessage(`{"osac_error":{"message":"m","retryable":false}}`)); a.osacError == nil || a.osacError.Retryable || a.malformedError {
+		t.Fatalf("valid non-retryable error rejected: %+v", a)
+	}
+	if a := readArtifacts(json.RawMessage(`{"osac_error":null}`)); a.malformedError || a.osacError != nil {
+		t.Fatalf("null error artifact was not treated as absent: %+v", a)
 	}
 	if a := readArtifacts(json.RawMessage(`{"osac_result":[1]}`)); !a.malformedResult {
 		t.Fatal("list osac_result accepted")

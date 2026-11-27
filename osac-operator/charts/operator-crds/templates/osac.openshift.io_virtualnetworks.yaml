@@ -151,6 +151,43 @@ spec:
                       description: JobID is the AAP job ID; empty until AAP returned
                         it.
                       type: string
+                    lastFailure:
+                      description: LastFailure is the latest safe failure recorded
+                        for this task.
+                      properties:
+                        attempt:
+                          description: Attempt is the launch number that failed.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        message:
+                          description: Message is a fixed, tenant-safe description
+                            of the failure.
+                          minLength: 1
+                          type: string
+                        observedAt:
+                          description: ObservedAt is when the engine observed the
+                            failed outcome.
+                          format: date-time
+                          type: string
+                        reason:
+                          description: Reason classifies the failure without exposing
+                            provider details.
+                          enum:
+                          - ProviderReported
+                          - ResultRejected
+                          - TimedOut
+                          - JobLost
+                          - JobNotStarted
+                          - InvalidResult
+                          - ProviderError
+                          type: string
+                      required:
+                      - attempt
+                      - message
+                      - observedAt
+                      - reason
+                      type: object
                     manager:
                       description: Manager is the manager type the task runs on.
                       enum:

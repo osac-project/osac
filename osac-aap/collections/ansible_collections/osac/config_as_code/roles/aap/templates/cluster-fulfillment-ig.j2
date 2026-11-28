@@ -85,6 +85,10 @@ spec:
                     fieldPath: metadata.namespace
           - configMap:
               name: openshift-service-ca.crt
+              # A vcluster has no service-ca operator: its pods only get this
+              # ConfigMap when the run setup copies it in. Leaving it required
+              # would then block the pod in CreateContainerConfigError.
+              optional: true
               items:
                 - key: service-ca.crt
                   path: service-ca.crt

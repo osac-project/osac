@@ -104,7 +104,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(17))
+		Expect(response.Tools).To(HaveLen(18))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -121,6 +121,8 @@ var _ = Describe("newServer", func() {
 		))
 		Expect(tools).To(HaveKey("list_resources"))
 		Expect(tools).To(HaveKey("get_resource"))
+		Expect(tools).To(HaveKey("get_resource_outcome"))
+		expectResourceTypeSchema(tools["get_resource_outcome"].InputSchema, newResourceRegistry(ServerDeps{}).resourceTypes())
 		Expect(tools).To(HaveKey("create_network_resource"))
 		Expect(tools).To(HaveKey("expose_network_resource"))
 		Expect(tools).To(HaveKey("delete_network_resource"))

@@ -22,6 +22,7 @@ var expectedMCPServerToolNames = []string{
 	"check_connection",
 	"list_resources",
 	"get_resource",
+	"get_resource_outcome",
 	"create_compute_instance",
 	"update_compute_instance",
 	"set_compute_instance_power",

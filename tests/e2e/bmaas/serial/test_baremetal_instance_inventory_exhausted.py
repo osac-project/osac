@@ -10,13 +10,13 @@ from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     assert_bmi_does_not_become_running,
+    assert_bmi_lifecycle_on_running,
     wait_for_bmi_cr,
     wait_for_bmi_deletion,
     wait_for_bmi_grpc_removal,
     wait_for_bmi_running,
     wait_for_bmi_running_after_recovery,
 )
-from tests.e2e.core.inventory import InventoryBackend, assert_bmi_lifecycle_on_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
@@ -26,6 +26,7 @@ pytestmark = pytest.mark.serial
 
 logger = logging.getLogger(__name__)
 
+_AVAILABLE_BMH_STATES = {"available", "ready"}
 _NOT_FOUND_RE = re.compile(r"Code:\s*NotFound|baremetalinstance\b.*\bnot found", re.IGNORECASE)
 
 
@@ -62,20 +63,17 @@ def test_baremetal_instance_inventory_exhausted(
     k8s_hub_client: K8sClient,
     k8s_bmh_client: K8sClient,
     catalog_item: str,
-    inventory_backend: InventoryBackend,
-    inventory_hosts: None,
+    bmh_namespace: str,
     test_run_id: str,
     ssh_key_secret: str,
 ) -> None:
-    """Exhaust host inventory, assert overflow stalls/fails, then recover after free capacity.
+    """Exhaust BMH inventory, assert overflow stalls/fails, then recover after free capacity.
 
-    Portable across labs/CI and inventory backends (e.g. 2 virtual hosts →
-    BMI #1, #2, then #3 overflow; BMHs on metal3, pre-staged devices on
-    netbox):
+    Portable across labs/CI (e.g. 2 virtual BMHs → BMI #1, #2, then #3 overflow):
     1. Create N BMIs up front so cluster-side provisioning can overlap
     2. Wait for all N to reach RUNNING, then run full lifecycle checks on BMI #1
-    3. Create BMI N+1 and assert it does not reach RUNNING (no free host)
-    4. Delete one claimed BMI to free a host
+    3. Create BMI N+1 and assert it does not reach RUNNING (no free BMH)
+    4. Delete one claimed BMI to free a BMH
     5. Assert the overflow BMI recovers to RUNNING
     6. Cleanup remaining instances
     """
@@ -83,7 +81,7 @@ def test_baremetal_instance_inventory_exhausted(
         bmh_namespace=bmh_namespace, states=_AVAILABLE_BMH_STATES
     )
     assert available_count >= 1, (
-        f"Need at least 1 available host to exercise inventory exhaustion; found {available_count}"
+        f"Need at least 1 available BMH to exercise inventory exhaustion; found {available_count}"
     )
 
     bmi_ids: list[str] = []
@@ -116,7 +114,7 @@ def test_baremetal_instance_inventory_exhausted(
             bmh_namespace=bmh_namespace, states=_AVAILABLE_BMH_STATES
         )
         assert available_after_claim == 0, (
-            f"Expected 0 available hosts after claiming {available_count}; found {available_after_claim}"
+            f"Expected 0 available BMHs after claiming {available_count} hosts; found {available_after_claim}"
         )
 
         overflow_idx = available_count + 1
@@ -134,10 +132,10 @@ def test_baremetal_instance_inventory_exhausted(
             bmh_namespace=bmh_namespace, states=_AVAILABLE_BMH_STATES
         )
         assert available_during_overflow == 0, (
-            f"Overflow BMI must not claim a host; available count={available_during_overflow}"
+            f"Overflow BMI must not claim a BMH; available count={available_during_overflow}"
         )
 
-        # Free one host so the overflow instance can be scheduled.
+        # Free one BMH so the overflow instance can be scheduled.
         released_id: str = bmi_ids[0]
         _cleanup_bmi(cli=cli, grpc=grpc, k8s=k8s_hub_client, bmi_id=released_id)
         bmi_ids.remove(released_id)
@@ -149,9 +147,9 @@ def test_baremetal_instance_inventory_exhausted(
             until=lambda v: v >= 1,
             retries=120,
             delay=10,
-            description="at least one host available after release",
-            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
-            resource_id=overflow_id,
+            description="at least one BMH available after release",
+            resource_kind=WaitResourceKind.NAMESPACE,
+            resource_id=bmh_namespace,
         )
 
         wait_for_bmi_running_after_recovery(grpc=grpc, bmi_id=overflow_id)

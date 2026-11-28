@@ -9,13 +9,13 @@ import pytest
 from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
-    HostRef,
+    assert_bmi_lifecycle_on_running,
     unique_name,
+    wait_for_bmh_available,
     wait_for_bmi_deletion,
     wait_for_bmi_grpc_removal,
     wait_for_bmi_running,
 )
-from tests.e2e.core.inventory import InventoryBackend, assert_bmi_lifecycle_on_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 
@@ -48,8 +48,7 @@ def test_compatible_direct_template_provisions(
     bmi_template: str,
     bmi_instance_type: str,
     bmi_disk_image: str,
-    inventory_backend: InventoryBackend,
-    inventory_hosts: None,
+    bmh_namespace: str,
     ssh_key_secret: str,
 ) -> None:
     response = jwt_grpc_tenant1.call(
@@ -68,8 +67,7 @@ def test_compatible_direct_template_provisions(
         },
     )
     bmi_id = response["object"]["id"]
-    bmi_cr_name = ""
-    host: HostRef | None = None
+    bmi_cr_name = bmh_name = ""
     try:
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
         spec = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)["object"]["spec"]

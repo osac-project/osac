@@ -10,6 +10,7 @@ import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import bmi_instance_type_for_tests, registered_ssh_key_secret
+from tests.e2e.core.inventory import InventoryBackend, make_inventory_backend
 from tests.e2e.core.k8s_client import K8sClient, bmh_kubeconfig
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
@@ -23,15 +24,15 @@ def bmi_template() -> str:
 
 
 @pytest.fixture(scope="session")
-def bmi_instance_type(
-    private_grpc: GRPCClient, bmi_template: str, inventory_backend: InventoryBackend
-) -> Generator[str, None, None]:
+def bmi_instance_type(private_grpc: GRPCClient, bmi_template: str) -> Generator[str, None, None]:
     yield from bmi_instance_type_for_tests(
-        private_grpc,
-        template_name=bmi_template,
-        configured=env("OSAC_BMI_INSTANCE_TYPE", "").strip(),
-        host_selector=inventory_backend.default_host_selector(),
+        private_grpc, template_name=bmi_template, configured=env("OSAC_BMI_INSTANCE_TYPE", "").strip()
     )
+
+
+@pytest.fixture(scope="session")
+def bmh_namespace() -> str:
+    return env("OSAC_BMH_NAMESPACE", "host-inventory")
 
 
 @pytest.fixture(scope="session")

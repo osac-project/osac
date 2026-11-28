@@ -1995,13 +1995,7 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str, retries: int = _BMI_R
 
 
 def assert_bmi_lifecycle_on_running(
-    *,
-    grpc: GRPCClient,
-    k8s: K8sClient,
-    bmh_k8s: K8sClient,
-    bmi_id: str,
-    bmh_namespace: str,
-    power_cycle: bool = True,
+    *, grpc: GRPCClient, k8s: K8sClient, bmh_k8s: K8sClient, bmi_id: str, bmh_namespace: str, power_cycle: bool = True
 ) -> tuple[str, str]:
     """Assert BMH binding/provisioning on an already-RUNNING BMI.
 

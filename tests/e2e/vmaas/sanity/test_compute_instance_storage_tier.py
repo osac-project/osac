@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 from typing import Any
 
@@ -71,10 +70,7 @@ def _tenant_sc_prefix() -> str:
 
 
 def _expected_sc_for_tier(
-    k8s_hub_client: K8sClient,
-    k8s_virt_client: K8sClient,
-    tier_name: str,
-    tenant_name: str | None,
+    k8s_hub_client: K8sClient, k8s_virt_client: K8sClient, tier_name: str, tenant_name: str | None
 ) -> str:
     """Resolve the expected StorageClass, tolerating the per-run prefix.
 

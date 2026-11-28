@@ -11,18 +11,14 @@ from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
 from tests.e2e.core.fulfillment_trust import assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
-    HostRef,
     assert_no_network_attachment,
-    host_consumer_ref,
-    host_hardware_macs,
+    wait_for_bmh_available,
+    wait_for_bmh_provisioned,
     wait_for_bmi_cr,
     wait_for_bmi_deletion,
     wait_for_bmi_grpc_removal,
     wait_for_bmi_running,
-    wait_for_host_allocated,
-    wait_for_host_powered,
 )
-from tests.e2e.core.inventory import InventoryBackend
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
@@ -64,9 +60,8 @@ def _assert_nic_metadata(
     # 2. BMI CR status.hardware.nics must match the BMH
     cr_macs: set[str] = set(k8s.get_bmi_hardware_nics(name=bmi_cr_name))
     assert cr_macs, f"BareMetalInstance CR {bmi_cr_name} has no status.hardware.nics"
-    assert cr_macs == source_macs, (
-        f"BMI CR status.hardware.nics {sorted(cr_macs)} does not match "
-        f"BareMetalHost hardware.nics {sorted(source_macs)}"
+    assert cr_macs == bmh_macs, (
+        f"BMI CR status.hardware.nics {sorted(cr_macs)} does not match BareMetalHost hardware.nics {sorted(bmh_macs)}"
     )
 
     # 3. gRPC API response must match the BMI CR
@@ -74,18 +69,18 @@ def _assert_nic_metadata(
     nics: list[dict[str, Any]] = response.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
     assert nics, f"gRPC API returned no status.hardware.nics for BMI {bmi_id}"
     api_macs: set[str] = {nic.get("mac", "").lower() for nic in nics}
-    assert api_macs == source_macs, (
+    assert api_macs == bmh_macs, (
         f"gRPC API status.hardware.nics {sorted(api_macs)} does not match "
-        f"BareMetalHost hardware.nics {sorted(source_macs)}"
+        f"BareMetalHost hardware.nics {sorted(bmh_macs)}"
     )
 
-    # 4. CLI describe output must list all inventory MACs under the Network Interfaces section
+    # 4. CLI describe output must list all BMH MACs under the Network Interfaces section
     describe_output: str = cli.describe_baremetal_instance(name=bmi_name)
     assert "Network Interfaces:" in describe_output, (
         "osac describe baremetalinstance output missing 'Network Interfaces:' section"
     )
     ni_section = describe_output[describe_output.index("Network Interfaces:") :]
-    for mac in source_macs:
+    for mac in bmh_macs:
         assert mac in ni_section, f"osac describe baremetalinstance 'Network Interfaces:' section missing MAC '{mac}'"
 
 
@@ -120,12 +115,11 @@ def test_baremetal_instance_lifecycle(
     catalog_item: str,
     bmi_instance_type: str,
     bmi_disk_image: str,
-    inventory_backend: InventoryBackend,
-    inventory_hosts: None,
+    bmh_namespace: str,
     test_run_id: str,
     ssh_key_secret: str,
-    networking_provisioning_enabled: bool,
     ssh_public_key: str,
+    networking_provisioning_enabled: bool,
 ) -> None:
     """Provision a BMI end-to-end and assert its terminal stage, NIC metadata, power cycle, and deprovision."""
     name = f"e2e-bmi-{test_run_id}"
@@ -134,7 +128,8 @@ def test_baremetal_instance_lifecycle(
     assert set(image["spec"]["architecture"]) == {"ARCHITECTURE_AMD64", "ARCHITECTURE_ARM64"}
 
     bmi_id, _ = jwt_cli_user.create_baremetal_instance(name=name, catalog_item=catalog_item, disk_image=bmi_disk_image)
-    host: HostRef | None = None
+    bmh_ns = ""
+    bmh_name = ""
 
     try:
         assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
@@ -206,7 +201,10 @@ def test_baremetal_instance_lifecycle(
             )
             assert_no_network_attachment(k8s=k8s_hub_client, target_kind="BareMetalInstance", target_id=bmi_id)
 
-        host = inventory_backend.host_for_bmi(bmi_cr_name=bmi_cr_name)
+        external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
+        assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
+        bmh_ns, bmh_name = external_host_id.split("/", 1)
+        assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
 
         # Verify NIC metadata matches the BMH hardware inventory (OSAC-3254)
         _assert_nic_metadata(
@@ -296,8 +294,7 @@ def test_baremetal_instance_restart(
     k8s_hub_client: K8sClient,
     k8s_bmh_client: K8sClient,
     catalog_item: str,
-    inventory_backend: InventoryBackend,
-    inventory_hosts: None,
+    bmh_namespace: str,
     private_grpc: GRPCClient,
     test_run_id: str,
     ssh_key_secret: str,
@@ -308,7 +305,8 @@ def test_baremetal_instance_restart(
         name=deprecated_disk_image_name, source_ref=BMI_DISK_IMAGE_SOURCE_REF, api=PRIVATE_API
     )
     bmi_id: str | None = None
-    host: HostRef | None = None
+    bmh_ns = ""
+    bmh_name = ""
 
     try:
         private_grpc.update_disk_image_lifecycle(
@@ -325,7 +323,10 @@ def test_baremetal_instance_restart(
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
 
-        host = inventory_backend.host_for_bmi(bmi_cr_name=bmi_cr_name)
+        external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
+        assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
+        bmh_ns, bmh_name = external_host_id.split("/", 1)
+        assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
 
         initial_trigger: int = _get_status_restart_trigger(jwt_grpc_tenant1, bmi_id)
         new_trigger: int = initial_trigger + 1

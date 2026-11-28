@@ -367,18 +367,13 @@ def test_metering_stop_ends_billing(
         # before picking the final heartbeat.
         time.sleep(90)
 
-        # The final heartbeat covers the partial interval up to the stop, so its
-        # interval ends at or after the halt was requested.
-        final = poll_until(
-            fn=lambda: _final_heartbeat(metering, uuid, halt_requested),
-            until=lambda event: event is not None,
-            retries=HEARTBEAT_TIMEOUT // 10,
-            delay=10,
-            description=f"final partial-interval heartbeat of {uuid}",
-            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
-            resource_id=uuid,
-        )
-        _, _, _ = usage_interval(final)
+        # The stop reaches metering through several steps: operator feedback, a
+        # fulfillment status change, the event topic, the fold, and a round. A round
+        # that runs before the stop is folded still sends a full interval, and the
+        # real final partial interval can land several rounds later. The wait keeps
+        # polling while the net end is below the recorded stop, so a late piece only
+        # delays the anchor; the quiet window below starts once the end reaches it.
+        metering.wait_for_billing_end(uuid, deletion=stopped_at, timeout=BILLING_END_TIMEOUT)
 
         # The net billing ends at the recorded stop, not at the round that
         # observed it: a round that ran before the stop was folded sends a full
@@ -396,29 +391,39 @@ def test_metering_stop_ends_billing(
         )
 
         # Past the final interval nothing more arrives: the meter stopped.
-        # Under load (parallel suites sharing the AAP and Kafka) a round that
-        # started before the stop was folded can still deliver one more full
-        # interval after the "final" heartbeat was picked, so the silence
-        # check re-derives its cutoff from the latest event and retries: the
-        # meter has stopped when the latest interval end stops advancing.
-        def _meter_silent() -> bool:
-            latest = _final_heartbeat(metering, uuid, halt_requested)
-            if latest is None:
-                return True
-            _, latest_to, _ = usage_interval(latest)
+        # Under parallel-suite load (several runs sharing the AAP and Kafka)
+        # a round that started before the stop was folded can still deliver
+        # one more interval after the anchor was picked, so the quiet window
+        # is judged against the latest observed interval end, not against the
+        # anchor: the meter has stopped when the latest end stops advancing
+        # for a full quiet window and the net usage past the stop has
+        # settled. Pinning the window to the anchor, as assert_no_events
+        # does, would read that healthy-but-slow correction as a leak.
+        latest_seen_end: datetime | None = None
+        quiet_since: datetime | None = None
+
+        def _meter_quiet() -> bool:
+            nonlocal latest_seen_end, quiet_since
             events = metering.get_all_events(HEARTBEAT_TYPE, uuid)
             nets = net_usage_past_by_dimension(events, past=stopped_at)
-            if not all(abs(net) <= 1 for net in nets.values()):
+            settled = all(abs(net) <= 1 for net in nets.values())
+            latest_end = max((usage_interval(event)[1] for event in events), default=None)
+            now = datetime.now(UTC)
+            if latest_end != latest_seen_end:
+                latest_seen_end = latest_end
+                quiet_since = now
                 return False
-            beyond = [e for e in events if parse_time(e["timestamp"]) > latest_to] if "timestamp" in events[0] else []
-            return not beyond
+            if quiet_since is None:
+                quiet_since = now
+                return False
+            return settled and (now - quiet_since) >= timedelta(seconds=90)
 
         poll_until(
-            fn=lambda: metering.get_all_events(HEARTBEAT_TYPE, uuid)[-1:],
-            until=lambda latest: _meter_silent(),
-            retries=18,
+            fn=_meter_quiet,
+            until=lambda quiet: quiet,
+            retries=30,
             delay=10,
-            description=f"metering of {uuid} to fall silent after the stop",
+            description=f"metering of {uuid} to fall quiet after the stop",
             resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
             resource_id=uuid,
         )

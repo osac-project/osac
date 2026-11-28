@@ -41,6 +41,10 @@ const (
 	reasonInfraEnvRecreated          = "InfraEnvRecreated"
 	reasonStaleIgnitionWorkersMarked = "StaleIgnitionWorkersMarked"
 	sshKeyResolutionRetry            = time.Minute
+
+	// clusterOrderUIDAnnotation records the owning ClusterOrder incarnation on
+	// infrastructure objects that carry no owner reference (remote mode).
+	clusterOrderUIDAnnotation = "osac.openshift.io/clusterorder-uid"
 )
 
 // infraEnvEvidence is the invocation-local result of the single InfraEnv
@@ -111,7 +115,7 @@ func (r *Reconciler) observeInfraEnvObject(ctx context.Context, co *v1alpha1.Clu
 	cached := assistedservice.NewInfraEnvObject()
 	err = infrastructureClient.Get(ctx, key, cached)
 	if err == nil {
-		return cached, validateInfraEnvOwner(co, cached)
+		return cached, ValidateInfraEnvOwner(co, cached, r.remoteInfrastructure())
 	}
 	if !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("getting infraenv %s: %w", key, err)
@@ -125,21 +129,30 @@ func (r *Reconciler) observeInfraEnvObject(ctx context.Context, co *v1alpha1.Clu
 	current := assistedservice.NewInfraEnvObject()
 	switch err := reader.Get(ctx, key, current); {
 	case err == nil:
-		return current, validateInfraEnvOwner(co, current)
+		return current, ValidateInfraEnvOwner(co, current, r.remoteInfrastructure())
 	case !apierrors.IsNotFound(err):
 		return nil, fmt.Errorf("getting infraenv %s: %w", key, err)
 	}
 	return nil, nil
 }
 
-// validateInfraEnvOwner rejects a same-name InfraEnv this ClusterOrder does not
+// ValidateInfraEnvOwner rejects a same-name InfraEnv this ClusterOrder does not
 // control. A foreign object (including one left by an earlier ClusterOrder
 // incarnation) is an error, not permission to recreate or to consume its UID and
-// boot artifacts.
-func validateInfraEnvOwner(co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured) error {
+// boot artifacts. Local mode checks the controller reference. Remote mode cannot
+// carry one (see Reconciler.remoteInfrastructure), so it checks the correlation
+// markers setInfrastructureOwnership records instead.
+func ValidateInfraEnvOwner(co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured, remote bool) error {
 	if infraEnv.GetNamespace() != co.Namespace {
 		return fmt.Errorf("infraenv %s/%s is not in ClusterOrder namespace %s",
 			infraEnv.GetNamespace(), infraEnv.GetName(), co.Namespace)
+	}
+	if remote {
+		if !remoteInfraObjectOwnedBy(co, infraEnv) {
+			return fmt.Errorf("infraenv %s/%s is not owned by ClusterOrder %s",
+				infraEnv.GetNamespace(), infraEnv.GetName(), co.Name)
+		}
+		return nil
 	}
 	owner := metav1.GetControllerOf(infraEnv)
 	if owner == nil || owner.Kind != "ClusterOrder" || owner.Name != co.Name {
@@ -325,8 +338,8 @@ func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterO
 			corev1.DockerConfigJsonKey: []byte(pullSecret),
 		},
 	}
-	if err := controllerutil.SetControllerReference(co, secret, r.scheme); err != nil {
-		return fmt.Errorf("setting pull secret owner reference: %w", err)
+	if err := r.setInfrastructureOwnership(co, secret); err != nil {
+		return fmt.Errorf("setting pull secret ownership: %w", err)
 	}
 	if err := infrastructureClient.Create(ctx, secret); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -385,10 +398,71 @@ func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name, sshAuthorize
 	if err := unstructured.SetNestedMap(infraEnv.Object, spec, "spec"); err != nil {
 		return nil, fmt.Errorf("building infraenv spec: %w", err)
 	}
-	if err := controllerutil.SetControllerReference(co, infraEnv, r.scheme); err != nil {
-		return nil, fmt.Errorf("setting infraenv owner reference: %w", err)
+	if err := r.setInfrastructureOwnership(co, infraEnv); err != nil {
+		return nil, fmt.Errorf("setting infraenv ownership: %w", err)
 	}
 	return infraEnv, nil
+}
+
+// remoteInfrastructure reports whether the workers' infrastructure lives on
+// another cluster, which is the mode that cannot bind it with an owner
+// reference. Unwired, the infrastructure is local and the local garbage
+// collector may own it.
+func (r *Reconciler) remoteInfrastructure() bool {
+	return r.targetMgr != nil
+}
+
+// setInfrastructureOwnership records that obj belongs to co. Local mode keeps the
+// controller reference so the local garbage collector removes the object with the
+// order. Remote mode must not set one: the owning ClusterOrder does not exist on
+// the provider cluster, whose garbage collector therefore treats the object as an
+// orphan and deletes it within seconds (CaaS never gets an Agent) and again as
+// soon as it is recreated. Remote objects carry the cross-cluster correlation
+// label and annotation instead, and the worker finalizer deletes them explicitly
+// (see deleteRemoteInfraEnv).
+func (r *Reconciler) setInfrastructureOwnership(co *v1alpha1.ClusterOrder, obj client.Object) error {
+	if !r.remoteInfrastructure() {
+		return controllerutil.SetControllerReference(co, obj, r.scheme)
+	}
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[clusterOrderLabel] = co.Name
+	obj.SetLabels(labels)
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[ownerReferenceAnnotation] = "ClusterOrder/" + co.Name
+	if co.UID != "" {
+		annotations[clusterOrderUIDAnnotation] = string(co.UID)
+	}
+	obj.SetAnnotations(annotations)
+	return nil
+}
+
+// remoteInfraObjectOwnedBy reports whether a provider-cluster object belongs to
+// this ClusterOrder. The markers setInfrastructureOwnership records are the
+// current shape; an object created before the remote split still carries a
+// controller reference, and that reference names this order, so it is adopted
+// rather than refused (a refused object would block teardown forever). A
+// same-name object with neither is someone else's and is never consumed or
+// deleted. A missing incarnation marker is tolerated so a partially rolled-out
+// controller can still adopt the objects it just created.
+func remoteInfraObjectOwnedBy(co *v1alpha1.ClusterOrder, obj client.Object) bool {
+	if owner := metav1.GetControllerOf(obj); owner != nil && owner.Kind == "ClusterOrder" &&
+		owner.Name == co.Name && (co.UID == "" || owner.UID == co.UID) {
+		return true
+	}
+	if obj.GetLabels()[clusterOrderLabel] != co.Name {
+		return false
+	}
+	if obj.GetAnnotations()[ownerReferenceAnnotation] != "ClusterOrder/"+co.Name {
+		return false
+	}
+	uid := obj.GetAnnotations()[clusterOrderUIDAnnotation]
+	return co.UID == "" || uid == "" || uid == string(co.UID)
 }
 
 func (r *Reconciler) setInfraEnvReady(

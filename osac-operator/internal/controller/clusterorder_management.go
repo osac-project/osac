@@ -40,6 +40,7 @@ import (
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
+	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
 )
 
 const (
@@ -642,9 +643,7 @@ func (r *ClusterOrderReconciler) infraEnvDiscoveryIgnitionURL(
 		}
 		return nil, managementPublicationCheck{}, fmt.Errorf("get Cluster InfraEnv: %w", err)
 	}
-	owner := metav1.GetControllerOf(infraEnv)
-	if owner == nil || owner.Kind != "ClusterOrder" || owner.Name != instance.Name ||
-		(instance.UID != "" && owner.UID != instance.UID) {
+	if err := baremetalworker.ValidateInfraEnvOwner(instance, infraEnv, r.targetMgr != nil); err != nil {
 		return nil, managementFailed("InfraEnv is not owned by this ClusterOrder"), nil
 	}
 	ignitionURL, found, err := assistedservice.DiscoveryIgnitionURL(infraEnv)

@@ -375,15 +375,22 @@ var _ = Describe("BareMetalWorker remote-mode split", Label("baremetalworker"), 
 		Expect(remoteClient.Get(ctx, types.NamespacedName{
 			Name: co.Name + "-infraenv", Namespace: co.Namespace,
 		}, infraEnv)).To(Succeed())
-		owners := infraEnv.GetOwnerReferences()
-		Expect(owners).To(HaveLen(1))
-		Expect(owners[0].Kind).To(Equal("ClusterOrder"))
-		Expect(owners[0].Name).To(Equal(co.Name))
+		// Remote objects must not carry an owner reference: the owning
+		// ClusterOrder lives on the local cluster, so the provider cluster's
+		// garbage collector would treat a dangling owner as an orphan and delete
+		// the InfraEnv and its pull secret. Ownership is recorded with the
+		// cross-cluster correlation markers and teardown deletes the objects.
+		Expect(infraEnv.GetOwnerReferences()).To(BeEmpty())
+		Expect(infraEnv.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/cluster-order", co.Name))
+		Expect(infraEnv.GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/owner-reference", "ClusterOrder/"+co.Name))
+		Expect(infraEnv.GetAnnotations()).To(HaveKey("osac.openshift.io/clusterorder-uid"))
 
 		pullSecret := &corev1.Secret{}
 		Expect(remoteClient.Get(ctx, types.NamespacedName{
 			Name: co.Name + "-pull-secret", Namespace: co.Namespace,
 		}, pullSecret)).To(Succeed())
+		Expect(pullSecret.GetOwnerReferences()).To(BeEmpty())
+		Expect(pullSecret.GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/owner-reference", "ClusterOrder/"+co.Name))
 
 		// Neither object exists on the local cluster.
 		localInfraEnv := assistedservice.NewInfraEnvObject()

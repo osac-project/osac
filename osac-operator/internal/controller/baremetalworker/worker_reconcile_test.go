@@ -817,6 +817,7 @@ var _ = It("rejects foreign InfraEnv owner references", func() {
 	}
 	for name, tc := range map[string]struct {
 		infra   *unstructured.Unstructured
+		remote  bool
 		wantErr bool
 	}{
 		"own object":              {infra: infraEnv("ClusterOrder", "order", "order-uid", "ns")},
@@ -825,14 +826,47 @@ var _ = It("rejects foreign InfraEnv owner references", func() {
 		"another controller kind": {infra: infraEnv("ClusterDeployment", "order", "order-uid", "ns"), wantErr: true},
 		"ownerless":               {infra: infraEnv("", "", "", "ns"), wantErr: true},
 		"another namespace":       {infra: infraEnv("ClusterOrder", "order", "order-uid", "other"), wantErr: true},
+		"remote own object":       {infra: remoteInfraEnv(order, "order-uid"), remote: true},
+		"remote legacy owner":     {infra: infraEnv("ClusterOrder", "order", "order-uid", "ns"), remote: true},
+		"remote earlier incarnation": {
+			infra: remoteInfraEnv(order, "previous-uid"), remote: true, wantErr: true,
+		},
+		"remote another order": {
+			infra: func() *unstructured.Unstructured {
+				other := order.DeepCopy()
+				other.Name = "other"
+				return remoteInfraEnv(other, "order-uid")
+			}(), remote: true, wantErr: true,
+		},
+		"remote another namespace": {
+			infra: func() *unstructured.Unstructured {
+				infra := remoteInfraEnv(order, "order-uid")
+				infra.SetNamespace("other")
+				return infra
+			}(), remote: true, wantErr: true,
+		},
 	} {
 		By(name)
 		func() {
-			err := validateInfraEnvOwner(order, tc.infra)
+			err := ValidateInfraEnvOwner(order, tc.infra, tc.remote)
 			Expect(tc.wantErr).To(Equal((err != nil)), "err=%v, wantErr=%t", err, tc.wantErr)
 		}()
 	}
 })
+
+// remoteInfraEnv builds the provider-cluster InfraEnv shape the worker creates in
+// remote mode: no owner reference, correlation markers instead.
+func remoteInfraEnv(order *v1alpha1.ClusterOrder, orderUID string) *unstructured.Unstructured {
+	infra := assistedservice.NewInfraEnvObject()
+	infra.SetName(assistedservice.InfraEnvName(order.Name))
+	infra.SetNamespace(order.Namespace)
+	infra.SetLabels(map[string]string{clusterOrderLabel: order.Name})
+	infra.SetAnnotations(map[string]string{
+		ownerReferenceAnnotation:  "ClusterOrder/" + order.Name,
+		clusterOrderUIDAnnotation: orderUID,
+	})
+	return infra
+}
 
 // r07StaleOrder prepares an order whose recorded InfraEnv UID is stale: the
 // recorded value is "old", the observed replacement is "new", and the waiting

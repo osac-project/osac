@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from typing import Any
 
@@ -38,9 +40,7 @@ def verify_datavolume_storage_classes(
 
     # Verify boot disk
     boot_tier = cr["spec"]["bootDisk"]["storageTier"]
-    expected_boot_sc = k8s_hub_client.get_storage_class_for_tier(
-        tier_name=boot_tier, tenant_name=tenant_name, storage_class_client=k8s_virt_client
-    )
+    expected_boot_sc = _expected_sc_for_tier(k8s_hub_client, k8s_virt_client, boot_tier, tenant_name)
     boot_dv_name = f"{ci_name}-root-disk"
     actual_boot_sc = k8s_virt_client.get_datavolume_storage_class(name=boot_dv_name, namespace=vm_namespace)
     assert actual_boot_sc == expected_boot_sc, (
@@ -50,15 +50,55 @@ def verify_datavolume_storage_classes(
     # Verify additional disks (1-indexed)
     for idx, disk in enumerate(cr.get("spec", {}).get("additionalDisks", [])):
         tier = disk["storageTier"]
-        expected_sc = k8s_hub_client.get_storage_class_for_tier(
-            tier_name=tier, tenant_name=tenant_name, storage_class_client=k8s_virt_client
-        )
+        expected_sc = _expected_sc_for_tier(k8s_hub_client, k8s_virt_client, tier, tenant_name)
 
         dv_name = f"{ci_name}-disk-{idx + 1}"
         actual_sc = k8s_virt_client.get_datavolume_storage_class(name=dv_name, namespace=vm_namespace)
         assert actual_sc == expected_sc, (
             f"Additional disk {idx} StorageClass mismatch: {actual_sc!r} != {expected_sc!r}"
         )
+
+
+def _tenant_sc_prefix() -> str:
+    """The per-install prefix the storage job puts before a tenant StorageClass.
+
+    A single-cluster install names them ``osac-<tenant>-<tier>``. A vcluster
+    run names them ``osac-<instance-id>-<tenant>-<tier>`` so parallel runs on
+    one outer cluster cannot collide. The instance id equals the run's
+    Keycloak realm name in that flavor.
+    """
+    return os.environ.get("OSAC_INSTANCE_ID", "")
+
+
+def _expected_sc_for_tier(
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    tier_name: str,
+    tenant_name: str | None,
+) -> str:
+    """Resolve the expected StorageClass, tolerating the per-run prefix.
+
+    The hub's Tenant status always carries the real name; the fallback scan
+    below only runs when the status has not converged yet. In that fallback,
+    accept both the prefixed and the unprefixed pattern of the tier.
+    """
+    resolved = k8s_hub_client.get_storage_class_for_tier(
+        tier_name=tier_name, tenant_name=tenant_name, storage_class_client=k8s_virt_client
+    )
+    prefix = _tenant_sc_prefix()
+    if not prefix or resolved:
+        return resolved
+    # The status lookup returned nothing; retry the labeled scan with the
+    # run prefix so the vcluster flavor does not race the tenant status.
+    items = k8s_virt_client.list_json(resource="storageclass").get("items", [])
+    for item in items:
+        labels = item.get("metadata", {}).get("labels", {})
+        if (
+            labels.get("osac.openshift.io/tenant") == tenant_name
+            and labels.get("osac.openshift.io/storage-tier", "").strip().lower() == tier_name.strip().lower()
+        ):
+            return item["metadata"]["name"]
+    return resolved
 
 
 def test_compute_instance_explicit_boot_disk_tier(

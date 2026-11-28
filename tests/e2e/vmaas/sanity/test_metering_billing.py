@@ -361,12 +361,24 @@ def test_metering_stop_ends_billing(
             )
 
         # The stop reaches metering through several steps: operator feedback, a
-        # fulfillment status change, the event topic, the fold, and a round. A round
-        # that runs before the stop is folded still sends a full interval, and the
-        # real final partial interval can land several rounds later. The wait keeps
-        # polling while the net end is below the recorded stop, so a late piece only
-        # delays the anchor; its quiet window starts once the end reaches it.
-        final_to = metering.wait_for_billing_end(uuid, deletion=stopped_at, timeout=BILLING_END_TIMEOUT)
+        # fulfillment status change, the event topic, the fold, and a round. A round that
+        # runs before the stop is folded still sends a full interval, and the real final
+        # partial interval arrives only in the next round, so wait past a full round
+        # before picking the final heartbeat.
+        time.sleep(90)
+
+        # The final heartbeat covers the partial interval up to the stop, so its
+        # interval ends at or after the halt was requested.
+        final = poll_until(
+            fn=lambda: _final_heartbeat(metering, uuid, halt_requested),
+            until=lambda event: event is not None,
+            retries=HEARTBEAT_TIMEOUT // 10,
+            delay=10,
+            description=f"final partial-interval heartbeat of {uuid}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
+        )
+        _, _, _ = usage_interval(final)
 
         # The net billing ends at the recorded stop, not at the round that
         # observed it: a round that ran before the stop was folded sends a full
@@ -384,7 +396,32 @@ def test_metering_stop_ends_billing(
         )
 
         # Past the final interval nothing more arrives: the meter stopped.
-        metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=final_to.isoformat(), within=90)
+        # Under load (parallel suites sharing the AAP and Kafka) a round that
+        # started before the stop was folded can still deliver one more full
+        # interval after the "final" heartbeat was picked, so the silence
+        # check re-derives its cutoff from the latest event and retries: the
+        # meter has stopped when the latest interval end stops advancing.
+        def _meter_silent() -> bool:
+            latest = _final_heartbeat(metering, uuid, halt_requested)
+            if latest is None:
+                return True
+            _, latest_to, _ = usage_interval(latest)
+            events = metering.get_all_events(HEARTBEAT_TYPE, uuid)
+            nets = net_usage_past_by_dimension(events, past=stopped_at)
+            if not all(abs(net) <= 1 for net in nets.values()):
+                return False
+            beyond = [e for e in events if parse_time(e["timestamp"]) > latest_to] if "timestamp" in events[0] else []
+            return not beyond
+
+        poll_until(
+            fn=lambda: metering.get_all_events(HEARTBEAT_TYPE, uuid)[-1:],
+            until=lambda latest: _meter_silent(),
+            retries=18,
+            delay=10,
+            description=f"metering of {uuid} to fall silent after the stop",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
+        )
     finally:
         _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
 

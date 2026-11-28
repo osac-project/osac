@@ -12,6 +12,7 @@ package kafka
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/IBM/sarama"
 	"github.com/osac-project/osac-metering/schema"
@@ -56,6 +57,28 @@ func ResolveDeadLetterPrefix(prefix string) string {
 		return DeadLetterPrefix
 	}
 	return prefix
+}
+
+// ValidateTopicPrefixes rejects a dead-letter prefix that overlaps the heartbeat prefix,
+// in either direction. Both topic families are formed from the same tenant name, so an
+// overlap makes a heartbeat topic its own dead-letter topic: a record the adapter rejects
+// goes back to the topic it came from, and the consumer rejects it again on every pass.
+// Discovery breaks the same way, because each prefix then matches the other family's
+// topics. An empty prefix uses the default.
+func ValidateTopicPrefixes(heartbeatPrefix, deadLetterPrefix string) error {
+	heartbeat := ResolveHeartbeatPrefix(heartbeatPrefix)
+	deadLetter := ResolveDeadLetterPrefix(deadLetterPrefix)
+	switch {
+	case heartbeat == deadLetter:
+		return fmt.Errorf("dead-letter prefix %q is the heartbeat prefix", deadLetter)
+	case strings.HasPrefix(deadLetter, heartbeat):
+		return fmt.Errorf("dead-letter prefix %q extends the heartbeat prefix %q",
+			deadLetter, heartbeat)
+	case strings.HasPrefix(heartbeat, deadLetter):
+		return fmt.Errorf("heartbeat prefix %q extends the dead-letter prefix %q",
+			heartbeat, deadLetter)
+	}
+	return nil
 }
 
 // HeartbeatTopic returns the tenant's heartbeat topic for prefix. An empty prefix uses the default.
@@ -128,13 +151,17 @@ func topicsWithPrefix(client sarama.Client, prefix string) ([]string, error) {
 // heartbeat topic maps to the tenant's dead-letter topic, and the shared inference topic
 // maps to its own dead-letter topic. It returns the input unchanged only for topics that
 // are neither, which the runner never consumes. An empty heartbeatPrefix or
-// deadLetterPrefix uses the default.
-func DeadLetterTopicOf(source, heartbeatPrefix, deadLetterPrefix string) string {
+// deadLetterPrefix uses the default. Overlapping prefixes are an error: the mapping would
+// send a rejected heartbeat back to its own topic and the consumer would never advance.
+func DeadLetterTopicOf(source, heartbeatPrefix, deadLetterPrefix string) (string, error) {
+	if err := ValidateTopicPrefixes(heartbeatPrefix, deadLetterPrefix); err != nil {
+		return "", err
+	}
 	if tenant, ok := schema.TenantOfTopic(source, ResolveHeartbeatPrefix(heartbeatPrefix)); ok {
-		return DeadLetterTopic(deadLetterPrefix, tenant)
+		return DeadLetterTopic(deadLetterPrefix, tenant), nil
 	}
 	if source == TopicInference {
-		return InferenceDeadLetter
+		return InferenceDeadLetter, nil
 	}
-	return source
+	return source, nil
 }

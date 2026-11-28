@@ -25,16 +25,44 @@ var _ = Describe("adapter topics", func() {
 	})
 
 	It("maps a heartbeat topic to the tenant's dead-letter topic", func() {
-		Expect(DeadLetterTopicOf("osac.metering.heartbeat.acme", "", "")).
-			To(Equal("osac.metering.dlq.acme"))
-		Expect(DeadLetterTopicOf("osac.events.acme", "", "")).
-			To(Equal("osac.events.acme"))
+		topic, err := DeadLetterTopicOf("osac.metering.heartbeat.acme", "", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(topic).To(Equal("osac.metering.dlq.acme"))
+
+		topic, err = DeadLetterTopicOf("osac.events.acme", "", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(topic).To(Equal("osac.events.acme"))
 	})
 
 	It("maps the inference topic to its own dead-letter topic, not back to itself", func() {
-		Expect(DeadLetterTopicOf(TopicInference, "", "")).To(Equal(InferenceDeadLetter))
+		topic, err := DeadLetterTopicOf(TopicInference, "", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(topic).To(Equal(InferenceDeadLetter))
 		Expect(InferenceDeadLetter).To(Equal("osac.metering.inference.dlq"))
-		Expect(DeadLetterTopicOf(TopicInference, "", "")).NotTo(Equal(TopicInference))
+		Expect(topic).NotTo(Equal(TopicInference))
+	})
+
+	It("rejects overlapping heartbeat and dead-letter prefixes", func() {
+		for _, prefixes := range [][2]string{
+			{"osac.metering.heartbeat.", "osac.metering.heartbeat."},
+			{"osac.metering.heartbeat.", "osac.metering.heartbeat.dlq."},
+			{"osac.metering.heartbeat.", "osac.metering."},
+			{"", "osac.metering.heartbeat."},
+			{"osac.metering.dlq.", ""},
+		} {
+			Expect(ValidateTopicPrefixes(prefixes[0], prefixes[1])).NotTo(Succeed(),
+				"prefixes %q and %q overlap", prefixes[0], prefixes[1])
+		}
+		Expect(ValidateTopicPrefixes("", "")).To(Succeed())
+		Expect(ValidateTopicPrefixes("pr2100v1.metering.heartbeat.", "pr2100v1.metering.dlq.")).
+			To(Succeed())
+	})
+
+	It("refuses to map a topic under overlapping prefixes", func() {
+		topic, err := DeadLetterTopicOf("osac.metering.heartbeat.acme",
+			"osac.metering.heartbeat.", "osac.metering.heartbeat.")
+		Expect(err).To(HaveOccurred())
+		Expect(topic).To(BeEmpty())
 	})
 })
 
@@ -132,8 +160,10 @@ var _ = Describe("topic discovery", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dlq).To(Equal([]string{"pr2100v1.metering.dlq.acme"}))
 
-		Expect(DeadLetterTopicOf("pr2100v1.metering.heartbeat.acme", "pr2100v1.metering.heartbeat.", "pr2100v1.metering.dlq.")).
-			To(Equal("pr2100v1.metering.dlq.acme"))
+		topic, err := DeadLetterTopicOf("pr2100v1.metering.heartbeat.acme",
+			"pr2100v1.metering.heartbeat.", "pr2100v1.metering.dlq.")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(topic).To(Equal("pr2100v1.metering.dlq.acme"))
 	})
 })
 

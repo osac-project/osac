@@ -60,6 +60,13 @@ type DLQProducer struct {
 // prefixes come from the adapter's Kafka configuration, so the producer maps the same
 // topics the adapter consumes.
 func NewPerTenantDLQProducer(brokers string, kafkaCfg kafka.KafkaConfig) (*DLQProducer, error) {
+	// Overlapping prefixes would route a rejected heartbeat back to its own topic.
+	if err := kafka.ValidateTopicPrefixes(
+		kafkaCfg.HeartbeatTopicPrefix, kafkaCfg.DeadLetterTopicPrefix,
+	); err != nil {
+		return nil, fmt.Errorf("resolving the per-tenant DLQ topics: %w", err)
+	}
+
 	sc, err := kafka.NewProducerConfig(kafkaCfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating DLQ producer config: %w", err)
@@ -118,8 +125,12 @@ func (d *DLQProducer) Send(msg *sarama.ConsumerMessage, reason string, attempts 
 		{Key: []byte("failed-at"), Value: []byte(time.Now().UTC().Format(time.RFC3339))},
 	}
 
+	topic, err := d.topicFor(msg.Topic)
+	if err != nil {
+		return err
+	}
 	pm := &sarama.ProducerMessage{
-		Topic:   d.topicFor(msg.Topic),
+		Topic:   topic,
 		Value:   sarama.ByteEncoder(msg.Value),
 		Headers: headers,
 	}
@@ -128,7 +139,7 @@ func (d *DLQProducer) Send(msg *sarama.ConsumerMessage, reason string, attempts 
 		pm.Key = sarama.ByteEncoder(msg.Key)
 	}
 
-	_, _, err := d.producer.SendMessage(pm)
+	_, _, err = d.producer.SendMessage(pm)
 	if err != nil {
 		return fmt.Errorf("sending to DLQ topic %s: %w", pm.Topic, err)
 	}
@@ -137,11 +148,11 @@ func (d *DLQProducer) Send(msg *sarama.ConsumerMessage, reason string, attempts 
 }
 
 // topicFor returns the DLQ topic for a failed record from a source topic.
-func (d *DLQProducer) topicFor(source string) string {
+func (d *DLQProducer) topicFor(source string) (string, error) {
 	if d.perTenant {
 		return kafka.DeadLetterTopicOf(source, d.heartbeatPrefix, d.deadLetterPrefix)
 	}
-	return d.topic
+	return d.topic, nil
 }
 
 // Occupancy returns the number of records currently retained in the DLQ topics

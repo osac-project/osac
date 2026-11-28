@@ -40,6 +40,9 @@ spec:
           - --metrics-cert-path=/etc/metrics-certs
           {{- else }}
           - --metrics-bind-address=:8080
+          # Without this the server still speaks HTTPS with a self-signed
+          # certificate on 8080, which no scrape or health check expects.
+          - --metrics-secure=false
           {{- end }}
           - --fulfillment-ca-file=/etc/ca-bundle/bundle.pem
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

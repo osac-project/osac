@@ -59,6 +59,9 @@ spec:
           - --metrics-cert-path=/etc/metrics-certs
           {{- else }}
           - --metrics-bind-address=:8080
+          # Without this the server still speaks HTTPS with a self-signed
+          # certificate on 8080, which no scrape or health check expects.
+          - --metrics-secure=false
           {{- end }}
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}

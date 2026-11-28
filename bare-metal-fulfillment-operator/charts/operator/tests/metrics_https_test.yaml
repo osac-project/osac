@@ -155,6 +155,11 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metrics-bind-address=:8080
+      # SecureServing defaults to true in the operator, so the bind address
+      # alone would still serve a self-signed HTTPS endpoint.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-secure=false
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --metrics-cert-path=/etc/metrics-certs

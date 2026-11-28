@@ -405,9 +405,6 @@ enum ClusterUpgradeState {
 
   // The control plane and all participating node sets reached the requested version.
   CLUSTER_UPGRADE_STATE_SUCCEEDED = 4;
-
-  // A participating component reported a terminal upgrade failure.
-  CLUSTER_UPGRADE_STATE_FAILED = 5;
 }
 
 // Detailed state for the current whole-cluster upgrade attempt.
@@ -564,7 +561,9 @@ enum ClusterConditionType {
 
   // Indicates whether every requested node set is ready.
   CLUSTER_CONDITION_TYPE_WORKERS_READY = 8;
-}
+
+  // Indicates whether a new cluster upgrade request may be admitted.
+  CLUSTER_CONDITION_TYPE_UPGRADE_ADMISSIBLE = 9;}
 
 // Defines a set of cluster nodes sharing the same bare metal instance type.
 message ClusterNodeSet {

@@ -16,12 +16,13 @@ package it
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	semver "github.com/Masterminds/semver/v3"
-	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	grpccodes "google.golang.org/grpc/codes"
+	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -39,20 +40,24 @@ var _ = Describe("Cluster upgrade", func() {
 	const pollRequestTimeout = 5 * time.Second
 
 	var (
-		ctx                  context.Context
-		bmitName             string
-		bmitID               string
-		clustersClient       publicv1.ClustersClient
-		privateClusters      privatev1.ClustersClient
-		clusterVersions      privatev1.ClusterVersionsClient
-		templatesClient      privatev1.ClusterTemplatesClient
-		templateID           string
-		targetVersionName    string
-		targetSemver         string
-		targetImage          string
-		defaultImage         string
-		defaultVersionName   string
-		defaultVersionSemver string
+		ctx                     context.Context
+		bmitName                string
+		bmitID                  string
+		clustersClient          publicv1.ClustersClient
+		privateClusters         privatev1.ClustersClient
+		clusterVersions         privatev1.ClusterVersionsClient
+		templatesClient         privatev1.ClusterTemplatesClient
+		templateID              string
+		targetVersionName       string
+		targetSemver            string
+		targetImage             string
+		secondTargetVersionName string
+		secondTargetSemver      string
+		secondTargetImage       string
+		targetDiskImage         *privatev1.DiskImage
+		defaultImage            string
+		defaultVersionName      string
+		defaultVersionSemver    string
 	)
 
 	BeforeEach(func() {
@@ -120,9 +125,10 @@ var _ = Describe("Cluster upgrade", func() {
 
 		targetSemver = nextCVVersion()
 		Expect(targetSemver).NotTo(Equal(defaultVersionSemver))
-		targetVersionName = fmt.Sprintf("upgrade-cv-%s", uuid.New()[24:32])
+		targetVersionName = fmt.Sprintf("upgrade-cv-%d-%s", cvVersionCounter.Add(1), uuid.New()[24:32])
 		targetImage = fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", targetSemver)
 		diskImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		targetDiskImage = diskImage
 		targetVersion, err := clusterVersions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
 			Object: privatev1.ClusterVersion_builder{
 				Metadata: privatev1.Metadata_builder{Name: targetVersionName}.Build(),
@@ -140,7 +146,32 @@ var _ = Describe("Cluster upgrade", func() {
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 		})
+
 	})
+
+	createSecondTargetVersion := func() {
+		secondTargetSemver = nextCVVersion()
+		Expect(secondTargetSemver).NotTo(Equal(defaultVersionSemver))
+		secondTargetVersionName = fmt.Sprintf("upgrade-cv-2-%d-%s", cvVersionCounter.Add(1), uuid.New()[24:32])
+		secondTargetImage = fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", secondTargetSemver)
+		secondTargetVersion, err := clusterVersions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+			Object: privatev1.ClusterVersion_builder{
+				Metadata: privatev1.Metadata_builder{Name: secondTargetVersionName}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Version:   secondTargetSemver,
+					Image:     secondTargetImage,
+					DiskImage: privatev1.DiskImageReference_builder{Id: targetDiskImage.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := clusterVersions.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{
+				Id: secondTargetVersion.GetObject().GetId(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		})
+	}
 
 	createCluster := func(nodeSets map[string]*publicv1.ClusterNodeSet) *publicv1.Cluster {
 		created, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
@@ -192,21 +223,72 @@ var _ = Describe("Cluster upgrade", func() {
 		return order
 	}
 
-	seedObservedVersions := func(cluster *publicv1.Cluster) {
-		current, err := privateClusters.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+	getPrivateCluster := func(cluster *publicv1.Cluster) *privatev1.Cluster {
+		getCtx, cancel := context.WithTimeout(ctx, pollRequestTimeout)
+		defer cancel()
+		response, err := privateClusters.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
-		object := current.GetObject()
-		object.GetStatus().SetObservedVersion(defaultVersionSemver)
-		for _, status := range object.GetStatus().GetNodeSets() {
+		return response.GetObject()
+	}
+
+	openUpgradeAdmissibility := func(cluster *publicv1.Cluster) *privatev1.Cluster {
+		current := getPrivateCluster(cluster)
+		if current.GetStatus().GetStateTransitionTime() == nil ||
+			current.GetStatus().GetState() != privatev1.ClusterState_CLUSTER_STATE_PROGRESSING {
+			current.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now().Add(time.Second)))
+		}
+		current.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
+		conditions := make([]*privatev1.ClusterCondition, 0, len(current.GetStatus().GetConditions())+2)
+		for _, condition := range current.GetStatus().GetConditions() {
+			if condition.GetType() != privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE &&
+				condition.GetType() != privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY {
+				conditions = append(conditions, condition)
+			}
+		}
+		conditions = append(conditions,
+			privatev1.ClusterCondition_builder{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}.Build(),
+			privatev1.ClusterCondition_builder{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}.Build())
+		current.GetStatus().SetConditions(conditions)
+		current.GetStatus().SetObservedVersion(defaultVersionSemver)
+		for _, status := range current.GetStatus().GetNodeSets() {
 			status.SetObservedVersion(defaultVersionSemver)
 		}
-		_, err = privateClusters.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-			Object: object,
-			UpdateMask: &fieldmaskpb.FieldMask{
-				Paths: []string{"status.observed_version", "status.node_sets"},
-			},
+		response, err := privateClusters.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+			Object: current,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.state", "status.state_transition_time", "status.conditions",
+				"status.observed_version", "status.node_sets",
+			}},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
+		return response.GetObject()
+	}
+
+	getPublicCluster := func(cluster *publicv1.Cluster) *publicv1.Cluster {
+		response, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		return response.GetObject()
+	}
+
+	updateClusterVersion := func(client publicv1.ClustersClient, cluster *publicv1.Cluster,
+		versionName string, lock bool, metadataVersion int32) (*publicv1.ClustersUpdateResponse, error) {
+		return client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Id:       cluster.GetId(),
+				Metadata: publicv1.Metadata_builder{Version: metadataVersion}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Version: publicv1.ClusterVersionReference_builder{Name: versionName}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
+			Lock:       lock,
+		}.Build())
 	}
 
 	updateTargetVersion := func(cluster *publicv1.Cluster) {
@@ -277,12 +359,41 @@ var _ = Describe("Cluster upgrade", func() {
 		Expect(err).NotTo(HaveOccurred())
 	}
 
-	getPrivateCluster := func(cluster *publicv1.Cluster) *privatev1.Cluster {
-		getCtx, cancel := context.WithTimeout(ctx, pollRequestTimeout)
+	applyNodeSetState := func(cluster *publicv1.Cluster, nodeSetID string,
+		componentState privatev1.ClusterUpgradeState, aggregateState privatev1.ClusterUpgradeState) {
+		feedbackCtx, cancel := context.WithTimeout(ctx, 3*pollRequestTimeout)
 		defer cancel()
-		response, err := privateClusters.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+		privateCluster, err := privateClusters.Get(feedbackCtx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
-		return response.GetObject()
+		stored := privateCluster.GetObject()
+		active := stored.GetStatus().GetActiveUpgradeAttempt()
+		Expect(active).NotTo(BeNil())
+		var selected *privatev1.ClusterUpgradeNodeSetState
+		for _, nodeSet := range active.GetNodeSets() {
+			if nodeSet.GetNodeSetId() == nodeSetID {
+				selected = nodeSet
+				break
+			}
+		}
+		Expect(selected).NotTo(BeNil())
+		if componentState == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT {
+			selected.SetTimeoutTime(timestamppb.New(selected.GetStateTransitionTime().AsTime().Add(time.Second)))
+			selected.SetMessage("NodePool upgrade progress was not observed")
+		} else {
+			selected.SetState(componentState)
+			selected.SetMessage("")
+			selected.SetStateTransitionTime(timestamppb.New(selected.GetStateTransitionTime().AsTime().Add(time.Second)))
+		}
+		response, err := privateClusters.Update(feedbackCtx, privatev1.ClustersUpdateRequest_builder{
+			Object: stored,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.active_upgrade_attempt", "status.upgrade_attempt_id",
+			}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetObject().GetStatus().GetUpgradeHistory()[0].GetState()).To(Equal(aggregateState))
+		_, err = privateClusters.Signal(feedbackCtx, privatev1.ClustersSignalRequest_builder{Id: cluster.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
 	}
 
 	waitForNodeSetImages := func(order *osacv1alpha1.ClusterOrder, image string, names ...string) {
@@ -298,10 +409,94 @@ var _ = Describe("Cluster upgrade", func() {
 		}, time.Minute, time.Second).Should(Succeed())
 	}
 
+	findClusterCondition := func(object *privatev1.Cluster,
+		conditionType privatev1.ClusterConditionType) *privatev1.ClusterCondition {
+		for _, condition := range object.GetStatus().GetConditions() {
+			if condition.GetType() == conditionType {
+				return condition
+			}
+		}
+		return nil
+	}
+
+	findUpgradeAdmissibleCondition := func(object *privatev1.Cluster) *privatev1.ClusterCondition {
+		for _, condition := range object.GetStatus().GetConditions() {
+			if condition.GetType() == privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_UPGRADE_ADMISSIBLE {
+				return condition
+			}
+		}
+		return nil
+	}
+
+	It("opens the upgrade gate when the cluster is ready", func() {
+		cluster := createCluster(twoNodeSets())
+		order := waitForClusterOrder(cluster)
+		current := getPrivateCluster(cluster)
+		closed := findUpgradeAdmissibleCondition(current)
+		Expect(closed).NotTo(BeNil())
+		Expect(closed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+
+		order.Status.Phase = osacv1alpha1.ClusterOrderPhaseReady
+		Expect(tool.KubeClient().Status().Update(ctx, order)).To(Succeed())
+		previousState := current.GetStatus().GetState()
+		current.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_READY)
+		if current.GetStatus().GetStateTransitionTime() == nil || previousState != privatev1.ClusterState_CLUSTER_STATE_READY {
+			current.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now().Add(time.Second)))
+		}
+		conditions := make([]*privatev1.ClusterCondition, 0, len(current.GetStatus().GetConditions())+2)
+		for _, condition := range current.GetStatus().GetConditions() {
+			if condition.GetType() != privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE &&
+				condition.GetType() != privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY {
+				conditions = append(conditions, condition)
+			}
+		}
+		conditions = append(conditions,
+			privatev1.ClusterCondition_builder{
+				Type:               privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE,
+				Status:             privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				LastTransitionTime: timestamppb.New(time.Now().Add(time.Second)),
+			}.Build(),
+			privatev1.ClusterCondition_builder{
+				Type:               privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY,
+				Status:             privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				LastTransitionTime: timestamppb.New(time.Now().Add(time.Second)),
+			}.Build())
+		current.GetStatus().SetConditions(conditions)
+		current.GetStatus().SetObservedVersion(defaultVersionSemver)
+		for _, status := range current.GetStatus().GetNodeSets() {
+			status.SetObservedVersion(defaultVersionSemver)
+		}
+
+		response, err := privateClusters.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+			Object: current,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.state", "status.state_transition_time", "status.conditions",
+				"status.observed_version", "status.node_sets",
+			}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		updated := response.GetObject()
+
+		gate := findUpgradeAdmissibleCondition(updated)
+		Expect(gate).NotTo(BeNil())
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(gate.GetReason()).To(Equal("Admissible"))
+		Expect(findClusterCondition(updated,
+			privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE).GetStatus()).
+			To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(findClusterCondition(updated,
+			privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY).GetStatus()).
+			To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(updated.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_READY))
+		Expect(updated.GetStatus().GetUpgradeHistory()).To(BeEmpty())
+		Expect(updated.GetStatus().GetActiveUpgradeAttempt()).To(BeNil())
+		Expect(order.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseReady))
+	})
+
 	It("creates one aggregate attempt and suppresses node-set projection while the control plane is pending", func() {
 		cluster := createCluster(twoNodeSets())
 		order := waitForClusterOrder(cluster)
-		seedObservedVersions(cluster)
+		openUpgradeAdmissibility(cluster)
 		updateTargetVersion(cluster)
 
 		waitForOrderReleaseImage(order, targetImage)
@@ -338,7 +533,7 @@ var _ = Describe("Cluster upgrade", func() {
 	It("schedules node sets after attempt-attributed control-plane success", func() {
 		cluster := createCluster(twoNodeSets())
 		order := waitForClusterOrder(cluster)
-		seedObservedVersions(cluster)
+		openUpgradeAdmissibility(cluster)
 		updateTargetVersion(cluster)
 		waitForOrderReleaseImage(order, targetImage)
 
@@ -362,7 +557,7 @@ var _ = Describe("Cluster upgrade", func() {
 	It("does not schedule node sets from an observed-version-only update", func() {
 		cluster := createCluster(twoNodeSets())
 		order := waitForClusterOrder(cluster)
-		seedObservedVersions(cluster)
+		openUpgradeAdmissibility(cluster)
 		updateTargetVersion(cluster)
 		waitForOrderReleaseImage(order, targetImage)
 
@@ -404,11 +599,22 @@ var _ = Describe("Cluster upgrade", func() {
 		}
 	})
 
-	It("rejects exact repeat and over-skew targets without mutating intent or projection", func() {
+	It("accepts an exact repeat as a no-op and rejects an over-skew target", func() {
 		cluster := createCluster(twoNodeSets())
 		order := waitForClusterOrder(cluster)
-		seedObservedVersions(cluster)
+		openUpgradeAdmissibility(cluster)
 		before := getPrivateCluster(cluster)
+
+		_, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Id: cluster.GetId(),
+				Spec: publicv1.ClusterSpec_builder{
+					Version: publicv1.ClusterVersionReference_builder{Name: defaultVersionName}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
 
 		rejectTarget := func(name, message string) {
 			_, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
@@ -423,11 +629,9 @@ var _ = Describe("Cluster upgrade", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Code()).To(Equal(codes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring(message))
 		}
-
-		rejectTarget(defaultVersionName, "already selected")
 
 		parsedDefault, err := semver.StrictNewVersion(defaultVersionSemver)
 		Expect(err).NotTo(HaveOccurred())
@@ -481,7 +685,7 @@ var _ = Describe("Cluster upgrade", func() {
 	It("keeps timeout feedback active and recoverable through the aggregate history", func() {
 		cluster := createCluster(twoNodeSets())
 		order := waitForClusterOrder(cluster)
-		seedObservedVersions(cluster)
+		openUpgradeAdmissibility(cluster)
 		updateTargetVersion(cluster)
 		waitForOrderReleaseImage(order, targetImage)
 
@@ -513,4 +717,267 @@ var _ = Describe("Cluster upgrade", func() {
 		Expect(recoveredActive.GetNodeSetsScheduledTime()).NotTo(BeNil())
 	})
 
+	It("admits one of two concurrent upgrade requests", func() {
+		createSecondTargetVersion()
+		cluster := createCluster(twoNodeSets())
+		openUpgradeAdmissibility(cluster)
+
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := updateClusterVersion(clustersClient, cluster, targetVersionName, false, 0)
+			results <- err
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := updateClusterVersion(clustersClient, cluster, secondTargetVersionName, false, 0)
+			results <- err
+		}()
+		close(start)
+		wg.Wait()
+		close(results)
+
+		successes := 0
+		rejections := 0
+		for err := range results {
+			if err == nil {
+				successes++
+				continue
+			}
+			rejections++
+			Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
+		}
+		Expect(successes).To(Equal(1))
+		Expect(rejections).To(Equal(1))
+
+		stored := getPrivateCluster(cluster)
+		Expect(stored.GetStatus().GetUpgradeAttemptId()).NotTo(BeEmpty())
+		Expect(stored.GetStatus().GetActiveUpgradeAttempt()).NotTo(BeNil())
+		Expect(stored.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+		Expect(stored.GetSpec().GetVersion().GetName()).To(Or(
+			Equal(targetVersionName), Equal(secondTargetVersionName)))
+		gate := findUpgradeAdmissibleCondition(stored)
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	})
+
+	DescribeTable("rejects a stale locked client before the active attempt", func(secondTarget bool) {
+		if secondTarget {
+			createSecondTargetVersion()
+		}
+		cluster := createCluster(twoNodeSets())
+		openUpgradeAdmissibility(cluster)
+		current := getPublicCluster(cluster)
+		staleVersion := current.GetMetadata().GetVersion()
+
+		_, err := updateClusterVersion(clustersClient, cluster, targetVersionName, false, 0)
+		Expect(err).NotTo(HaveOccurred())
+
+		selectedTarget := targetVersionName
+		if secondTarget {
+			selectedTarget = secondTargetVersionName
+		}
+		_, err = updateClusterVersion(clustersClient, cluster, selectedTarget, true, staleVersion)
+		Expect(grpcstatus.Code(err)).To(Equal(codes.Aborted))
+
+		refetched := getPublicCluster(cluster)
+		_, err = updateClusterVersion(clustersClient, cluster, selectedTarget, false, refetched.GetMetadata().GetVersion())
+		Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
+
+		stored := getPrivateCluster(cluster)
+		Expect(stored.GetSpec().GetVersion().GetName()).To(Equal(targetVersionName))
+		Expect(stored.GetStatus().GetActiveUpgradeAttempt()).NotTo(BeNil())
+		gate := findUpgradeAdmissibleCondition(stored)
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	},
+		Entry("same target", false),
+		Entry("different target", true),
+	)
+
+	It("keeps the gate closed until both node pools finish", func() {
+		cluster := createCluster(twoNodeSets())
+		order := waitForClusterOrder(cluster)
+		openUpgradeAdmissibility(cluster)
+		_, err := updateClusterVersion(clustersClient, cluster, targetVersionName, false, 0)
+		Expect(err).NotTo(HaveOccurred())
+		waitForOrderReleaseImage(order, targetImage)
+
+		applyControlPlaneState(cluster,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
+		applyNodeSetState(cluster, "compute",
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
+
+		partial := getPrivateCluster(cluster)
+		Expect(partial.GetStatus().GetUpgradeHistory()[0].GetState()).
+			To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+		active := partial.GetStatus().GetActiveUpgradeAttempt()
+		Expect(active).NotTo(BeNil())
+		gate := findUpgradeAdmissibleCondition(partial)
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		computeState, gpuState := privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING
+		for _, nodeSet := range active.GetNodeSets() {
+			if nodeSet.GetNodeSetId() == "compute" {
+				computeState = nodeSet.GetState()
+			}
+			if nodeSet.GetNodeSetId() == "gpu" {
+				gpuState = nodeSet.GetState()
+			}
+		}
+		Expect(computeState).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		Expect(gpuState).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+
+		applyNodeSetState(cluster, "gpu",
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+
+		finished := getPrivateCluster(cluster)
+		Expect(finished.GetStatus().GetActiveUpgradeAttempt()).To(BeNil())
+		Expect(finished.GetStatus().GetUpgradeHistory()[0].GetState()).
+			To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		gate = findUpgradeAdmissibleCondition(finished)
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(finished.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal(targetSemver))
+		Expect(finished.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal(targetSemver))
+	})
+
+	It("keeps the gate closed until both node pools finish in reverse order", func() {
+		cluster := createCluster(twoNodeSets())
+		order := waitForClusterOrder(cluster)
+		openUpgradeAdmissibility(cluster)
+		_, err := updateClusterVersion(clustersClient, cluster, targetVersionName, false, 0)
+		Expect(err).NotTo(HaveOccurred())
+		waitForOrderReleaseImage(order, targetImage)
+
+		applyControlPlaneState(cluster,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
+		applyNodeSetState(cluster, "gpu",
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
+
+		partial := getPrivateCluster(cluster)
+		active := partial.GetStatus().GetActiveUpgradeAttempt()
+		Expect(active).NotTo(BeNil())
+		gate := findUpgradeAdmissibleCondition(partial)
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		computeState, gpuState := privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED
+		for _, nodeSet := range active.GetNodeSets() {
+			if nodeSet.GetNodeSetId() == "compute" {
+				computeState = nodeSet.GetState()
+			}
+			if nodeSet.GetNodeSetId() == "gpu" {
+				gpuState = nodeSet.GetState()
+			}
+		}
+		Expect(computeState).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		Expect(gpuState).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+
+		applyNodeSetState(cluster, "compute",
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+
+		finished := getPrivateCluster(cluster)
+		Expect(finished.GetStatus().GetActiveUpgradeAttempt()).To(BeNil())
+		Expect(finished.GetStatus().GetUpgradeHistory()[0].GetState()).
+			To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		gate = findUpgradeAdmissibleCondition(finished)
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(finished.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal(targetSemver))
+		Expect(finished.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal(targetSemver))
+	})
+
+	It("ignores stale feedback after a later attempt starts", func() {
+		createSecondTargetVersion()
+		cluster := createCluster(twoNodeSets())
+		order := waitForClusterOrder(cluster)
+		openUpgradeAdmissibility(cluster)
+		_, err := updateClusterVersion(clustersClient, cluster, targetVersionName, false, 0)
+		Expect(err).NotTo(HaveOccurred())
+		waitForOrderReleaseImage(order, targetImage)
+		applyControlPlaneState(cluster,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
+		applyNodeSetState(cluster, "compute",
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+		applyNodeSetState(cluster, "gpu",
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+		firstAttempt := getPrivateCluster(cluster)
+		firstAttemptID := firstAttempt.GetStatus().GetUpgradeAttemptId()
+		Expect(firstAttemptID).NotTo(BeEmpty())
+		Expect(firstAttempt.GetStatus().GetActiveUpgradeAttempt()).To(BeNil())
+
+		_, err = updateClusterVersion(clustersClient, cluster, secondTargetVersionName, false, 0)
+		Expect(err).NotTo(HaveOccurred())
+		secondAttempt := getPrivateCluster(cluster)
+		secondAttemptID := secondAttempt.GetStatus().GetUpgradeAttemptId()
+		Expect(secondAttemptID).NotTo(BeEmpty())
+		Expect(secondAttemptID).NotTo(Equal(firstAttemptID))
+		Expect(secondAttempt.GetStatus().GetActiveUpgradeAttempt()).NotTo(BeNil())
+
+		stale := getPrivateCluster(cluster)
+		stale.GetStatus().SetUpgradeAttemptId(firstAttemptID)
+		active := stale.GetStatus().GetActiveUpgradeAttempt()
+		active.GetControlPlane().SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+		for _, nodeSet := range active.GetNodeSets() {
+			nodeSet.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+		}
+		_, err = privateClusters.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+			Object: stale,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.active_upgrade_attempt", "status.upgrade_attempt_id",
+			}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = privateClusters.Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: cluster.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		afterStale := getPrivateCluster(cluster)
+		Expect(afterStale.GetStatus().GetUpgradeAttemptId()).To(Equal(secondAttemptID))
+		Expect(afterStale.GetStatus().GetActiveUpgradeAttempt()).NotTo(BeNil())
+		Expect(afterStale.GetStatus().GetActiveUpgradeAttempt().GetControlPlane().GetState()).
+			To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		for _, nodeSet := range afterStale.GetStatus().GetActiveUpgradeAttempt().GetNodeSets() {
+			Expect(nodeSet.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING), nodeSet.GetNodeSetId())
+		}
+		Expect(afterStale.GetStatus().GetUpgradeHistory()).To(HaveLen(2))
+		Expect(afterStale.GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal(secondAttemptID))
+		Expect(afterStale.GetStatus().GetUpgradeHistory()[0].GetState()).
+			To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		Expect(afterStale.GetStatus().GetUpgradeHistory()[1].GetAttemptId()).To(Equal(firstAttemptID))
+		Expect(afterStale.GetStatus().GetUpgradeHistory()[1].GetState()).
+			To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		gate := findUpgradeAdmissibleCondition(afterStale)
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	})
+
+	It("allows a same-tenant user and rejects a cross-tenant user", func() {
+		cluster := createCluster(twoNodeSets())
+		openUpgradeAdmissibility(cluster)
+
+		carolToken, err := tool.makeKubernetesTokenSource(ctx, "carol", "b")
+		Expect(err).NotTo(HaveOccurred())
+		carolConn, err := tool.makeGrpcConn(externalServiceAddr, carolToken)
+		Expect(err).NotTo(HaveOccurred())
+		carolClient := publicv1.NewClustersClient(carolConn)
+		_, err = updateClusterVersion(carolClient, cluster, targetVersionName, false, 0)
+		Expect(grpcstatus.Code(err)).To(Equal(codes.Unknown))
+
+		_, err = updateClusterVersion(clustersClient, cluster, targetVersionName, false, 0)
+		Expect(err).NotTo(HaveOccurred())
+
+		stored := getPrivateCluster(cluster)
+		Expect(stored.GetStatus().GetActiveUpgradeAttempt()).NotTo(BeNil())
+		gate := findUpgradeAdmissibleCondition(stored)
+		Expect(gate.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	})
 })

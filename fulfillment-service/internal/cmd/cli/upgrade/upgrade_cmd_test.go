@@ -254,6 +254,35 @@ var _ = Describe("upgradeCluster", func() {
 		Expect(upgradeCluster(ctx, clusters, versions, console, "cluster-id", "4.17.0")).To(Succeed())
 	})
 
+	It("reports an already-selected catalog version as a no-op", func() {
+		clusters := &mockClustersClient{
+			listFunc: func(_ context.Context, _ *publicv1.ClustersListRequest, _ ...grpc.CallOption) (*publicv1.ClustersListResponse, error) {
+				return clusterList(publicv1.Cluster_builder{
+					Id: "cluster-id",
+					Spec: publicv1.ClusterSpec_builder{
+						Version: publicv1.ClusterVersionReference_builder{Id: "version-id"}.Build(),
+					}.Build(),
+				}.Build()), nil
+			},
+			updateFunc: func(_ context.Context, req *publicv1.ClustersUpdateRequest, _ ...grpc.CallOption) (*publicv1.ClustersUpdateResponse, error) {
+				return publicv1.ClustersUpdateResponse_builder{Object: req.GetObject()}.Build(), nil
+			},
+		}
+		versions := &mockClusterVersionsClient{
+			listFunc: func(_ context.Context, _ *publicv1.ClusterVersionsListRequest, _ ...grpc.CallOption) (*publicv1.ClusterVersionsListResponse, error) {
+				return versionList(publicv1.ClusterVersion_builder{
+					Id:       "version-id",
+					Metadata: publicv1.Metadata_builder{Name: "4-17-0"}.Build(),
+					Spec:     publicv1.ClusterVersionSpec_builder{Version: "4.17.0"}.Build(),
+				}.Build()), nil
+			},
+		}
+
+		Expect(upgradeCluster(ctx, clusters, versions, console, "cluster-id", "4-17-0")).To(Succeed())
+		Expect(output.String()).To(ContainSubstring(
+			"No upgrade was triggered for cluster 'cluster-id'; version '4.17.0' is already selected."))
+	})
+
 	It("propagates server rejection reasons", func() {
 		clusters := &mockClustersClient{
 			listFunc: func(_ context.Context, _ *publicv1.ClustersListRequest, _ ...grpc.CallOption) (*publicv1.ClustersListResponse, error) {

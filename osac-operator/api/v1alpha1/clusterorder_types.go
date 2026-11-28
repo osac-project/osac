@@ -192,13 +192,9 @@ type UpgradeObservation struct {
 	// control-plane observations. Feedback compares Version with the private
 	// attempt target.
 	ReadyAtVersion bool `json:"readyAtVersion,omitempty"`
-	// State reports observed progress or a terminal result for the selected
-	// component.
-	// +kubebuilder:validation:Enum=Progressing;Succeeded;Failed
+	// State reports observed progress or success for the selected component.
+	// +kubebuilder:validation:Enum=Progressing;Succeeded
 	State UpgradeObservationState `json:"state,omitempty"`
-	// Message explains a failed component's result without including provider
-	// output.
-	Message string `json:"message,omitempty"`
 }
 
 type UpgradeObservationState string
@@ -206,7 +202,6 @@ type UpgradeObservationState string
 const (
 	UpgradeObservationProgressing UpgradeObservationState = "Progressing"
 	UpgradeObservationSucceeded   UpgradeObservationState = "Succeeded"
-	UpgradeObservationFailed      UpgradeObservationState = "Failed"
 )
 
 // BareMetalNodeSpec holds configuration specific to bare-metal node requests.

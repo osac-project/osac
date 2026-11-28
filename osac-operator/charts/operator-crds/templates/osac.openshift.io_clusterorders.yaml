@@ -597,11 +597,6 @@ spec:
                           description: AttemptID links this observation to the current
                             whole-cluster attempt.
                           type: string
-                        message:
-                          description: |-
-                            Message explains a failed component's result without including provider
-                            output.
-                          type: string
                         readyAtVersion:
                           description: |-
                             ReadyAtVersion reports that a NodePool is ready at Version; it is unused for
@@ -609,13 +604,11 @@ spec:
                             attempt target.
                           type: boolean
                         state:
-                          description: |-
-                            State reports observed progress or a terminal result for the selected
-                            component.
+                          description: State reports observed progress or success
+                            for the selected component.
                           enum:
                           - Progressing
                           - Succeeded
-                          - Failed
                           type: string
                         version:
                           description: |-
@@ -739,11 +732,6 @@ spec:
                     description: AttemptID links this observation to the current whole-cluster
                       attempt.
                     type: string
-                  message:
-                    description: |-
-                      Message explains a failed component's result without including provider
-                      output.
-                    type: string
                   readyAtVersion:
                     description: |-
                       ReadyAtVersion reports that a NodePool is ready at Version; it is unused for
@@ -751,13 +739,11 @@ spec:
                       attempt target.
                     type: boolean
                   state:
-                    description: |-
-                      State reports observed progress or a terminal result for the selected
-                      component.
+                    description: State reports observed progress or success for the
+                      selected component.
                     enum:
                     - Progressing
                     - Succeeded
-                    - Failed
                     type: string
                   version:
                     description: |-

@@ -308,9 +308,6 @@ func applyUpgradeObservation(state upgradeComponentState,
 	case observation.State == ckv1alpha1.UpgradeObservationSucceeded && observation.Version == targetVersion:
 		next = privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED
 		message = ""
-	case observation.State == ckv1alpha1.UpgradeObservationFailed:
-		next = privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED
-		message = observation.Message
 	case state.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING &&
 		observation.State == ckv1alpha1.UpgradeObservationProgressing && progressAllowed:
 		next = privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING
@@ -327,8 +324,7 @@ func applyUpgradeObservation(state upgradeComponentState,
 // isTerminalUpgradeState reports whether component feedback must no longer
 // change the recorded outcome.
 func isTerminalUpgradeState(state privatev1.ClusterUpgradeState) bool {
-	return state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED ||
-		state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED
+	return state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED
 }
 
 // monotonicTransitionTime advances equal timestamps by one nanosecond so a

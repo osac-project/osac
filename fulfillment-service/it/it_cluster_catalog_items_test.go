@@ -28,6 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -1015,6 +1016,82 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(stored.GetObject().GetSpec().GetVersion().GetId()).To(Equal(firstVersion))
 			By("updating the original cluster through its ordinary version field")
 			privateClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+			completeUpgrade := func(clusterID string) {
+				// Control-plane success schedules the frozen NodePool batch; the
+				// second feedback update completes that scheduled batch.
+				for phase := 0; phase < 2; phase++ {
+					current, e := privateClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
+					Expect(e).NotTo(HaveOccurred())
+					object := current.GetObject()
+					active := object.GetStatus().GetActiveUpgradeAttempt()
+					if active == nil {
+						return
+					}
+					if phase == 0 {
+						if controlPlane := active.GetControlPlane(); controlPlane != nil {
+							controlPlane.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+							controlPlane.SetStateTransitionTime(timestamppb.New(
+								controlPlane.GetStateTransitionTime().AsTime().Add(time.Second)))
+						}
+					} else {
+						for _, nodeSet := range active.GetNodeSets() {
+							nodeSet.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+							nodeSet.SetStateTransitionTime(timestamppb.New(
+								nodeSet.GetStateTransitionTime().AsTime().Add(time.Second)))
+						}
+					}
+					_, e = privateClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+						Object: object,
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+							"status.active_upgrade_attempt", "status.upgrade_attempt_id",
+						}},
+					}.Build())
+					Expect(e).NotTo(HaveOccurred())
+					_, e = privateClient.Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: clusterID}.Build())
+					Expect(e).NotTo(HaveOccurred())
+				}
+			}
+
+			openUpgradeGate := func(clusterID string) {
+				current, e := privateClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
+				Expect(e).NotTo(HaveOccurred())
+				object := current.GetObject()
+				if object.GetStatus().GetStateTransitionTime() == nil ||
+					object.GetStatus().GetState() != privatev1.ClusterState_CLUSTER_STATE_PROGRESSING {
+					object.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now().Add(time.Second)))
+				}
+				object.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
+				conditions := make([]*privatev1.ClusterCondition, 0, len(object.GetStatus().GetConditions())+2)
+				for _, condition := range object.GetStatus().GetConditions() {
+					if condition.GetType() != privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE &&
+						condition.GetType() != privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY {
+						conditions = append(conditions, condition)
+					}
+				}
+				conditions = append(conditions,
+					privatev1.ClusterCondition_builder{
+						Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE,
+						Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+					}.Build(),
+					privatev1.ClusterCondition_builder{
+						Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY,
+						Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+					}.Build())
+				object.GetStatus().SetConditions(conditions)
+				object.GetStatus().SetObservedVersion("4.20.0")
+				for _, status := range object.GetStatus().GetNodeSets() {
+					status.SetObservedVersion("4.20.0")
+				}
+				_, e = privateClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: object,
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+						"status.state", "status.state_transition_time", "status.conditions",
+						"status.observed_version", "status.node_sets",
+					}},
+				}.Build())
+				Expect(e).NotTo(HaveOccurred())
+			}
+
 			current, e := privateClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: first.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			current.GetObject().GetStatus().SetObservedVersion("4.20.0")
@@ -1023,6 +1100,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.observed_version"}},
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
+			completeUpgrade(first.GetId())
+			openUpgradeGate(first.GetId())
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: secondVersion}.Build()}.Build()}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.version"),
@@ -1040,6 +1119,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(e).NotTo(HaveOccurred())
 			_, e = createClusterFixture(ctx, tool.ExternalView().UserConn(), request)
 			expectCatalogItemStatusCode(e, codes.NotFound)
+			completeUpgrade(first.GetId())
+			openUpgradeGate(first.GetId())
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: thirdVersion}.Build()}.Build()}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.version"),
@@ -1053,6 +1134,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			// The stored catalog reference is provenance; ordinary updates use the materialized inputs.
 			_, e = items.Delete(ctx, publicv1.ClusterCatalogItemsDeleteRequest_builder{Id: item.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
+			completeUpgrade(first.GetId())
+			openUpgradeGate(first.GetId())
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Id: first.GetId(),
@@ -1071,6 +1154,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 
 			internal := privatev1.NewClustersClient(tool.InternalView().AdminConn())
 			By("updating through the private API after catalog deletion")
+			completeUpgrade(first.GetId())
+			openUpgradeGate(first.GetId())
 			_, e = internal.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Id: first.GetId(),

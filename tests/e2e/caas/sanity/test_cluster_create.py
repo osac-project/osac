@@ -107,7 +107,13 @@ def _list_owned_worker_bmis(*, grpc: GRPCClient, co_name: str, tenant: str) -> d
 
 
 def _wait_for_cluster_and_infraenv_deletion(
-    *, k8s: K8sClient, co_name: str, infra_env_name: str, on_poll: Callable[[], None], on_timeout: Callable[[], None]
+    *,
+    k8s: K8sClient,
+    target_k8s: K8sClient,
+    co_name: str,
+    infra_env_name: str,
+    on_poll: Callable[[], None],
+    on_timeout: Callable[[], None],
 ) -> None:
     """Observe parent removal before starting the dependent garbage-collection budget."""
     try:
@@ -118,7 +124,7 @@ def _wait_for_cluster_and_infraenv_deletion(
 
     def _infraenv_absent_with_snapshot() -> bool:
         on_poll()
-        return k8s.is_absent(resource="infraenv.agent-install.openshift.io", name=infra_env_name)
+        return target_k8s.is_absent(resource="infraenv.agent-install.openshift.io", name=infra_env_name)
 
     try:
         poll_until(
@@ -157,10 +163,16 @@ class _AvailableCluster(_ClusterResources):
     original_size: int
 
 
-def _assert_worker_agents_and_installation(*, k8s: K8sClient, co_name: str, namespace: str, expected: int) -> None:
+def _assert_worker_agents_and_installation(
+    *, k8s: K8sClient, target_k8s: K8sClient, co_name: str, namespace: str, expected: int
+) -> None:
     """Report registration and installation as separate, named bring-up phases."""
-    wait_for_worker_agents(k8s=k8s, co_name=co_name, namespace=namespace, expected_agents=expected)
-    wait_for_worker_installation(k8s=k8s, co_name=co_name, namespace=namespace, expected_agents=expected)
+    wait_for_worker_agents(
+        k8s=k8s, target_k8s=target_k8s, co_name=co_name, namespace=namespace, expected_agents=expected
+    )
+    wait_for_worker_installation(
+        k8s=k8s, target_k8s=target_k8s, co_name=co_name, namespace=namespace, expected_agents=expected
+    )
 
 
 def _assert_operator_worker_metrics(*, k8s: K8sClient, co_name: str) -> None:
@@ -191,7 +203,13 @@ def _assert_operator_worker_metrics(*, k8s: K8sClient, co_name: str) -> None:
 
 
 def _assert_cluster_version_propagated(
-    *, k8s: K8sClient, co_name: str, cluster: dict[str, Any], cluster_order_spec: dict[str, Any], version_name: str
+    *,
+    k8s: K8sClient,
+    target_k8s: K8sClient,
+    co_name: str,
+    cluster: dict[str, Any],
+    cluster_order_spec: dict[str, Any],
+    version_name: str,
 ) -> tuple[str, str]:
     """Check fulfillment version resolution through to the HostedCluster release image."""
     resolved_version = cluster.get("object", {}).get("spec", {}).get("version", {}).get("name", "")
@@ -204,7 +222,7 @@ def _assert_cluster_version_propagated(
     hosted_cluster_name, hosted_cluster_ns = wait_for_hosted_cluster_reference(k8s=k8s, co_name=co_name)
 
     hosted_cluster_image = run(
-        *k8s._base(),
+        *target_k8s._base(),
         "get",
         "hostedcluster",
         hosted_cluster_name,
@@ -237,6 +255,7 @@ def _assert_worker_node_request(
 def _assert_guest_workers_ready(
     *,
     k8s: K8sClient,
+    target_k8s: K8sClient,
     co_name: str,
     hosted_cluster_name: str,
     hosted_cluster_ns: str,
@@ -245,9 +264,9 @@ def _assert_guest_workers_ready(
     expected_workers: int,
 ) -> None:
     def _get_node_pool() -> dict[str, Any] | None:
-        node_pools = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=hosted_cluster_ns).get(
-            "items", []
-        )
+        node_pools = target_k8s.list_json(
+            resource="nodepools.hypershift.openshift.io", namespace=hosted_cluster_ns
+        ).get("items", [])
         return next(
             (
                 item
@@ -259,7 +278,10 @@ def _assert_guest_workers_ready(
         )
 
     workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
-        k8s=k8s, hosted_cluster_namespace=hosted_cluster_ns, hosted_cluster_name=hosted_cluster_name
+        k8s=k8s,
+        target_k8s=target_k8s,
+        hosted_cluster_namespace=hosted_cluster_ns,
+        hosted_cluster_name=hosted_cluster_name,
     )
     with tempfile.NamedTemporaryFile(prefix="osac-workload-", suffix=".kubeconfig") as kubeconfig_file:
         kubeconfig_file.write(workload_kubeconfig)
@@ -281,6 +303,7 @@ def _assert_guest_workers_ready(
             # "nodepool-{hosted_cluster_name}" -- not the NodeSet label.
             node_pool_id=f"nodepool-{hosted_cluster_name}-{worker_node_set}",
             hosted_cluster_namespace=hosted_cluster_ns,
+            target_k8s=target_k8s,
         )
     assert node_pool is not None, f"No NodePool found for NodeSet {worker_node_set!r}"
     assert node_pool.get("metadata", {}).get("name") == f"nodepool-{hosted_cluster_name}-{worker_node_set}"
@@ -350,7 +373,7 @@ def _wait_for_cluster_infra_env_name(*, k8s: K8sClient, co_name: str) -> str:
 
 
 def _assert_worker_provisioning(
-    *, grpc: GRPCClient, k8s: K8sClient, uuid: str, co_name: str
+    *, grpc: GRPCClient, k8s: K8sClient, target_k8s: K8sClient, uuid: str, co_name: str
 ) -> tuple[str, dict[str, dict[str, Any]]]:
     """Check tenant-visible workers, Agent installation, and operator metrics."""
     logger.info("CaaS: waiting for ClusterOrder to progress")
@@ -374,7 +397,7 @@ def _assert_worker_provisioning(
     namespace = co["metadata"]["namespace"]
     assert namespace == k8s.namespace
     _assert_worker_agents_and_installation(
-        k8s=k8s, co_name=co_name, namespace=namespace, expected=_expected_worker_count(co)
+        k8s=k8s, target_k8s=target_k8s, co_name=co_name, namespace=namespace, expected=_expected_worker_count(co)
     )
     _assert_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=_expected_worker_count(co))
     _assert_operator_worker_metrics(k8s=k8s, co_name=co_name)
@@ -407,6 +430,7 @@ def assert_cluster_available(
     *,
     grpc: GRPCClient,
     k8s: K8sClient,
+    target_k8s: K8sClient,
     metering: MeteringCollector,
     uuid: str,
     version_name: str,
@@ -417,7 +441,9 @@ def assert_cluster_available(
     logger.info("CaaS: waiting for ClusterOrder")
     co_name = wait_for_cluster_order_cr(k8s=k8s, uuid=uuid)
     assert uuid in grpc.list_cluster_ids()
-    cluster_tenant, candidate_bmis = _assert_worker_provisioning(grpc=grpc, k8s=k8s, uuid=uuid, co_name=co_name)
+    cluster_tenant, candidate_bmis = _assert_worker_provisioning(
+        grpc=grpc, k8s=k8s, target_k8s=target_k8s, uuid=uuid, co_name=co_name
+    )
 
     wait_for_cluster_order_condition(k8s=k8s, name=co_name, condition_type="ClusterAvailable")
 
@@ -445,7 +471,12 @@ def assert_cluster_available(
         assert cluster_order_spec.get("sshKey", {}).get("id") == ssh_key_id
         assert "sshPublicKey" not in cluster_order_spec and "ssh_public_key" not in cluster_order_spec
     hosted_cluster_name, hosted_cluster_ns = _assert_cluster_version_propagated(
-        k8s=k8s, co_name=co_name, cluster=cluster, cluster_order_spec=cluster_order_spec, version_name=version_name
+        k8s=k8s,
+        target_k8s=target_k8s,
+        co_name=co_name,
+        cluster=cluster,
+        cluster_order_spec=cluster_order_spec,
+        version_name=version_name,
     )
     node_sets = cluster.get("object", {}).get("spec", {}).get("nodeSets", {})
     worker_node_set, original_size, worker_instance_type = _assert_worker_node_request(
@@ -453,6 +484,7 @@ def assert_cluster_available(
     )
     _assert_guest_workers_ready(
         k8s=k8s,
+        target_k8s=target_k8s,
         co_name=co_name,
         hosted_cluster_name=hosted_cluster_name,
         hosted_cluster_ns=hosted_cluster_ns,
@@ -476,7 +508,7 @@ def assert_cluster_available(
         # The operator materializes the registered Secret's public key into the
         # InfraEnv at creation; the CR is the only deployed place key bytes
         # appear, and it must match the key the suite registered.
-        infra_env = k8s.get_json(resource="infraenvs.agent-install.openshift.io", name=infra_env_name)
+        infra_env = target_k8s.get_json(resource="infraenvs.agent-install.openshift.io", name=infra_env_name)
         assert infra_env["spec"]["sshAuthorizedKey"] == expected_ssh_key, (
             "InfraEnv must carry the resolved registered SSH public key"
         )
@@ -599,7 +631,13 @@ def _net_intervals(events: list[dict[str, Any]]) -> list[tuple[datetime, datetim
 
 
 def _assert_cluster_deleted(
-    *, grpc: GRPCClient, k8s: K8sClient, metering: MeteringCollector, uuid: str, cluster: _ClusterResources
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    target_k8s: K8sClient,
+    metering: MeteringCollector,
+    uuid: str,
+    cluster: _ClusterResources,
 ) -> None:
     """Observe natural worker/parent teardown and dependent GC without forced cleanup."""
     co_name = cluster.co_name
@@ -642,6 +680,7 @@ def _assert_cluster_deleted(
     assert cluster.infra_env_name is not None
     _wait_for_cluster_and_infraenv_deletion(
         k8s=k8s,
+        target_k8s=target_k8s,
         co_name=co_name,
         infra_env_name=cluster.infra_env_name,
         on_poll=_snapshot_if_due,
@@ -681,6 +720,7 @@ def test_cluster_create(
     grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
+    k8s_target_client: K8sClient,
     cluster_template: str,
     pull_secret_name: str,
     ssh_key_secret: str,
@@ -746,6 +786,7 @@ def test_cluster_create(
         cluster = assert_cluster_available(
             grpc=grpc,
             k8s=k8s_hub_client,
+            target_k8s=k8s_target_client,
             metering=metering,
             uuid=uuid,
             version_name=version["name"],
@@ -761,6 +802,7 @@ def test_cluster_create(
         _assert_cluster_add_on_operators_installed(
             client=grpc,
             hub_k8s=k8s_hub_client,
+            target_k8s=k8s_target_client,
             cluster_id=uuid,
             cluster_order_name=cluster.co_name,
             expected_operator_specs=operator_specs,
@@ -775,7 +817,9 @@ def test_cluster_create(
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=cluster.original_size)
         capture_snapshot(request.config, request.node.nodeid)
         cli.delete_cluster(uuid=uuid)
-        _assert_cluster_deleted(grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, cluster=cluster)
+        _assert_cluster_deleted(
+            grpc=grpc, k8s=k8s_hub_client, target_k8s=k8s_target_client, metering=metering, uuid=uuid, cluster=cluster
+        )
     except (Exception, pytest.fail.Exception) as exc:
         capture_failure(request.config, exc, request.node.nodeid)
         raise
@@ -823,11 +867,13 @@ def _agent_is_installed(agent: dict[str, Any]) -> bool:
 
 
 def _assert_installed_agents_by_node_set(
-    *, k8s: K8sClient, co_name: str, expected_replicas: dict[str, int], instance_types: dict[str, str]
+    *, target_k8s: K8sClient, co_name: str, expected_replicas: dict[str, int], instance_types: dict[str, str]
 ) -> dict[str, list[dict[str, Any]]]:
     def _get_agents_by_node_set() -> dict[str, list[dict[str, Any]]]:
         agents: dict[str, list[dict[str, Any]]] = {}
-        items = k8s.list_json(resource="agents.agent-install.openshift.io", namespace=k8s.namespace).get("items", [])
+        items = target_k8s.list_json(resource="agents.agent-install.openshift.io", namespace=target_k8s.namespace).get(
+            "items", []
+        )
         for item in items:
             labels = item.get("metadata", {}).get("labels", {})
             if labels.get("osac.openshift.io/clusterorder") != co_name:
@@ -859,7 +905,7 @@ def _assert_installed_agents_by_node_set(
 
 def _assert_isolated_node_pools(
     *,
-    k8s: K8sClient,
+    target_k8s: K8sClient,
     co_name: str,
     hosted_cluster_ns: str,
     expected_replicas: dict[str, int],
@@ -870,7 +916,7 @@ def _assert_isolated_node_pools(
     old_label = "osac.openshift.io/resource_class"
 
     def _get_node_pools() -> dict[str, dict[str, Any]]:
-        items = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=hosted_cluster_ns).get(
+        items = target_k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=hosted_cluster_ns).get(
             "items", []
         )
         return {
@@ -935,7 +981,13 @@ def _assert_owned_workers_for_node_sets(
 
 
 def assert_cluster_with_two_node_sets_available(
-    *, grpc: GRPCClient, k8s: K8sClient, metering: MeteringCollector, uuid: str, instance_types: dict[str, str]
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    target_k8s: K8sClient,
+    metering: MeteringCollector,
+    uuid: str,
+    instance_types: dict[str, str],
 ) -> _ClusterResources:
     """Verify two ready worker sets remain isolated and record their owned resources."""
     co_name = wait_for_cluster_order_cr(k8s=k8s, uuid=uuid)
@@ -949,14 +1001,18 @@ def assert_cluster_with_two_node_sets_available(
     )
     hosted_cluster_name, hosted_cluster_namespace = wait_for_hosted_cluster_reference(k8s=k8s, co_name=co_name)
     _assert_worker_agents_and_installation(
-        k8s=k8s, co_name=co_name, namespace=k8s.namespace, expected=sum(expected_replicas.values())
+        k8s=k8s,
+        target_k8s=target_k8s,
+        co_name=co_name,
+        namespace=target_k8s.namespace,
+        expected=sum(expected_replicas.values()),
     )
     _assert_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=sum(expected_replicas.values()))
     _assert_installed_agents_by_node_set(
-        k8s=k8s, co_name=co_name, expected_replicas=expected_replicas, instance_types=instance_types
+        target_k8s=target_k8s, co_name=co_name, expected_replicas=expected_replicas, instance_types=instance_types
     )
     _assert_isolated_node_pools(
-        k8s=k8s,
+        target_k8s=target_k8s,
         co_name=co_name,
         hosted_cluster_ns=hosted_cluster_namespace,
         expected_replicas=expected_replicas,
@@ -964,7 +1020,9 @@ def assert_cluster_with_two_node_sets_available(
     )
     # Both node sets' workers must be bound through CAP-Agent and healthy in the
     # guest cluster, not just counted as ready Nodes by their NodePools.
-    wait_for_guest_cluster_health(k8s=k8s, co_name=co_name, expected_workers=sum(expected_replicas.values()))
+    wait_for_guest_cluster_health(
+        k8s=k8s, target_k8s=target_k8s, co_name=co_name, expected_workers=sum(expected_replicas.values())
+    )
 
     # The cluster was created without a project, so its heartbeats must carry
     # no project dimension: the engine emits only the facts a resource carries.

@@ -74,6 +74,7 @@ def main():
         "kind": kind,
         "namespace": namespace,
         "name": name,
+        "kubeconfig": module.params.get("kubeconfig"),
         "patch": copy.deepcopy(patch),
     }
     state.setdefault("operations", []).append(operation)

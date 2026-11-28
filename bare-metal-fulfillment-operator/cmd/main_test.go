@@ -206,7 +206,7 @@ var _ = Describe("createInventoryClient", func() {
 			Type: "metal3",
 		}
 
-		client, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, nil)
+		client, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, nil, nil)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("unsupported inventory type"))
 		Expect(client).To(BeNil())
@@ -219,7 +219,7 @@ var _ = Describe("createInventoryClient", func() {
 		}
 		managementCfg := &management.Config{Type: "openstack"}
 
-		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, nil)
+		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, nil, nil)
 		Expect(err).To(MatchError(ContainSubstring("NetBox backend requires management.type=metal3")))
 		Expect(inventoryClient).To(BeNil())
 	})
@@ -237,7 +237,7 @@ var _ = Describe("createInventoryClient", func() {
 			},
 		}
 
-		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, mgr)
+		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, mgr, nil)
 		Expect(err).To(MatchError(ContainSubstring("NetBox backend requires inventory.hostClass=metal3")))
 		Expect(inventoryClient).To(BeNil())
 	})
@@ -252,7 +252,7 @@ var _ = Describe("createInventoryClient", func() {
 			Options: map[string]any{testMetal3Backend: map[string]any{}},
 		}
 
-		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, nil)
+		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, nil, nil)
 		Expect(err).To(MatchError(ContainSubstring("metal3 namespace is required in management config")))
 		Expect(inventoryClient).To(BeNil())
 	})
@@ -288,7 +288,7 @@ var _ = Describe("createInventoryClient", func() {
 			},
 		}
 
-		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, mgr)
+		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, mgr, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(inventoryClient).To(BeAssignableToTypeOf(&inventory.NetBoxClient{}))
 		closer, ok := inventoryClient.(io.Closer)

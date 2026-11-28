@@ -59,6 +59,11 @@
         name: "{{ (hook_workflow_start | default(hook_workflow_start_default)).name }}"
         tasks_from: "{{ (hook_workflow_start | default(hook_workflow_start_default)).tasks_from }}"
 
+    - name: Include get remote cluster kubeconfig
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: get_remote_cluster_kubeconfig
+
     # CRITICAL: Extract cluster order name (NOT overrideable)
     - name: Set cluster order name
       ansible.builtin.set_fact:
@@ -101,23 +106,30 @@
         lease_name: "cluster-{{ cluster_order_name }}-lock"
 
     # CRITICAL: Add finalizers (NOT overrideable)
-    - name: Add infrastructure finalizer
+    - name: Add infrastructure finalizer to the cluster order
+      # The ClusterOrder is a hub object: its finalizer stays in-cluster.
       ansible.builtin.include_role:
         name: osac.service.finalizer
       vars:
         finalizer_state: present
         finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
         finalizer_target:
-          api_version: "{{ item.api_version }}"
-          kind: "{{ item.kind }}"
-          namespace: "{{ item.namespace | default(omit) }}"
-          name: "{{ item.name }}"
-      loop:
-        - api_version: osac.openshift.io/v1alpha1
+          api_version: osac.openshift.io/v1alpha1
           kind: ClusterOrder
           namespace: "{{ lookup('env', 'POD_NAMESPACE') | default(cluster_order.metadata.namespace, true) }}"
           name: "{{ cluster_order.metadata.name }}"
-        - api_version: v1
+
+    - name: Add infrastructure finalizer to the working namespace
+      # The working namespace is infrastructure: it lives in the outer
+      # cluster, so its finalizer follows the remote kubeconfig.
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: present
+        finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
+        finalizer_kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        finalizer_target:
+          api_version: v1
           kind: Namespace
           name: "{{ cluster_working_namespace }}"
 

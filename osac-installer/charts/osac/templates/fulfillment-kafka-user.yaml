@@ -2,8 +2,9 @@
 {{/*
 Strimzi KafkaUser. Creates SCRAM-SHA-512 credentials and a Secret with the same
 name as the user in the Kafka cluster namespace. ACLs grant produce and consume
-access to event topics under global.eventTopicPrefix (default osac.events.) and osac.system.* consumer groups used by the
-fulfillment service. The publisher creates the event topics and verifies the
+access to event topics under global.eventTopicPrefix (default osac.events.) and the
+consumer groups under osac.fulfillmentConsumerGroupPrefix (default osac.system.) used
+by the fulfillment service. The publisher creates the event topics and verifies the
 retention of the topics it finds, which Kafka guards with DescribeConfigs.
 */}}
 apiVersion: kafka.strimzi.io/v1
@@ -33,7 +34,7 @@ spec:
         host: "*"
       - resource:
           type: group
-          name: osac.system.
+          name: {{ include "osac.fulfillmentConsumerGroupPrefix" . }}
           patternType: prefix
         operations:
           - Read

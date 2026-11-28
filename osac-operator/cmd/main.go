@@ -136,7 +136,8 @@ const (
 	// Tenant configuration
 	envTenantNamespace = "OSAC_TENANT_NAMESPACE"
 
-	// Remote cluster (tenant, compute-instance, storage, and networking controllers)
+	// Remote cluster (tenant, compute-instance, storage, networking, cluster
+	// and bare-metal-instance controllers)
 	envRemoteClusterKubeconfig = "OSAC_REMOTE_CLUSTER_KUBECONFIG"
 
 	// Controller enable flags (defaults when flag is not set)
@@ -224,21 +225,16 @@ func (f *controllerFlags) validate() error {
 	return nil
 }
 
-// validateRemoteCluster verifies that no controllers incompatible with
-// remote-cluster kubeconfig mode are enabled when a kubeconfig path is set,
-// and rejects whitespace-only kubeconfig paths before trimming.
+// validateRemoteCluster rejects whitespace-only kubeconfig paths before
+// trimming. The cluster and bare-metal-instance controllers are supported in
+// remote mode: their hub objects stay local and their infrastructure is
+// managed through the remote cluster.
 func (f *controllerFlags) validateRemoteCluster(remoteClusterKubeconfig string) error {
 	if remoteClusterKubeconfig == "" {
 		return nil
 	}
 	if strings.TrimSpace(remoteClusterKubeconfig) == "" {
 		return fmt.Errorf("remote cluster kubeconfig path is empty")
-	}
-	if f.Cluster {
-		return fmt.Errorf("remote cluster kubeconfig option is not supported along with cluster controller")
-	}
-	if f.BareMetalInstance {
-		return fmt.Errorf("remote cluster kubeconfig option is not supported along with bare metal instance controller")
 	}
 	return nil
 }
@@ -265,22 +261,29 @@ func addSchemesForLocalControllers(
 }
 
 // addSchemesForRemoteControllers registers only the API schemes required by the enabled controllers.
-// Must be called before creating the manager.
+// Must be called before creating the manager. Hub objects (ClusterOrders, BareMetalInstances,
+// networking resources) resolve through the local scheme; infrastructure objects
+// (HostedClusters, NodePools, StorageClasses, VirtualMachines) through the remote scheme.
 func addSchemesForRemoteControllers(
 	localScheme *runtime.Scheme,
 	remoteScheme *runtime.Scheme,
-	enableComputeInstance, enableTenant, enableStorage, enableNetworking bool,
+	enableCluster, enableComputeInstance, enableTenant, enableStorage, enableNetworking, enableBareMetalInstance bool,
 ) {
 	utilruntime.Must(clientgoscheme.AddToScheme(localScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(localScheme))
-	if enableStorage {
-		utilruntime.Must(hypershiftv1beta1.AddToScheme(localScheme))
-	}
-	if enableNetworking {
+	// BareMetalInstance CRs are hub objects: the cleanup and feedback
+	// controllers watch them on the local cluster, as the networking
+	// controllers do for NetworkAttachment targets.
+	if enableNetworking || enableBareMetalInstance {
 		utilruntime.Must(bmfov1alpha1.AddToScheme(localScheme))
 	}
 
 	utilruntime.Must(clientgoscheme.AddToScheme(remoteScheme))
+	// The ClusterOrder, storage and add-on controllers read HostedClusters,
+	// NodePools and HostedControlPlanes on the cluster that hosts them.
+	if enableCluster || enableStorage {
+		utilruntime.Must(hypershiftv1beta1.AddToScheme(remoteScheme))
+	}
 	if enableComputeInstance {
 		utilruntime.Must(kubevirtv1.AddToScheme(remoteScheme))
 	}
@@ -457,9 +460,6 @@ func newDiscoveryIgnitionFetcherWithRoots(roots *x509.CertPool) (baremetalworker
 	return baremetalworker.NewIgnitionFetcher(&http.Client{Transport: transport}), nil
 }
 
-// setupClusterControllers registers the ClusterOrder controller and, when grpcConn is set,
-// the cluster Feedback controller.
-
 // setupAddOnOperatorController registers the ClusterOrder add-on operator controller.
 func setupAddOnOperatorController(mgr mcmanager.Manager, maxJobHistory int) error {
 	localMgr := mgr.GetLocalManager()
@@ -480,19 +480,33 @@ func setupAddOnOperatorController(mgr mcmanager.Manager, maxJobHistory int) erro
 		os.Getenv(envClusterOrderNamespace), provider, pollInterval,
 	)
 	reconciler.MaxJobHistory = maxJobHistory
+	// The HostedControlPlanes whose admin kubeconfigs feed add-on jobs are
+	// infrastructure: read them from the target cluster in remote mode.
+	reconciler.SetTargetCluster(mgr, targetClusterFromManager(mgr))
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("add-on operator controller: %w", err)
 	}
 	return nil
 }
 
+// infrastructureCAReader returns the reader for the OpenShift ingress CA
+// bundle: the remote cluster in remote mode, whose Routes terminate there,
+// and the local cluster otherwise.
+func infrastructureCAReader(localMgr ctrl.Manager, remoteCluster cluster.Cluster) client.Reader {
+	if remoteCluster != nil {
+		return remoteCluster.GetAPIReader()
+	}
+	return localMgr.GetAPIReader()
+}
+
 // setupClusterControllers registers the ClusterOrder and add-on operator controllers and,
 // when grpcConn is set, the cluster Feedback controller.
 func setupClusterControllers(
 	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
-	maxJobHistory int, engine *networktask.Engine,
+	maxJobHistory int, engine *networktask.Engine, remoteCluster cluster.Cluster,
 ) error {
 	localMgr := mgr.GetLocalManager()
+	targetCluster := targetClusterFromManager(mgr)
 
 	// BareMetalWorkerReconciler watches the same ClusterOrders and manages bare-metal worker
 	// provisioning (currently: ensure the cluster InfraEnv + fetch discovery ignition).
@@ -500,13 +514,17 @@ func setupClusterControllers(
 	if grpcConn != nil {
 		bmwFulfillment = baremetalworker.NewFulfillmentClientFromConn(grpcConn)
 	}
-	ignitionRoots, err := newIgnitionTrustRootCAs(localMgr.GetAPIReader())
+	// The ignition and management probes verify endpoints published by the
+	// infrastructure: their CA bundle is the infrastructure cluster's ingress
+	// CA, read here once at startup.
+	caReader := infrastructureCAReader(localMgr, remoteCluster)
+	ignitionRoots, err := newIgnitionTrustRootCAs(caReader)
 	if err != nil {
 		return err
 	}
 	managementRoots := ignitionRoots
 	if managementRoots == nil {
-		managementRoots, err = newManagementTrustRootCAs(localMgr.GetAPIReader())
+		managementRoots, err = newManagementTrustRootCAs(caReader)
 		if err != nil {
 			return err
 		}
@@ -522,6 +540,9 @@ func setupClusterControllers(
 		localMgr.GetEventRecorder("baremetalworker"),
 		os.Getenv(envClusterOrderNamespace),
 	)
+	// ClusterOrders stay local; the InfraEnv, its pull secret, the Agents and
+	// the NodePools are managed on the target cluster.
+	baremetalworkerReconciler.SetTargetCluster(mgr, targetCluster)
 	if grpcConn != nil {
 		baremetalworkerReconciler.SetSecretsClient(privatev1.NewSecretsClient(grpcConn))
 	}
@@ -535,12 +556,17 @@ func setupClusterControllers(
 			if grpcConn == nil {
 				return nil
 			}
+			feedbackConfig := controller.FeedbackReconcilerConfig{
+				ClusterOrderNamespace: os.Getenv(envClusterOrderNamespace),
+				UpgradeTimeouts:       clusterUpgradeTimeoutsFromEnv(),
+			}
+			// HostedClusters and NodePools are infrastructure: read them
+			// from the target cluster in remote mode.
+			if remoteCluster != nil {
+				feedbackConfig.InfrastructureClient = remoteCluster.GetClient()
+			}
 			return controller.NewFeedbackReconciler(
-				localMgr.GetClient(), grpcConn,
-				controller.FeedbackReconcilerConfig{
-					ClusterOrderNamespace: os.Getenv(envClusterOrderNamespace),
-					UpgradeTimeouts:       clusterUpgradeTimeoutsFromEnv(),
-				},
+				localMgr.GetClient(), grpcConn, feedbackConfig,
 			).SetupWithManager(mgr)
 		},
 		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
@@ -555,6 +581,9 @@ func setupClusterControllers(
 			reconciler.Engine = engine
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
 			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
+			// The cluster namespace, its objects and the HyperShift objects
+			// are managed on the target cluster.
+			reconciler.SetTargetCluster(mgr, targetCluster)
 			if grpcConn != nil {
 				reconciler.ClustersClient = privatev1.NewClustersClient(grpcConn)
 				reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)
@@ -771,6 +800,7 @@ func setupStorageController(mgr mcmanager.Manager, grpcConn grpc.ClientConnInter
 func setupControllers(
 	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
 	flags *controllerFlags, maxJobHistory int, fulfillmentTrustSourceName string,
+	remoteCluster cluster.Cluster,
 ) error {
 	if flags.Cluster || flags.ComputeInstance || flags.BareMetalInstance {
 		if err := controller.RegisterAutoExternalIPAttachmentOwnerIndex(mgr.GetLocalManager().GetFieldIndexer()); err != nil {
@@ -785,7 +815,7 @@ func setupControllers(
 		setupLog.Info("network task engine ready", "provisioningEnabled", engine.ProvisioningEnabled())
 	}
 	if flags.Cluster {
-		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory, engine); err != nil {
+		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory, engine, remoteCluster); err != nil {
 			return fmt.Errorf("cluster controllers: %w", err)
 		}
 		if helpers.GetEnvWithDefault(envEnableFulfillmentTrust, false) {
@@ -1151,7 +1181,7 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 		&remoteClusterKubeconfig,
 		"remote-cluster-kubeconfig",
 		os.Getenv(envRemoteClusterKubeconfig),
-		"Path to the kubeconfig for the remote cluster (not supported with cluster or baremetal-instance controllers).",
+		"Path to the kubeconfig for the remote cluster hosting the infrastructure objects.",
 	)
 
 	// Controller enable flags. Defaults from env; if none are set (flag or env), all controllers are enabled.
@@ -1175,6 +1205,14 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 	if remoteClusterKubeconfig != "" && networkingProvisioningEnabled() {
 		setupLog.Error(nil, "remote cluster kubeconfig is not supported with provider networking "+
 			"enabled; set global.networking.provisioningEnabled=false or remove the remote cluster")
+		os.Exit(1)
+	}
+
+	// The fulfillment trust reconciler reads HostedControlPlane kubeconfigs on
+	// the cluster it runs against; it has no remote-cluster wiring.
+	if remoteClusterKubeconfig != "" && helpers.GetEnvWithDefault(envEnableFulfillmentTrust, false) {
+		setupLog.Error(nil, "remote cluster kubeconfig is not supported with the fulfillment trust "+
+			"reconciler enabled; set global.fulfillmentTrust.enabled=false or remove the remote cluster")
 		os.Exit(1)
 	}
 
@@ -1250,10 +1288,12 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 		}
 		remoteScheme = runtime.NewScheme()
 		addSchemesForRemoteControllers(localScheme, remoteScheme,
+			ctrlFlags.Cluster,
 			ctrlFlags.ComputeInstance,
 			ctrlFlags.Tenant,
 			ctrlFlags.Storage,
 			ctrlFlags.Networking,
+			ctrlFlags.BareMetalInstance,
 		)
 		remoteCluster, err = newClusterFromKubeconfig(remoteClusterKubeconfig, remoteScheme)
 		if err != nil {
@@ -1363,7 +1403,9 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 	})
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
-	if err := setupControllers(mgr, grpcConn, ctrlFlags, maxJobHistory, fulfillmentTrustSourceName); err != nil {
+	if err := setupControllers(
+		mgr, grpcConn, ctrlFlags, maxJobHistory, fulfillmentTrustSourceName, remoteCluster,
+	); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}

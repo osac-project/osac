@@ -24,7 +24,9 @@ variables are used (injected from the configured config-as-code Secret, named
 | `AAP_INSTANCE_NAME` | Name of the AAP instance | `osac-aap` |
 | `AAP_HOSTNAME` | URL of the AAP instance to be configured | `http://` + `AAP_INSTANCE_NAME` |
 | `AAP_USERNAME` | Username to authenticate against AAP | `admin` |
-| `AAP_PASSWORD` | Password to authenticate against AAP (injected from `osac-aap-admin-password` when running in-cluster) | — |
+| `AAP_PASSWORD` | Password to authenticate against AAP (injected from the chart's admin-password Secret: `<instance>-admin-password` for the bundled AAP, `bootstrap.adminPasswordSecret` otherwise) | — |
+| `AAP_ADMIN_PASSWORD_SECRET_NAME` | Name of the Secret the config-as-code rerun's pod reads the admin password from | `osac-aap-admin-password` |
+| `AAP_ADMIN_PASSWORD_SECRET_KEY` | Key of the admin password in that Secret | `password` |
 | `AAP_VALIDATE_CERTS` | Whether to validate the SSL certificate behind `AAP_HOSTNAME` (`true`/`false`) | `true` |
 | `AAP_ORGANIZATION_NAME` | The AAP organization that should be created | `osac` |
 | `AAP_PROJECT_NAME` | Name of the project to be created | value of `NAMESPACE` |

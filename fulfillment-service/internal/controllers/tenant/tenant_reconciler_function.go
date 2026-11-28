@@ -1058,11 +1058,17 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 	err := t.r.vaultLifecycle.EnsureTenantNamespace(ctx, tenantName)
 	if err != nil {
 		code := grpcstatus.Code(vault.ToGrpcError(err))
-		t.r.logger.ErrorContext(ctx, "Failed to provision vault namespace for tenant",
+		attributes := []any{
 			slog.String("tenant_id", t.tenant.GetId()),
 			slog.String("tenant_name", tenantName),
 			slog.String("error_code", code.String()),
-		)
+		}
+		// The provisioning error names the failed step and the provider HTTP
+		// status; provider response bodies are deliberately not logged.
+		if detail := vault.ErrorDetail(err); detail != "" {
+			attributes = append(attributes, slog.String("error_detail", detail))
+		}
+		t.r.logger.ErrorContext(ctx, "Failed to provision vault namespace for tenant", attributes...)
 
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 			"ProvisionFailed", "Failed to provision vault namespace ("+code.String()+")")

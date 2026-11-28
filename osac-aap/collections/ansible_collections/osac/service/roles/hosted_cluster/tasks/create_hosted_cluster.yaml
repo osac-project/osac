@@ -1,5 +1,6 @@
 - name: Create Secret resource containing pull-secret
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: present
     definition:
       apiVersion: v1
@@ -7,7 +8,7 @@
       metadata:
         name: "pullsecret-cluster-{{ hosted_cluster_name }}"
         namespace: "{{ hosted_cluster_namespace }}"
-        labels: "{{ hosted_cluster_default_cluster_order_label }}"
+        labels: "{{ hosted_cluster_default_cluster_order_label | combine(osac_instance_labels | default({})) }}"
       data:
         .dockerconfigjson: >-
           {{ ((hosted_cluster_settings.pull_secret | to_json)
@@ -18,6 +19,7 @@
 
 - name: Create Secret resource containing ssh public key
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: present
     definition:
       apiVersion: v1
@@ -25,7 +27,7 @@
       metadata:
         name: "sshkey-cluster-{{ hosted_cluster_name }}"
         namespace: "{{ hosted_cluster_namespace }}"
-        labels: "{{ hosted_cluster_default_cluster_order_label }}"
+        labels: "{{ hosted_cluster_default_cluster_order_label | combine(osac_instance_labels | default({})) }}"
       data:
         id_rsa.pub: "{{ hosted_cluster_settings.ssh_public_key | b64encode }}"
 
@@ -38,7 +40,10 @@
       metadata:
         name: "{{ hosted_cluster_name }}"
         namespace: "{{ hosted_cluster_namespace }}"
-        labels: "{{ {'cluster.open-cluster-management.io/clusterset': 'default'} | combine(hosted_cluster_default_cluster_order_label) }}"
+        labels: >-
+          {{ {'cluster.open-cluster-management.io/clusterset': 'default'}
+             | combine(hosted_cluster_default_cluster_order_label)
+             | combine(osac_instance_labels | default({})) }}
       spec:
         release:
           image: "{{ ocp_release_image }}"
@@ -115,6 +120,7 @@
 - name: Create HostedCluster resource
   no_log: true
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: present
     definition: "{{ hosted_cluster_definition }}"
 
@@ -129,6 +135,7 @@
 # always runs before "Create cluster infrastructure".
 - name: Create CAPI provider Role for agent access
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: present
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
@@ -136,6 +143,7 @@
       metadata:
         name: capi-provider-role
         namespace: "{{ hosted_cluster_default_agent_namespace }}"
+        labels: "{{ osac_instance_labels | default({}) }}"
       rules:
         - apiGroups: ["agent-install.openshift.io"]
           resources: ["agents"]
@@ -161,6 +169,7 @@
 - name: Create NodePool resources
   no_log: true
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: present
     definition: "{{ item }}"
   loop: "{{ nodepool_definitions }}"
@@ -176,6 +185,7 @@
     - name: Retrieve NodePools owned by this cluster
       no_log: true
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         api_version: hypershift.openshift.io/v1beta1
         kind: NodePool
         namespace: "{{ hosted_cluster_namespace }}"
@@ -196,6 +206,7 @@
 
     - name: Delete NodePool resources
       kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         state: absent
         api_version: hypershift.openshift.io/v1beta1
         kind: NodePool

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -17,6 +18,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 )
 
 const (
@@ -92,6 +94,18 @@ func (r *Reconciler) handleClusterDeletion(ctx context.Context, co *v1alpha1.Clu
 	}
 
 	if len(workers) > 0 {
+		return ctrl.Result{RequeueAfter: teardownRequeueInterval}, nil
+	}
+
+	// The remote-mode InfraEnv and pull secret carry no owner reference, so the
+	// provider cluster's garbage collector never removes them. Delete them here,
+	// after the workers and their Agents are gone, and hold the finalizer until
+	// their absence is confirmed.
+	gone, err := r.deleteRemoteInfraEnv(ctx, co)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("deleting remote infrastructure: %w", err)
+	}
+	if !gone {
 		return ctrl.Result{RequeueAfter: teardownRequeueInterval}, nil
 	}
 
@@ -177,8 +191,7 @@ func isDetachedKnownUnbound(agent *unstructured.Unstructured, state string) bool
 	return !boundToMachine
 }
 
-func (r *Reconciler) checkUnbindingTimeout(
-	co *v1alpha1.ClusterOrder, w *v1alpha1.WorkerStatus,
+func (r *Reconciler) checkUnbindingTimeout(co *v1alpha1.ClusterOrder, w *v1alpha1.WorkerStatus,
 	agent *unstructured.Unstructured, now time.Time,
 ) {
 	if w.LastFailureTime == nil || now.Sub(w.LastFailureTime.Time) <= agentUnbindingTimeout {
@@ -188,4 +201,73 @@ func (r *Reconciler) checkUnbindingTimeout(
 	w.LastFailureMessage = fmt.Sprintf("agent %s stuck unbinding for > %s", agent.GetName(), agentUnbindingTimeout)
 	r.recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonAgentUnbindingTimeout, "UnbindTimeout",
 		"worker %s: agent %s stuck unbinding", w.Name, agent.GetName())
+}
+
+// deleteRemoteInfraEnv deletes the provider-cluster InfraEnv and its pull secret
+// for this ClusterOrder. Remote-mode objects carry no owner reference (see
+// setInfrastructureOwnership), so the worker finalizer is the only thing that
+// removes them. Local mode is a no-op: the controller reference lets the local
+// garbage collector delete them with the order.
+//
+// A Delete request is pending, never completion: absence is confirmed with an
+// uncached read and the caller requeues until both objects are gone. Deletion is
+// idempotent (an absent object is confirmation), identity-checked (a same-name
+// object without this order's markers is an error, never deleted) and UID-guarded
+// so a replacement created between observation and deletion survives.
+func (r *Reconciler) deleteRemoteInfraEnv(ctx context.Context, co *v1alpha1.ClusterOrder) (bool, error) {
+	if !r.remoteInfrastructure() {
+		return true, nil
+	}
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return false, err
+	}
+	reader, err := r.infrastructureReader(ctx)
+	if err != nil {
+		return false, err
+	}
+	return deleteInfraEnvObjects(ctx, reader, infrastructureClient, co)
+}
+
+// deleteInfraEnvObjects is deleteRemoteInfraEnv without the mode decision, so the
+// deletion and confirmation can be exercised against fake clients.
+func deleteInfraEnvObjects(
+	ctx context.Context, reader client.Reader, infrastructureClient client.Client, co *v1alpha1.ClusterOrder,
+) (bool, error) {
+	infraEnv := assistedservice.NewInfraEnvObject()
+	infraEnv.SetName(assistedservice.InfraEnvName(co.Name))
+	infraEnv.SetNamespace(co.Namespace)
+	secret := &corev1.Secret{}
+	secret.SetName(co.Name + pullSecretNameSuffix)
+	secret.SetNamespace(co.Namespace)
+
+	// The InfraEnv goes first so no new Agent registers while teardown drains.
+	pending := false
+	for _, observed := range []client.Object{infraEnv, secret} {
+		key := client.ObjectKeyFromObject(observed)
+		current := observed.DeepCopyObject().(client.Object)
+		switch err := reader.Get(ctx, key, current); {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			return false, fmt.Errorf("confirming %s deletion: %w", key, err)
+		}
+		if !remoteInfraObjectOwnedBy(co, current) {
+			return false, fmt.Errorf("%s is not owned by ClusterOrder %s", key, co.Name)
+		}
+		if !current.GetDeletionTimestamp().IsZero() {
+			pending = true
+			continue
+		}
+		uid := current.GetUID()
+		if uid == "" {
+			return false, fmt.Errorf("%s has no UID for safe deletion", key)
+		}
+		if err := infrastructureClient.Delete(ctx, current, client.Preconditions{UID: &uid}); err != nil &&
+			!apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("deleting %s: %w", key, err)
+		}
+		pending = true
+	}
+	return !pending, nil
 }

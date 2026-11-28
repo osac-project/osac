@@ -23,6 +23,7 @@
           'namespace': hosted_cluster_namespace,
           'labels': {agent_instance_type_label: item.bareMetal.instanceType, agent_node_set_label: item.nodeSet}
             | combine(hosted_cluster_default_cluster_order_label)
+            | combine(osac_instance_labels | default({}))
         } | combine({'annotations': {'osac.openshift.io/upgrade-attempt-id': hosted_cluster_upgrade_attempt_id}}
           if hosted_cluster_upgrade_attempt_id | length > 0 else {})),
         'spec': {

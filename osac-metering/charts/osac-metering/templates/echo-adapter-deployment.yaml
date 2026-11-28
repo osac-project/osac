@@ -36,7 +36,7 @@ spec:
           emptyDir:
             sizeLimit: 10Mi
       initContainers:
-        {{- include "osac-metering.kafkaSecretsInitContainer" (list . "osac-metering-echo-adapter") | nindent 8 }}
+        {{- include "osac-metering.kafkaSecretsInitContainer" (list . (include "osac-metering.echoAdapterKafkaUserName" .)) | nindent 8 }}
       containers:
         - name: echo-adapter
           image: "{{ .Values.echoAdapter.image.repository }}:{{ .Values.echoAdapter.image.tag }}"
@@ -47,13 +47,21 @@ spec:
             - name: KAFKA_TLS_CA_CERT
               value: /etc/ca-bundle/bundle.pem
             - name: KAFKA_SASL_USERNAME
-              value: osac-metering-echo-adapter
+              value: {{ include "osac-metering.echoAdapterKafkaUserName" . }}
             - name: KAFKA_CONSUMER_GROUP
-              value: osac-metering-echo-adapter
+              value: {{ include "osac-metering.echoAdapterKafkaUserName" . }}
             - name: KAFKA_SASL_PASSWORD_FILE
               value: /etc/kafka-secrets/password
             - name: METRICS_ADDR
               value: ":8080"
+            {{- if ne (include "osac-metering.heartbeatTopicPrefix" .) "osac.metering.heartbeat." }}
+            - name: METERING_HEARTBEAT_TOPIC_PREFIX
+              value: {{ include "osac-metering.heartbeatTopicPrefix" . | quote }}
+            {{- end }}
+            {{- if ne (include "osac-metering.deadLetterTopicPrefix" .) "osac.metering.dlq." }}
+            - name: METERING_DEADLETTER_TOPIC_PREFIX
+              value: {{ include "osac-metering.deadLetterTopicPrefix" . | quote }}
+            {{- end }}
             {{- with .Values.echoAdapter.maxEvents }}
             # The ring buffer keeps the most recent heartbeats for the E2E
             # assertions; a long parallel session evicts old events, so size it

@@ -129,9 +129,9 @@ func (r *Reconciler) bindAgent(
 	ctx context.Context, co *v1alpha1.ClusterOrder,
 	agent *unstructured.Unstructured, worker *v1alpha1.WorkerStatus,
 ) error {
-	reader := r.apiReader
-	if reader == nil {
-		reader = r.Client
+	reader, err := r.infrastructureReader(ctx)
+	if err != nil {
+		return err
 	}
 	latest := &unstructured.Unstructured{}
 	latest.SetGroupVersionKind(agentGVK)
@@ -180,7 +180,11 @@ func (r *Reconciler) bindAgent(
 	labels["osac.openshift.io/clusterorder"] = co.Name
 	latest.SetLabels(labels)
 
-	return r.Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return err
+	}
+	return infrastructureClient.Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 }
 
 // verifyAgentBinding prevents reassigning an Agent, including when its binding

@@ -813,9 +813,23 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
         raise
 
 
-def cluster_order_agents(*, k8s: K8sClient, co_name: str, namespace: str) -> list[dict[str, Any]]:
+def _target_cluster(k8s: K8sClient, target_k8s: K8sClient | None) -> K8sClient:
+    """The client that owns the HyperShift and Assisted resources for a ClusterOrder.
+
+    A vcluster run keeps ClusterOrders on the hub and creates Agents, InfraEnvs,
+    HostedClusters, NodePools and HostedControlPlanes on the outer cluster, which
+    `target_k8s` identifies. Unset means the hub owns both, as in a
+    single-cluster deployment.
+    """
+    return k8s if target_k8s is None else target_k8s
+
+
+def cluster_order_agents(
+    *, k8s: K8sClient, target_k8s: K8sClient | None = None, co_name: str, namespace: str
+) -> list[dict[str, Any]]:
     """Find this ClusterOrder's Agents, bound or not, from the InfraEnv label Assisted sets."""
-    items = k8s.list_json(resource="agents.agent-install.openshift.io", namespace=namespace).get("items", [])
+    client = _target_cluster(k8s, target_k8s)
+    items = client.list_json(resource="agents.agent-install.openshift.io", namespace=namespace).get("items", [])
     return [
         agent
         for agent in items
@@ -826,7 +840,7 @@ def cluster_order_agents(*, k8s: K8sClient, co_name: str, namespace: str) -> lis
 
 
 def wait_for_worker_agents(
-    *, k8s: K8sClient, co_name: str, namespace: str, expected_agents: int
+    *, k8s: K8sClient, target_k8s: K8sClient | None = None, co_name: str, namespace: str, expected_agents: int
 ) -> list[dict[str, Any]]:
     """Report each worker Agent as it registers, so binding progress is visible."""
     logger.info("CaaS phase: Agents binding")
@@ -834,7 +848,7 @@ def wait_for_worker_agents(
 
     def _check() -> list[dict[str, Any]]:
         nonlocal reported
-        agents = cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace)
+        agents = cluster_order_agents(k8s=k8s, target_k8s=target_k8s, co_name=co_name, namespace=namespace)
         if len(agents) > reported:
             logger.info("CaaS: %d of %d worker Agent(s) registered", len(agents), expected_agents)
             reported = len(agents)
@@ -878,7 +892,9 @@ def _agent_installed(agent: dict[str, Any]) -> bool:
     )
 
 
-def wait_for_worker_installation(*, k8s: K8sClient, co_name: str, namespace: str, expected_agents: int) -> None:
+def wait_for_worker_installation(
+    *, k8s: K8sClient, target_k8s: K8sClient | None = None, co_name: str, namespace: str, expected_agents: int
+) -> None:
     """Report install progress until every worker Agent reports itself installed."""
     logger.info("CaaS phase: starting install")
     previous = ""
@@ -886,7 +902,7 @@ def wait_for_worker_installation(*, k8s: K8sClient, co_name: str, namespace: str
 
     def _check() -> int:
         nonlocal previous, last_agents
-        agents = cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace)
+        agents = cluster_order_agents(k8s=k8s, target_k8s=target_k8s, co_name=co_name, namespace=namespace)
         last_agents = agents
         installed = sum(1 for agent in agents if _agent_installed(agent))
         pending = sorted({_agent_install_progress(agent) for agent in agents if not _agent_installed(agent)})
@@ -982,19 +998,20 @@ def wait_for_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers
 
 
 def wait_for_hosted_cluster_kubeconfig(
-    *, k8s: K8sClient, hosted_cluster_namespace: str, hosted_cluster_name: str
+    *, k8s: K8sClient, target_k8s: K8sClient | None = None, hosted_cluster_namespace: str, hosted_cluster_name: str
 ) -> bytes:
     hcp_namespace = f"{hosted_cluster_namespace}-{hosted_cluster_name}"
+    client = _target_cluster(k8s, target_k8s)
 
     def _get_kubeconfig() -> bytes:
-        hcp = k8s.get_json(resource="hostedcontrolplane", name=hosted_cluster_name, namespace=hcp_namespace)
+        hcp = client.get_json(resource="hostedcontrolplane", name=hosted_cluster_name, namespace=hcp_namespace)
         kubeconfig_ref = hcp.get("status", {}).get("kubeConfig", {})
         secret_name = kubeconfig_ref.get("name", "")
         secret_key = kubeconfig_ref.get("key", "")
         if not secret_name or not secret_key:
             return b""
 
-        secret = k8s.get_json(resource="secret", name=secret_name, namespace=hcp_namespace)
+        secret = client.get_json(resource="secret", name=secret_name, namespace=hcp_namespace)
         encoded_kubeconfig = secret.get("data", {}).get(secret_key, "")
         if not encoded_kubeconfig:
             return b""
@@ -1221,16 +1238,21 @@ def hosted_cluster_version_conditions_settled(
     )
 
 
-def wait_for_hosted_cluster_version_health(*, k8s: K8sClient, name: str, namespace: str) -> None:
+def wait_for_hosted_cluster_version_health(
+    *, k8s: K8sClient, target_k8s: K8sClient | None = None, name: str, namespace: str
+) -> None:
     """Require CVO's install conditions, bubbled up by HyperShift, to be healthy."""
     control_plane_namespace = f"{namespace}-{name}"
+    client = _target_cluster(k8s, target_k8s)
     want = _HOSTED_CLUSTER_VERSION_CONDITIONS | _HOSTED_CONTROL_PLANE_VERSION_CONDITIONS
     observed: dict[str, str] = {}
     logger.info("CaaS phase: waiting for control plane version health")
 
     def _check() -> bool:
-        hosted_cluster = k8s.get_json(resource="hostedcluster", name=name, namespace=namespace)
-        hosted_control_plane = k8s.get_json(resource="hostedcontrolplane", name=name, namespace=control_plane_namespace)
+        hosted_cluster = client.get_json(resource="hostedcluster", name=name, namespace=namespace)
+        hosted_control_plane = client.get_json(
+            resource="hostedcontrolplane", name=name, namespace=control_plane_namespace
+        )
         observed.clear()
         observed.update(hosted_cluster_version_conditions(hosted_cluster))
         observed.update(hosted_control_plane_version_conditions(hosted_control_plane))
@@ -1257,11 +1279,16 @@ def wait_for_hosted_cluster_version_health(*, k8s: K8sClient, name: str, namespa
     logger.info("CaaS: %s ClusterVersion conditions: %s", name, observed)
 
 
-def wait_for_guest_cluster_health(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
+def wait_for_guest_cluster_health(
+    *, k8s: K8sClient, target_k8s: K8sClient | None = None, co_name: str, expected_workers: int
+) -> None:
     """Guest health for flows that never hold a workload kubeconfig themselves."""
     hosted_cluster_name, hosted_cluster_ns = wait_for_hosted_cluster_reference(k8s=k8s, co_name=co_name)
     workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
-        k8s=k8s, hosted_cluster_namespace=hosted_cluster_ns, hosted_cluster_name=hosted_cluster_name
+        k8s=k8s,
+        target_k8s=target_k8s,
+        hosted_cluster_namespace=hosted_cluster_ns,
+        hosted_cluster_name=hosted_cluster_name,
     )
     with tempfile.NamedTemporaryFile(prefix="osac-workload-", suffix=".kubeconfig") as kubeconfig_file:
         kubeconfig_file.write(workload_kubeconfig)
@@ -1270,7 +1297,9 @@ def wait_for_guest_cluster_health(*, k8s: K8sClient, co_name: str, expected_work
         wait_for_workload_cluster_health(
             k8s=workload_k8s, cluster_name=hosted_cluster_name, expected_workers=expected_workers
         )
-    wait_for_hosted_cluster_version_health(k8s=k8s, name=hosted_cluster_name, namespace=hosted_cluster_ns)
+    wait_for_hosted_cluster_version_health(
+        k8s=k8s, target_k8s=target_k8s, name=hosted_cluster_name, namespace=hosted_cluster_ns
+    )
 
 
 def wait_for_workload_cluster_health(*, k8s: K8sClient, cluster_name: str, expected_workers: int) -> None:
@@ -1338,6 +1367,7 @@ def wait_for_cluster_guest_readiness(
     node_pool_description: str,
     node_pool_id: str,
     hosted_cluster_namespace: str,
+    target_k8s: K8sClient | None = None,
 ) -> dict[str, Any]:
     wait_for_cluster_ready(k8s=k8s, name=name)
     # Hub Ready can precede usable guest access; retain bounded guest retries.
@@ -1352,7 +1382,9 @@ def wait_for_cluster_guest_readiness(
         resource_kind=WaitResourceKind.NODE_POOL,
         resource_id=node_pool_id,
     )
-    wait_for_hosted_cluster_version_health(k8s=k8s, name=cluster_name, namespace=hosted_cluster_namespace)
+    wait_for_hosted_cluster_version_health(
+        k8s=k8s, target_k8s=target_k8s, name=cluster_name, namespace=hosted_cluster_namespace
+    )
     return node_pool
 
 
@@ -1378,7 +1410,7 @@ def wait_for_cluster_deletion_without_cleanup(
     )
 
 
-def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
+def wait_for_cluster_deletion(*, k8s: K8sClient, target_k8s: K8sClient | None = None, name: str) -> None:
     # HACK: HyperShift has multiple teardown bugs where controllers leave orphaned state
     # that deadlocks HostedCluster deletion. We force-clean on every poll iteration:
     #
@@ -1396,9 +1428,9 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
     #    controller waits forever for the annotation to be removed, blocking the entire
     #    deletion cascade (Machine → MachineSet → CAPI Cluster → HostedCluster).
     def _check_deleted() -> bool:
-        _force_cleanup_agentcluster_finalizers(k8s=k8s, name=name)
-        _force_cleanup_agent_labels(k8s=k8s, name=name)
-        _force_cleanup_machine_preterminate_hooks(k8s=k8s, name=name)
+        _force_cleanup_agentcluster_finalizers(k8s=k8s, target_k8s=target_k8s, name=name)
+        _force_cleanup_agent_labels(k8s=k8s, target_k8s=target_k8s, name=name)
+        _force_cleanup_machine_preterminate_hooks(k8s=k8s, target_k8s=target_k8s, name=name)
         return k8s.get_cluster_order_phase(name=name, checked=False) is None
 
     poll_until(
@@ -1413,12 +1445,12 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
     )
 
 
-def _force_cleanup_agentcluster_finalizers(*, k8s: K8sClient, name: str) -> None:
+def _force_cleanup_agentcluster_finalizers(*, k8s: K8sClient, target_k8s: K8sClient | None = None, name: str) -> None:
     # HCP namespace: {osac-ns}-{co-name}-{hc-name}, where hc-name == co-name
     hc_ns = f"{k8s.namespace}-{name}"
     cp_ns = f"{hc_ns}-{name}"
     finalizer = "agentclustercapi-provider.agent-install.openshift.io/deprovision"
-    base_args = [*k8s._base(), "--as", "system:admin"]
+    base_args = _target_cluster(k8s, target_k8s).base_args()
     output, rc = run_unchecked(
         *base_args,
         "get",
@@ -1456,11 +1488,11 @@ def _force_cleanup_agentcluster_finalizers(*, k8s: K8sClient, name: str) -> None
         )
 
 
-def _force_cleanup_agent_labels(*, k8s: K8sClient, name: str) -> None:
+def _force_cleanup_agent_labels(*, k8s: K8sClient, target_k8s: K8sClient | None = None, name: str) -> None:
     agent_ns = "hardware-inventory"
     clusterorder_label = "osac.openshift.io/clusterorder"
     clusterdeployment_ns_label = "agent-install.openshift.io/clusterdeployment-namespace"
-    base_args = [*k8s._base(), "--as", "system:admin"]
+    base_args = _target_cluster(k8s, target_k8s).base_args()
     output, rc = run_unchecked(
         *base_args,
         "get",
@@ -1486,10 +1518,12 @@ def _force_cleanup_agent_labels(*, k8s: K8sClient, name: str) -> None:
         )
 
 
-def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> None:
+def _force_cleanup_machine_preterminate_hooks(
+    *, k8s: K8sClient, target_k8s: K8sClient | None = None, name: str
+) -> None:
     cp_ns = f"{k8s.namespace}-{name}-{name}"
     hook = "pre-terminate.delete.hook.machine.cluster.x-k8s.io/agentmachine"
-    base_args = [*k8s._base(), "--as", "system:admin"]
+    base_args = _target_cluster(k8s, target_k8s).base_args()
     output, rc = run_unchecked(
         *base_args, "get", "machines.cluster.x-k8s.io", "-n", cp_ns, "-o", "jsonpath={.items[*].metadata.name}"
     )
@@ -1960,6 +1994,67 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str, retries: int = _BMI_R
     )
 
 
+def assert_bmi_lifecycle_on_running(
+    *, grpc: GRPCClient, k8s: K8sClient, bmh_k8s: K8sClient, bmi_id: str, bmh_namespace: str, power_cycle: bool = True
+) -> tuple[str, str]:
+    """Assert BMH binding/provisioning on an already-RUNNING BMI.
+
+    Does not create or delete the instance. Inventory exhaust calls this after all
+    claim BMIs reach RUNNING so provisioning is not blocked by interleaved checks.
+
+    ``k8s`` reads the BareMetalInstance CR on the hub; ``bmh_k8s`` reads the
+    BareMetalHost, which can live on another cluster (``k8s_bmh_client``).
+
+    Returns (bmi_cr_name, bmh_name).
+    """
+    assert bmi_id in grpc.list_baremetal_instance_ids()
+    bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s, uuid=bmi_id)
+
+    external_host_id: str = k8s.get_baremetal_instance_external_host_id(name=bmi_cr_name)
+    assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
+    bmh_ns, bmh_name = external_host_id.split("/", 1)
+    assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
+
+    wait_for_bmh_provisioned(k8s=bmh_k8s, name=bmh_name, bmh_namespace=bmh_ns)
+
+    image_url: str = bmh_k8s.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_ns)
+    assert image_url != "", f"BMH {bmh_name} has no image URL after provisioning"
+
+    consumer_ref: str = bmh_k8s.get_bmh_consumer_ref(name=bmh_name, bmh_namespace=bmh_ns)
+    assert consumer_ref != "", f"BMH {bmh_name} has no consumerRef after allocation"
+
+    online: str = bmh_k8s.get_bmh_online(name=bmh_name, bmh_namespace=bmh_ns)
+    assert online == "true", f"BMH {bmh_name} should be online after provisioning, got: {online}"
+
+    if power_cycle:
+        grpc.update_baremetal_instance_run_strategy(
+            bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED"
+        )
+        poll_until(
+            fn=lambda: bmh_k8s.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
+            until=lambda v: v == "false",
+            retries=60,
+            delay=5,
+            description=f"{bmh_name} powered off",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
+        )
+        grpc.update_baremetal_instance_run_strategy(
+            bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS"
+        )
+        poll_until(
+            fn=lambda: bmh_k8s.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
+            until=lambda v: v == "true",
+            retries=60,
+            delay=5,
+            description=f"{bmh_name} powered on",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
+        )
+
+    return bmi_cr_name, bmh_name
+
+
 @dataclass(frozen=True)
 class HostRef:
     """A provisioning host: the BMH the inventory handed over to metal3.
@@ -2095,6 +2190,12 @@ def wait_for_bmi_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
 
 
 def wait_for_bmh_provisioned(*, k8s: K8sClient, name: str, bmh_namespace: str) -> None:
+    """Wait until a BareMetalHost reaches the provisioned state.
+
+    ``k8s`` must be the BMH client (``k8s_bmh_client``): the BMH inventory is
+    not guaranteed to live on the hub's cluster.
+    """
+
     def _check() -> str:
         state: str = k8s.get_bmh_provisioning_state(name=name, bmh_namespace=bmh_namespace)
         assert state != "error", f"BMH {name} entered error state"
@@ -2112,6 +2213,12 @@ def wait_for_bmh_provisioned(*, k8s: K8sClient, name: str, bmh_namespace: str) -
 
 
 def wait_for_bmh_available(*, k8s: K8sClient, name: str, bmh_namespace: str) -> None:
+    """Wait until a BareMetalHost is available or ready for a new claim.
+
+    ``k8s`` must be the BMH client (``k8s_bmh_client``): the BMH inventory is
+    not guaranteed to live on the hub's cluster.
+    """
+
     def _check() -> str:
         state: str = k8s.get_bmh_provisioning_state(name=name, bmh_namespace=bmh_namespace)
         assert state != "error", f"BMH {name} entered error state"

@@ -500,7 +500,11 @@ func (r *ClusterOrderReconciler) hostedControlPlaneAPIServerService(
 	ctx context.Context, hc *hypershiftv1beta1.HostedCluster,
 ) (*corev1.Service, error) {
 	service := &corev1.Service{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: hostedControlPlaneNamespace(hc), Name: "kube-apiserver"}, service)
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	err = infrastructureClient.Get(ctx, client.ObjectKey{Namespace: hostedControlPlaneNamespace(hc), Name: "kube-apiserver"}, service)
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
@@ -521,7 +525,11 @@ func (r *ClusterOrderReconciler) guestClusterClient(
 		return nil, false, false, nil
 	}
 	secret := &corev1.Secret{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: hostedControlPlaneNamespace(hc), Name: serviceNetworkKubeconfig}, secret)
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, false, false, err
+	}
+	err = infrastructureClient.Get(ctx, client.ObjectKey{Namespace: hostedControlPlaneNamespace(hc), Name: serviceNetworkKubeconfig}, secret)
 	if apierrors.IsNotFound(err) {
 		return nil, false, false, nil
 	}

@@ -361,12 +361,19 @@ def test_metering_stop_ends_billing(
             )
 
         # The stop reaches metering through several steps: operator feedback, a
+        # fulfillment status change, the event topic, the fold, and a round. A round that
+        # runs before the stop is folded still sends a full interval, and the real final
+        # partial interval arrives only in the next round, so wait past a full round
+        # before picking the final heartbeat.
+        time.sleep(90)
+
+        # The stop reaches metering through several steps: operator feedback, a
         # fulfillment status change, the event topic, the fold, and a round. A round
         # that runs before the stop is folded still sends a full interval, and the
         # real final partial interval can land several rounds later. The wait keeps
         # polling while the net end is below the recorded stop, so a late piece only
-        # delays the anchor; its quiet window starts once the end reaches it.
-        final_to = metering.wait_for_billing_end(uuid, deletion=stopped_at, timeout=BILLING_END_TIMEOUT)
+        # delays the anchor; the quiet window below starts once the end reaches it.
+        metering.wait_for_billing_end(uuid, deletion=stopped_at, timeout=BILLING_END_TIMEOUT)
 
         # The net billing ends at the recorded stop, not at the round that
         # observed it: a round that ran before the stop was folded sends a full
@@ -384,7 +391,42 @@ def test_metering_stop_ends_billing(
         )
 
         # Past the final interval nothing more arrives: the meter stopped.
-        metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=final_to.isoformat(), within=90)
+        # Under parallel-suite load (several runs sharing the AAP and Kafka)
+        # a round that started before the stop was folded can still deliver
+        # one more interval after the anchor was picked, so the quiet window
+        # is judged against the latest observed interval end, not against the
+        # anchor: the meter has stopped when the latest end stops advancing
+        # for a full quiet window and the net usage past the stop has
+        # settled. Pinning the window to the anchor, as assert_no_events
+        # does, would read that healthy-but-slow correction as a leak.
+        latest_seen_end: datetime | None = None
+        quiet_since: datetime | None = None
+
+        def _meter_quiet() -> bool:
+            nonlocal latest_seen_end, quiet_since
+            events = metering.get_all_events(HEARTBEAT_TYPE, uuid)
+            nets = net_usage_past_by_dimension(events, past=stopped_at)
+            settled = all(abs(net) <= 1 for net in nets.values())
+            latest_end = max((usage_interval(event)[1] for event in events), default=None)
+            now = datetime.now(UTC)
+            if latest_end != latest_seen_end:
+                latest_seen_end = latest_end
+                quiet_since = now
+                return False
+            if quiet_since is None:
+                quiet_since = now
+                return False
+            return settled and (now - quiet_since) >= timedelta(seconds=90)
+
+        poll_until(
+            fn=_meter_quiet,
+            until=lambda quiet: quiet,
+            retries=30,
+            delay=10,
+            description=f"metering of {uuid} to fall quiet after the stop",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
+        )
     finally:
         _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
 

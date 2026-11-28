@@ -77,6 +77,14 @@ spec:
               value: {{ include "osac-metering.kafkaBrokers" . | quote }}
             - name: KAFKA_EVENT_TOPIC_PREFIX
               value: {{ .Values.global.eventTopicPrefix | default "osac.events." | quote }}
+            {{- if ne (include "osac-metering.heartbeatTopicPrefix" .) "osac.metering.heartbeat." }}
+            - name: METERING_HEARTBEAT_TOPIC_PREFIX
+              value: {{ include "osac-metering.heartbeatTopicPrefix" . | quote }}
+            {{- end }}
+            {{- if ne (include "osac-metering.deadLetterTopicPrefix" .) "osac.metering.dlq." }}
+            - name: METERING_DEADLETTER_TOPIC_PREFIX
+              value: {{ include "osac-metering.deadLetterTopicPrefix" . | quote }}
+            {{- end }}
             - name: KAFKA_TLS_CA_CERT
               value: /etc/ca-bundle/bundle.pem
             - name: KAFKA_SASL_USERNAME

@@ -43,9 +43,10 @@
         namespace: metallb-system
         annotations:
           metallb.universe.tf/address-pool: "{{ ip_pool_name }}"
-        labels:
-          osac.openshift.io/externalip: "{{ ip_name }}"
-          osac.openshift.io/managed-by: osac-fulfillment
+        labels: >-
+          {{ {'osac.openshift.io/externalip': ip_name,
+              'osac.openshift.io/managed-by': 'osac-fulfillment'}
+             | combine(osac_instance_labels | default({})) }}
       spec:
         type: LoadBalancer
         selector: {}

@@ -1,4 +1,11 @@
 ---
+# Every call below targets the guest hosted cluster, not the hub or the
+# outer infrastructure cluster: playbook_osac_install_addon_operator.yml
+# materializes the hosted cluster's admin kubeconfig into the
+# K8S_AUTH_KUBECONFIG environment for this role. Passing
+# remote_cluster_kubeconfig here would retarget these calls at the outer
+# cluster and install the operators on the wrong cluster, so none of them
+# carry a kubeconfig parameter.
 - name: Ensure add-on operator namespace exists
   kubernetes.core.k8s:
     state: present

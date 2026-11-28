@@ -102,7 +102,11 @@ func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.Cluster
 func (r *Reconciler) cleanupAgent(ctx context.Context, co *v1alpha1.ClusterOrder, w v1alpha1.WorkerStatus, bmi *privatev1.BareMetalInstance) (*unstructured.Unstructured, error) {
 	agents := &unstructured.UnstructuredList{}
 	agents.SetGroupVersionKind(agentGVK.GroupVersion().WithKind("AgentList"))
-	if err := r.apiReader.List(ctx, agents, client.InNamespace(co.Namespace)); err != nil {
+	reader, err := r.infrastructureReader(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := reader.List(ctx, agents, client.InNamespace(co.Namespace)); err != nil {
 		return nil, fmt.Errorf("observing cleanup Agents: %w", err)
 	}
 	var matched *unstructured.Unstructured
@@ -178,5 +182,9 @@ func (r *Reconciler) requestCleanupAgent(ctx context.Context, co *v1alpha1.Clust
 	}
 	// Also protect detach/binding changes between observation and deletion.
 	rv := agent.GetResourceVersion()
-	return r.Delete(ctx, agent, client.Preconditions{UID: &uid, ResourceVersion: &rv})
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return err
+	}
+	return infrastructureClient.Delete(ctx, agent, client.Preconditions{UID: &uid, ResourceVersion: &rv})
 }

@@ -143,6 +143,9 @@ spec:
         - --kafka-properties-file=/etc/fulfillment-event-publisher/kafka
         - --kafka-topic-retention={{ .Values.eventPublisher.topicRetention | default "-1s" }}
         - --kafka-topic-prefix={{ .Values.global.eventTopicPrefix | default "osac.events." }}
+        {{- if ne (include "fulfillment-service.kafkaConsumerGroupPrefix" .) "osac.system." }}
+        - --kafka-consumer-group-prefix={{ include "fulfillment-service.kafkaConsumerGroupPrefix" . }}
+        {{- end }}
         - --ca-file=/etc/ca-bundle/bundle.pem
         ports:
         - name: grpc

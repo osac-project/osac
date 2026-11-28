@@ -57,7 +57,11 @@ func (r *Reconciler) listNodePools(ctx context.Context, namespace, clusterOrderN
 	nodePoolList.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "hypershift.openshift.io", Version: "v1beta1", Kind: "NodePoolList",
 	})
-	if err := r.List(ctx, nodePoolList,
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := infrastructureClient.List(ctx, nodePoolList,
 		client.InNamespace(namespace),
 		client.MatchingLabels{"osac.openshift.io/clusterorder": clusterOrderName},
 	); err != nil {
@@ -85,7 +89,11 @@ func (r *Reconciler) patchNodePoolReplicas(
 		if err := unstructured.SetNestedField(patch.Object, replicas, "spec", "replicas"); err != nil {
 			return fmt.Errorf("setting nodepool replicas: %w", err)
 		}
-		if err := r.Patch(ctx, patch, client.MergeFrom(np)); err != nil {
+		infrastructureClient, err := r.infrastructureClient(ctx)
+		if err != nil {
+			return err
+		}
+		if err := infrastructureClient.Patch(ctx, patch, client.MergeFrom(np)); err != nil {
 			return fmt.Errorf("patching nodepool %s replicas: %w", np.GetName(), err)
 		}
 		log.Info("updated NodePool replicas", "nodepool", np.GetName(), "replicas", replicas)

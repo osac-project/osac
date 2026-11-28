@@ -11,6 +11,7 @@
 
 - name: Get BareMetalHost
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: metal3.io/v1alpha1
     kind: BareMetalHost
     namespace: "{{ bmh_namespace }}"
@@ -49,6 +50,7 @@
     - name: Read inspected hardware when root device hints are absent
       when: not (bmh_info.spec.rootDeviceHints | default({}))
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         api_version: metal3.io/v1alpha1
         kind: HardwareData
         namespace: "{{ bmh_namespace }}"
@@ -72,6 +74,8 @@
       when: user_data_secret_ref | length > 0
       block:
         - name: Fetch userDataSecret
+          # Reads from the hub where the BareMetalInstance exists; the
+          # remote kubeconfig targets the outer cluster's hosts.
           kubernetes.core.k8s_info:
             api_version: v1
             kind: Secret
@@ -88,6 +92,7 @@
 
         - name: Create userData Secret in BMH namespace
           kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
             state: present
             definition:
               apiVersion: v1
@@ -101,6 +106,7 @@
     - name: Create metaData Secret with SSH public key
       when: ssh_key | length > 0
       kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         state: present
         definition:
           apiVersion: v1
@@ -114,6 +120,7 @@
     - name: Create networkData Secret
       when: template_params.networkData | default('') | length > 0
       kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         state: present
         definition:
           apiVersion: v1
@@ -129,6 +136,7 @@
 
     - name: Patch BareMetalHost with image and provisioning settings
       kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         api_version: metal3.io/v1alpha1
         kind: BareMetalHost
         namespace: "{{ bmh_namespace }}"
@@ -138,6 +146,7 @@
 
     - name: Wait for BMH to reach provisioned state
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         api_version: metal3.io/v1alpha1
         kind: BareMetalHost
         namespace: "{{ bmh_namespace }}"

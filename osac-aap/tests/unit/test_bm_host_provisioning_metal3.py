@@ -335,3 +335,61 @@ def test_delete_tolerates_already_absent_generated_secrets(tmp_path):
         "test-bmh-user-data",
         "test-bmh-meta-data",
     }
+
+
+REMOTE_KUBECONFIG = "/etc/osac/remote-cluster-kubeconfig"
+
+
+def all_operations(state):
+    return state["operations"]
+
+
+def test_create_routes_outer_calls_through_the_remote_kubeconfig(tmp_path, monkeypatch):
+    """BareMetalHosts, their HardwareData and their namespace Secrets are
+    infrastructure: with OSAC_REMOTE_CLUSTER_KUBECONFIG set, every call on
+    them carries it. The userData Secret referenced by the BareMetalInstance
+    lives in the hub namespace next to it and stays in-cluster."""
+    monkeypatch.setenv("OSAC_REMOTE_CLUSTER_KUBECONFIG", REMOTE_KUBECONFIG)
+    result, state = run_role(
+        tmp_path,
+        "unit_create.yml",
+        {BMH_KEY: bmh_resource(), SOURCE_SECRET_KEY: source_secret()},
+        params=template_params(userDataSecret="source-user-data"),
+    )
+
+    assert result.returncode == 0, result.stdout
+    outer_calls = [
+        op for op in all_operations(state) if op["namespace"] == "metal3-test"
+    ]
+    hub_calls = [op for op in all_operations(state) if op["namespace"] == "tenant-test"]
+    assert outer_calls, "the create flow must reach the outer cluster"
+    assert all(op["kubeconfig"] == REMOTE_KUBECONFIG for op in outer_calls)
+    assert hub_calls, "the create flow must read the hub userData Secret"
+    assert all(op["kubeconfig"] is None for op in hub_calls)
+
+
+def test_create_keeps_calls_in_cluster_without_a_remote_kubeconfig(tmp_path, monkeypatch):
+    monkeypatch.delenv("OSAC_REMOTE_CLUSTER_KUBECONFIG", raising=False)
+    result, state = run_role(
+        tmp_path,
+        "unit_create.yml",
+        {BMH_KEY: bmh_resource()},
+        params=template_params(),
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert all(op["kubeconfig"] is None for op in all_operations(state))
+
+
+def test_delete_routes_outer_calls_through_the_remote_kubeconfig(tmp_path, monkeypatch):
+    monkeypatch.setenv("OSAC_REMOTE_CLUSTER_KUBECONFIG", REMOTE_KUBECONFIG)
+    result, state = run_role(
+        tmp_path,
+        "unit_delete.yml",
+        {BMH_KEY: bmh_resource(state="provisioned", image_url=IMAGE_URL)},
+    )
+
+    assert result.returncode == 0, result.stdout
+    outer_calls = [op for op in all_operations(state) if op["namespace"] == "metal3-test"]
+    assert outer_calls
+    assert all(op["kubeconfig"] == REMOTE_KUBECONFIG for op in outer_calls)

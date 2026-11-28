@@ -40,7 +40,7 @@
           {'osac.openshift.io/tenant': subnet_tenant_id} if subnet_tenant_id else {}
         ) | combine(
           {'osac.openshift.io/virtual-network': subnet_virtual_network} if subnet_virtual_network else {}
-        )
+        ) | combine(osac_instance_labels | default({}))
       }}
 
 - name: Display Subnet information
@@ -82,7 +82,7 @@
       kind: ClusterUserDefinedNetwork
       metadata:
         name: "{{ subnet_name }}"
-        labels: "{{ default_subnet_labels }}"
+        labels: "{{ default_subnet_labels | combine(osac_instance_labels | default({})) }}"
       spec:
         namespaceSelector:
           matchLabels:

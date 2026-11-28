@@ -31,3 +31,13 @@ func getTargetClient(ctx context.Context, mgr mcmanager.Manager, targetCluster m
 	}
 	return cluster.GetClient(), nil
 }
+
+// getTargetReader returns the uncached reader of the target cluster, for
+// reads a stale cache must not serve.
+func getTargetReader(ctx context.Context, mgr mcmanager.Manager, targetCluster mc.ClusterName) (client.Reader, error) {
+	cluster, err := mgr.GetCluster(ctx, targetCluster)
+	if err != nil {
+		return nil, err
+	}
+	return cluster.GetAPIReader(), nil
+}

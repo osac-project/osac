@@ -8,7 +8,9 @@ metadata:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "31"
+    # Same weight as publish-templates: registering the LVMS backend and
+    # publishing templates are independent API calls and run in parallel.
+    "helm.sh/hook-weight": "20"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     "helm.sh/hook-output-log-policy": hook-failed
 spec:
@@ -25,7 +27,7 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
+        {{- if and (not (.Capabilities.APIVersions.Has "security.openshift.io/v1")) (ne .Values.service.variant "vcluster") }}
         runAsUser: 1000
         fsGroup: 1000
         {{- end }}

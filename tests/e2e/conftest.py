@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
+import shlex
 import subprocess
 import time
 import warnings
@@ -21,7 +23,7 @@ from tests.e2e.core.helpers import (
     wait_for_tenant_condition,
     wait_for_tenant_default_networking_ready,
 )
-from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.k8s_client import K8sClient, hub_kubeconfig, service_account_token_args
 from tests.e2e.core.keycloak import get_jwt
 from tests.e2e.core.keycloak_admin import (
     add_user_to_organization,
@@ -140,8 +142,12 @@ def failure_snapshot_sources(private_grpc: GRPCClient, k8s_hub_client: K8sClient
         failure_snapshot.SOURCES.unregister(name)
 
 
-def _apply_manifest(manifest: str) -> None:
-    subprocess.run(["oc", "apply", "-f", "-"], input=manifest, text=True, capture_output=True, check=True, timeout=120)
+def _apply_manifest(manifest: str, kubeconfig: str | None = None) -> None:
+    args = ["oc"]
+    if kubeconfig is not None:
+        args.extend(["--kubeconfig", kubeconfig])
+    args.extend(["apply", "-f", "-"])
+    subprocess.run(args, input=manifest, text=True, capture_output=True, check=True, timeout=120)
 
 
 def _set_quota_default(grpc: GRPCClient, dimension: str, *, value: int = QUOTA_DEFAULT_VALUE) -> str:
@@ -212,9 +218,32 @@ def _private_grpc_for_hooks() -> GRPCClient:
     """A private-API client for the session hooks, which run outside the fixture graph."""
     namespace = env("OSAC_NAMESPACE", "osac-devel")
     service_account = env("OSAC_SERVICE_ACCOUNT", "admin")
-    cluster_domain = run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
+    # The hooks cannot use fixtures, so the hub kubeconfig comes from the
+    # environment: a vcluster run keeps the ambient context on the outer
+    # cluster, where neither the ingress nor the service account exists.
+    kubeconfig = hub_kubeconfig()
+    kubeconfig_args = ["--kubeconfig", kubeconfig] if kubeconfig is not None else []
+    cluster_domain = run(
+        "kubectl",
+        *kubeconfig_args,
+        "get",
+        "ingress.config.openshift.io",
+        "cluster",
+        "-o",
+        "jsonpath={.spec.domain}",
+    )
     address = env("OSAC_FULFILLMENT_PRIVATE_ADDRESS", f"fulfillment-internal-api-{namespace}.{cluster_domain}:443")
-    token = run("oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin")
+    token = run(
+        "oc",
+        "create",
+        "token",
+        *service_account_token_args(
+            namespace=namespace,
+            service_account=service_account,
+            duration="4h",
+            kubeconfig=kubeconfig,
+        ),
+    )
     return GRPCClient(address=address, token=token)
 
 
@@ -287,7 +316,8 @@ def cluster_tenants(quota_defaults: None, namespace: str, k8s_hub_client: K8sCli
             "metadata:\n"
             f"  name: {name}\n"
             f"  namespace: {namespace}\n"
-            "spec: {}\n"
+            "spec: {}\n",
+            kubeconfig=k8s_hub_client.kubeconfig,
         )
     # Per-tenant StorageClasses come from an AAP job; wait for the test
     # tenant's classes so provisioning jobs do not queue behind storage jobs.
@@ -306,8 +336,22 @@ def cluster_tenants(quota_defaults: None, namespace: str, k8s_hub_client: K8sCli
 
 
 @pytest.fixture(scope="session")
-def cluster_domain() -> str:
-    return run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
+def cluster_domain(k8s_hub_client: K8sClient) -> str:
+    # OSAC_CLUSTER_DOMAIN overrides the cluster read: a vcluster has no
+    # ingresses.config.openshift.io API to ask, so a run against one carries
+    # the outer cluster's domain explicitly. The fallback reads through the hub
+    # client, so a vcluster run does not silently ask the outer cluster.
+    override = env("OSAC_CLUSTER_DOMAIN", "")
+    if override:
+        return override
+    return run(
+        *k8s_hub_client.base_args(),
+        "get",
+        "ingress.config.openshift.io",
+        "cluster",
+        "-o",
+        "jsonpath={.spec.domain}",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -372,9 +416,21 @@ def grpc(
 
 
 @pytest.fixture(scope="session")
-def private_grpc(fulfillment_private_address: str, namespace: str, service_account: str) -> GRPCClient:
+def private_grpc(
+    fulfillment_private_address: str, namespace: str, service_account: str, k8s_hub_client: K8sClient
+) -> GRPCClient:
+    # Mint the token on the hub: the service account exists there, not on an
+    # outer cluster a vcluster run keeps in the ambient context.
     token: str = run(
-        "oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin"
+        "oc",
+        "create",
+        "token",
+        *service_account_token_args(
+            namespace=namespace,
+            service_account=service_account,
+            duration="4h",
+            kubeconfig=k8s_hub_client.kubeconfig,
+        ),
     )
     return GRPCClient(address=fulfillment_private_address, token=token)
 
@@ -543,7 +599,9 @@ def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keyc
 
 @pytest.fixture(scope="session")
 def k8s_hub_client(namespace: str) -> K8sClient:
-    client = K8sClient(namespace=namespace)
+    # OSAC_HUB_KUBECONFIG points the hub at a vcluster API; None keeps the
+    # current context, which is how a single-cluster deployment runs.
+    client = K8sClient(namespace=namespace, kubeconfig=hub_kubeconfig())
     # Fail on broken initial hub access before entering retrying polls.
     client.get_json(resource="namespace", name=namespace)
     return client
@@ -551,12 +609,20 @@ def k8s_hub_client(namespace: str) -> K8sClient:
 
 @pytest.fixture(scope="session")
 def cli(
-    namespace: str, fulfillment_address: str, keycloak_url: str, jwt_username: str, jwt_password: str
+    namespace: str,
+    fulfillment_address: str,
+    keycloak_url: str,
+    keycloak_realm: str,
+    keycloak_client_id: str,
+    jwt_username: str,
+    jwt_password: str,
 ) -> Iterator[OsacCLI]:
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=_make_jwt_token_script(keycloak_url, jwt_username, jwt_password),
+        token_script=_make_jwt_token_script(
+            keycloak_url, jwt_username, jwt_password, realm=keycloak_realm, client_id=keycloak_client_id
+        ),
         namespace=namespace,
     )
     yield instance
@@ -575,11 +641,20 @@ def pull_secret_name(cli: OsacCLI, pull_secret_path: str) -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
-def private_cli(namespace: str, fulfillment_private_address: str, service_account: str) -> Iterator[OsacCLI]:
+def private_cli(
+    namespace: str, fulfillment_private_address: str, service_account: str, k8s_hub_client: K8sClient
+) -> Iterator[OsacCLI]:
+    # Same as private_grpc: the CLI's token script runs `oc create token`, so it
+    # needs the hub kubeconfig to reach the service account.
+    token_args = service_account_token_args(
+        namespace=namespace,
+        service_account=service_account,
+        kubeconfig=k8s_hub_client.kubeconfig,
+    )
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_private_address.rsplit(':', 1)[0]}",
-        token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
+        token_script=shlex.join(["oc", "create", "token", *token_args]),
         namespace=namespace,
         private=True,
     )
@@ -597,21 +672,30 @@ def jwt_password() -> str:
     return env("OSAC_JWT_PASSWORD", "foobar")
 
 
-def _make_jwt_token_script(keycloak_url: str, username: str, password: str) -> str:
+def _make_jwt_token_script(keycloak_url: str, username: str, password: str, *, realm: str, client_id: str) -> str:
     return (
-        f"curl -sk -X POST {keycloak_url}/realms/osac/protocol/openid-connect/token"
-        f" -d grant_type=password -d client_id=osac-cli"
+        f"curl -sk -X POST {keycloak_url}/realms/{realm}/protocol/openid-connect/token"
+        f" -d grant_type=password -d client_id={client_id}"
         f" -d username={username} -d password={password} -d 'scope=openid organization'"
         " | python3 -c \"import sys,json;print(json.load(sys.stdin)['access_token'])\""
     )
 
 
 @pytest.fixture(scope="session")
-def jwt_cli_user(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> Iterator[OsacCLI]:
+def jwt_cli_user(
+    namespace: str,
+    fulfillment_address: str,
+    keycloak_url: str,
+    keycloak_realm: str,
+    keycloak_client_id: str,
+    jwt_password: str,
+) -> Iterator[OsacCLI]:
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=_make_jwt_token_script(keycloak_url, "tenant1_user", jwt_password),
+        token_script=_make_jwt_token_script(
+            keycloak_url, "tenant1_user", jwt_password, realm=keycloak_realm, client_id=keycloak_client_id
+        ),
         namespace=namespace,
     )
     yield instance
@@ -619,11 +703,20 @@ def jwt_cli_user(namespace: str, fulfillment_address: str, keycloak_url: str, jw
 
 
 @pytest.fixture(scope="session")
-def jwt_cli_admin(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> Iterator[OsacCLI]:
+def jwt_cli_admin(
+    namespace: str,
+    fulfillment_address: str,
+    keycloak_url: str,
+    keycloak_realm: str,
+    keycloak_client_id: str,
+    jwt_password: str,
+) -> Iterator[OsacCLI]:
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=_make_jwt_token_script(keycloak_url, "tenant1_admin", jwt_password),
+        token_script=_make_jwt_token_script(
+            keycloak_url, "tenant1_admin", jwt_password, realm=keycloak_realm, client_id=keycloak_client_id
+        ),
         namespace=namespace,
     )
     yield instance
@@ -632,12 +725,19 @@ def jwt_cli_admin(namespace: str, fulfillment_address: str, keycloak_url: str, j
 
 @pytest.fixture(scope="session")
 def jwt_cli_tenant2_admin(
-    namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str
+    namespace: str,
+    fulfillment_address: str,
+    keycloak_url: str,
+    keycloak_realm: str,
+    keycloak_client_id: str,
+    jwt_password: str,
 ) -> Iterator[OsacCLI]:
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=_make_jwt_token_script(keycloak_url, "tenant2_admin", jwt_password),
+        token_script=_make_jwt_token_script(
+            keycloak_url, "tenant2_admin", jwt_password, realm=keycloak_realm, client_id=keycloak_client_id
+        ),
         namespace=namespace,
     )
     yield instance
@@ -645,13 +745,15 @@ def jwt_cli_tenant2_admin(
 
 
 @pytest.fixture(scope="session")
-def jwt_grpc_tenant2_admin(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+def jwt_grpc_tenant2_admin(
+    fulfillment_address: str, keycloak_url: str, keycloak_realm: str, keycloak_client_id: str, jwt_password: str
+) -> GRPCClient:
     return GRPCClient(
         address=fulfillment_address,
         token_factory=lambda: get_jwt(
             keycloak_url=keycloak_url,
-            realm="osac",
-            client_id="osac-cli",
+            realm=keycloak_realm,
+            client_id=keycloak_client_id,
             username="tenant2_admin",
             password=jwt_password,
         ),
@@ -659,13 +761,15 @@ def jwt_grpc_tenant2_admin(fulfillment_address: str, keycloak_url: str, jwt_pass
 
 
 @pytest.fixture(scope="session")
-def jwt_grpc_tenant1_admin(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+def jwt_grpc_tenant1_admin(
+    fulfillment_address: str, keycloak_url: str, keycloak_realm: str, keycloak_client_id: str, jwt_password: str
+) -> GRPCClient:
     return GRPCClient(
         address=fulfillment_address,
         token_factory=lambda: get_jwt(
             keycloak_url=keycloak_url,
-            realm="osac",
-            client_id="osac-cli",
+            realm=keycloak_realm,
+            client_id=keycloak_client_id,
             username="tenant1_admin",
             password=jwt_password,
         ),
@@ -673,13 +777,15 @@ def jwt_grpc_tenant1_admin(fulfillment_address: str, keycloak_url: str, jwt_pass
 
 
 @pytest.fixture(scope="session")
-def jwt_grpc_tenant1(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+def jwt_grpc_tenant1(
+    fulfillment_address: str, keycloak_url: str, keycloak_realm: str, keycloak_client_id: str, jwt_password: str
+) -> GRPCClient:
     return GRPCClient(
         address=fulfillment_address,
         token_factory=lambda: get_jwt(
             keycloak_url=keycloak_url,
-            realm="osac",
-            client_id="osac-cli",
+            realm=keycloak_realm,
+            client_id=keycloak_client_id,
             username="tenant1_user",
             password=jwt_password,
         ),
@@ -687,13 +793,15 @@ def jwt_grpc_tenant1(fulfillment_address: str, keycloak_url: str, jwt_password: 
 
 
 @pytest.fixture(scope="session")
-def jwt_grpc_tenant2(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+def jwt_grpc_tenant2(
+    fulfillment_address: str, keycloak_url: str, keycloak_realm: str, keycloak_client_id: str, jwt_password: str
+) -> GRPCClient:
     return GRPCClient(
         address=fulfillment_address,
         token_factory=lambda: get_jwt(
             keycloak_url=keycloak_url,
-            realm="osac",
-            client_id="osac-cli",
+            realm=keycloak_realm,
+            client_id=keycloak_client_id,
             username="tenant2_user",
             password=jwt_password,
         ),
@@ -701,6 +809,13 @@ def jwt_grpc_tenant2(fulfillment_address: str, keycloak_url: str, jwt_password: 
 
 
 # --- Cross-cutting concern: Metering ---
+
+
+_MISSING_ROUTE_API_RE = re.compile(
+    r"the server doesn't have a resource type \"routes\""
+    r"|no matches for kind \"Route\""
+    r"|the server could not find the requested resource"
+)
 
 
 def _expose_metering_adapter_route(namespace: str) -> str:
@@ -719,12 +834,22 @@ def _expose_metering_adapter_route(namespace: str) -> str:
     if rc != 0 or not service:
         raise RuntimeError(f"no echo-adapter Service found in namespace {namespace}")
     # Exposing an existing route fails; the route itself is what matters.
-    run_unchecked("oc", "expose", "svc", service, "-n", namespace, "--name=metering-test-adapter")
+    exposed, expose_rc = run_unchecked("oc", "expose", "svc", service, "-n", namespace, "--name=metering-test-adapter")
     host, rc = run_unchecked(
         "oc", "get", "route", "metering-test-adapter", "-n", namespace, "-o", "jsonpath={.spec.host}"
     )
     if rc != 0 or not host:
-        raise RuntimeError(f"failed to expose the echo adapter route in namespace {namespace}")
+        # A vcluster has no route.openshift.io API: its metering echo adapter
+        # is published on the outer cluster by the run setup instead.
+        if _MISSING_ROUTE_API_RE.search(f"{exposed}\n{host}"):
+            raise RuntimeError(
+                f"cluster of namespace {namespace} has no OpenShift Route API, so the echo adapter "
+                "cannot be exposed here; set METERING_ADAPTER_URL to the run's published echo-adapter route"
+            )
+        raise RuntimeError(
+            f"failed to expose the echo adapter route in namespace {namespace} (rc={expose_rc}): "
+            f"{(host or exposed).strip()[:300]}"
+        )
     return f"http://{host}"
 
 

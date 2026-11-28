@@ -7,6 +7,11 @@
     cluster_order: "{{ osac_job_vars.resource }}"
 
   pre_tasks:
+    - name: Include get remote cluster kubeconfig
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: get_remote_cluster_kubeconfig
+
     - name: Write SSH keys from env vars to files
       ansible.builtin.include_role:
         name: osac.service.write_ssh_keys
@@ -47,23 +52,30 @@
         lease_holder: "{{ cluster_order_holder_id }}"
         lease_name: "cluster-{{ cluster_order_name }}-lock"
 
-    - name: Add infrastructure finalizer
+    - name: Add infrastructure finalizer to the cluster order
+      # The ClusterOrder is a hub object: its finalizer stays in-cluster.
       ansible.builtin.include_role:
         name: osac.service.finalizer
       vars:
         finalizer_state: present
         finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
         finalizer_target:
-          api_version: "{{ item.api_version }}"
-          kind: "{{ item.kind }}"
-          namespace: "{{ item.namespace | default(omit) }}"
-          name: "{{ item.name }}"
-      loop:
-        - api_version: osac.openshift.io/v1alpha1
+          api_version: osac.openshift.io/v1alpha1
           kind: ClusterOrder
           namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
           name: "{{ cluster_order.metadata.name }}"
-        - api_version: v1
+
+    - name: Add infrastructure finalizer to the working namespace
+      # The working namespace is infrastructure: it lives in the outer
+      # cluster, so its finalizer follows the remote kubeconfig.
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: present
+        finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
+        finalizer_kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        finalizer_target:
+          api_version: v1
           kind: Namespace
           name: "{{ cluster_working_namespace }}"
 

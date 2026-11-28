@@ -1,4 +1,14 @@
 {{- if .Values.bootstrap.enabled }}
+{{- /* With an external AAP the bootstrap only talks to the already-running
+       AAP and reads secrets staged before the install (admin password,
+       license manifest, CA bundle, vcluster token), so it can run as a
+       pre-install hook and overlap the pod rollout. With the bundled AAP
+       the hook itself deploys the AAP subscription and must wait for the
+       release: keep it post-install there. */}}
+{{- $aapHookPhase := "post-install,post-upgrade" }}
+{{- if not .Values.aap.instance.enabled }}
+{{- $aapHookPhase = "pre-install,pre-upgrade" }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -6,6 +16,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac-aap.labels" . | nindent 4 }}
+  {{- if not .Values.aap.instance.enabled }}
+  annotations:
+    "helm.sh/hook": {{ $aapHookPhase }}
+    "helm.sh/hook-weight": "9"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -14,11 +30,24 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac-aap.labels" . | nindent 4 }}
+  {{- if not .Values.aap.instance.enabled }}
+  annotations:
+    "helm.sh/hook": {{ $aapHookPhase }}
+    "helm.sh/hook-weight": "9"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  {{- end }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["{{ include "osac-aap.instanceName" . }}-admin-password"]
+    resourceNames: ["{{ include "osac-aap.adminPasswordSecretName" . }}"]
     verbs: ["get"]
+  {{- if include "osac-aap.vclusterApiServerUrl" . }}
+  # Lets wait-for-vcluster-token poll for the run setup's token Secret.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Values.vcluster.tokenSecret.name }}"]
+    verbs: ["get"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -27,6 +56,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac-aap.labels" . | nindent 4 }}
+  {{- if not .Values.aap.instance.enabled }}
+  annotations:
+    "helm.sh/hook": {{ $aapHookPhase }}
+    "helm.sh/hook-weight": "9"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  {{- end }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -44,7 +79,7 @@ metadata:
   labels:
     {{- include "osac-aap.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": {{ $aapHookPhase }}
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation
     "helm.sh/hook-output-log-policy": hook-failed
@@ -69,6 +104,16 @@ spec:
           - |
             {{- include "osac-aap.waitForAdminSecretScript" . | nindent 12 }}
         {{- include "osac-aap.waitForAdminSecretContainerSpec" . | nindent 8 }}
+      {{- if include "osac-aap.vclusterApiServerUrl" . }}
+      - name: wait-for-vcluster-token
+        image: {{ .Values.bootstrap.cliImage }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            {{- include "osac-aap.waitForVclusterTokenScript" . | nindent 12 }}
+        {{- include "osac-aap.waitForVclusterTokenContainerSpec" . | nindent 8 }}
+      {{- end }}
       - name: wait-for-aap
         image: {{ .Values.bootstrap.cliImage }}
         command:
@@ -82,7 +127,9 @@ spec:
         image: {{ .Values.bootstrap.image }}
         args:
         - ansible-playbook
+        {{- if .Values.aap.instance.enabled }}
         - osac.config_as_code.subscription
+        {{- end }}
         - osac.config_as_code.configure
         envFrom:
         - secretRef:
@@ -91,17 +138,36 @@ spec:
             name: aap-fulfillment-secret-reader
             optional: true
         env:
-        - name: OSAC_AAP_SECRET_READER_CLIENT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: aap-fulfillment-secret-reader
-              key: client-secret
-              optional: true
+        {{- if not .Values.aap.instance.enabled }}
+        # Points config-as-code (Ansible's aap_hostname) at the external AAP;
+        # the controller collection appends /api/controller/v2 itself.
+        - name: AAP_HOSTNAME
+          value: {{ include "osac-aap.controllerUrl" . | quote }}
+        # The external AAP's certificate comes from the shared CI CA. The
+        # Ansible controller modules reach it through Python urllib, the
+        # config-as-code client through requests; one variable covers each.
+        - name: SSL_CERT_FILE
+          value: /etc/ca-bundle/bundle.pem
+        - name: REQUESTS_CA_BUNDLE
+          value: /etc/ca-bundle/bundle.pem
+        {{- end }}
         - name: AAP_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: {{ include "osac-aap.instanceName" . }}-admin-password
-              key: password
+              name: {{ include "osac-aap.adminPasswordSecretName" . }}
+              key: {{ include "osac-aap.adminPasswordSecretKey" . }}
+        {{- if include "osac-aap.vclusterApiServerUrl" . }}
+        # The vcluster API URL and token feed the config-as-code credential
+        # that makes the AAP controller create this run's job pods inside
+        # the vcluster.
+        - name: VCLUSTER_API_URL
+          value: {{ include "osac-aap.vclusterApiServerUrl" . | quote }}
+        - name: VCLUSTER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.vcluster.tokenSecret.name }}
+              key: {{ .Values.vcluster.tokenSecret.key }}
+        {{- end }}
         - name: NAMESPACE
           valueFrom:
             fieldRef:
@@ -110,10 +176,20 @@ spec:
         - name: config-as-code-manifest-volume
           mountPath: /var/secrets/config-as-code-manifest
           readOnly: true
+        {{- if not .Values.aap.instance.enabled }}
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
+        {{- end }}
       volumes:
       - name: config-as-code-manifest-volume
         secret:
           secretName: {{ .Values.configAsCode.manifestSecret }}
+      {{- if not .Values.aap.instance.enabled }}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.caBundleConfigMap }}
+      {{- end }}
       - name: tmp
         emptyDir: {}
       restartPolicy: Never

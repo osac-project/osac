@@ -42,10 +42,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{/*
 PostgreSQL identifier prefix. All database identifiers derive from this
-single template.
+single template. global.instanceId, when set, is the prefix, so two
+deployments sharing one PostgreSQL server get their own databases; the
+fixed literal "osac" is the single-instance default.
 */}}
 {{- define "osac.pgPrefix" -}}
-osac
+{{- .Values.global.instanceId | default "osac" -}}
 {{- end }}
 
 {{- define "osac.dbNameService" -}}
@@ -93,10 +95,28 @@ true
 
 {{/*
 Name of the Strimzi KafkaUser (and of the Secret it creates in the Kafka
-namespace) used by the fulfillment service.
+namespace) used by the fulfillment service. global.instanceId, when set,
+prefixes the name so the users of two deployments sharing one Kafka cluster
+do not collide.
 */}}
 {{- define "osac.fulfillmentKafkaUserName" -}}
-fulfillment-service
+{{- with .Values.global.instanceId }}{{ . }}-{{ end }}fulfillment-service
+{{- end }}
+
+{{/*
+Consumer-group prefix of the fulfillment service's grouped event watches.
+global.instanceId, when set, makes it <id>.system.; otherwise the service
+chart's kafka.consumerGroupPrefix applies (osac.system. by default). The
+service deployments pass the same value to --kafka-consumer-group-prefix and
+this chart's KafkaUser grants the group ACL for it, so both charts must
+resolve it the same way.
+*/}}
+{{- define "osac.fulfillmentConsumerGroupPrefix" -}}
+{{- if .Values.global.instanceId -}}
+{{- printf "%s.system." .Values.global.instanceId -}}
+{{- else -}}
+{{- .Values.service.kafka.consumerGroupPrefix | default "osac.system." -}}
+{{- end -}}
 {{- end }}
 
 {{/*

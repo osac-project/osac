@@ -258,7 +258,7 @@ func TestRoundBillsEventsOnACustomPrefix(t *testing.T) {
 
 	roundLoop, err := round.New(
 		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
-		&sync.RWMutex{}, prefix,
+		&sync.RWMutex{}, prefix, "",
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
@@ -393,7 +393,7 @@ func TestOnceHoldsRulesGateForWholeTick(t *testing.T) {
 	}
 	gate := &sync.RWMutex{}
 	r, err := round.New(
-		store, probe, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), gate, "",
+		store, probe, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), gate, "", "",
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)

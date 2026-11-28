@@ -28,11 +28,15 @@ func (r *Reconciler) listAgents(ctx context.Context, co *v1alpha1.ClusterOrder) 
 	}
 	union := &unstructured.UnstructuredList{}
 	union.SetGroupVersionKind(agentGVK.GroupVersion().WithKind(agentGVK.Kind + "List"))
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
 	seen := make(map[string]bool)
 	for _, selector := range selectors {
 		listed := &unstructured.UnstructuredList{}
 		listed.SetGroupVersionKind(union.GroupVersionKind())
-		if err := r.List(ctx, listed, client.InNamespace(co.Namespace), selector); err != nil {
+		if err := infrastructureClient.List(ctx, listed, client.InNamespace(co.Namespace), selector); err != nil {
 			return nil, fmt.Errorf("listing agents for %s: %w", co.Name, err)
 		}
 		for i := range listed.Items {

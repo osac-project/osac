@@ -6,7 +6,11 @@ guest_os_family: linux
 
 default_vm_internal_network: "hypershift"
 default_vm_storage_class: "nfs-client"
-default_vm_labels: "{{ {compute_instance_label: compute_instance_name} }}"
+# Every VM, DataVolume and Secret the role creates in the outer cluster
+# carries the run's instance label (group_vars/all/osac_instance.yaml).
+default_vm_labels: >-
+  {{ {compute_instance_label: compute_instance_name}
+     | combine(osac_instance_labels | default({})) }}
 
 # Setup the defaults described in the arg_specs (Linux profile).
 default_arg_specs:

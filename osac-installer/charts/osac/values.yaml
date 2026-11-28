@@ -22,6 +22,17 @@ global:
   # ACL change that hides the previous topics from that pod makes the tenant
   # absent. Coordinate that ACL change with removing the pod so those facts stay.
   eventTopicPrefix: "osac.events."
+  # Run ID that names every shared-service object this deployment creates, so
+  # two deployments sharing one outer cluster cannot collide: the database
+  # prefix (osac.pgPrefix), the KafkaUser names, the consumer-group prefix
+  # (<id>.system.) and the metering heartbeat/DLQ topic prefixes
+  # (<id>.metering.heartbeat. / <id>.metering.dlq.). The event topics follow
+  # global.eventTopicPrefix instead; a run's overlay sets it to <id>.events..
+  # Empty means exactly the single-instance behavior of today. Lowercase
+  # letters, digits and inner hyphens, alphanumeric at both ends, at most 12
+  # characters (a CI run ID such as pr2100v1): the ID becomes a PostgreSQL
+  # identifier, which is why the ends must be alphanumeric.
+  instanceId: ""
   # [REQUIRED on OpenShift, via --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')]
   # Backs the tpl-templated defaults below (service.auth.issuerUrl,
   # service.idp.url, service.vault.keycloakIssuerUrl) so they automatically
@@ -128,7 +139,12 @@ dbInit:
   host: "postgres.osac-infra.svc.cluster.local"
 
 # Kafka cluster coordinates for per-instance topic/user creation. Set enabled
-# to false when service.kafka.connection targets an external Kafka cluster.
+# to false when service.kafka.connection targets an external Kafka cluster:
+# the chart then renders no fulfillment KafkaUser, no KafkaTopics and no
+# kafka secret-copy hook, and service.kafka.connection must name a Secret that
+# already exists. The metering subchart needs the same switch,
+# metering.kafka.strimziResources=false, for its own KafkaUsers and
+# KafkaTopics.
 kafka:
   enabled: true
   clusterName: osac-kafka
@@ -204,6 +220,9 @@ operator:
 # --- Fulfillment Service ---
 service:
   enabled: true
+  # Deployment variant: "openshift" renders OpenShift Routes, "kind" renders
+  # Gateway API TLSRoutes, "vcluster" renders neither -- the CI run setup
+  # publishes the run's routes in the outer cluster around the vcluster.
   variant: openshift
   controller:
     # Enable full synchronization in fulfillment controllers.
@@ -339,6 +358,11 @@ aap:
       hostname: ""
     controller:
       hostname: ""
+  hooks:
+    # Seconds the publish-templates post-install hook polls AAP before failing.
+    # Values above the hook Job's activeDeadlineSeconds (1300) never take
+    # effect: Kubernetes stops the pod first.
+    publishPollTimeout: 600
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
@@ -360,9 +384,21 @@ aap:
         EXTERNAL_ACCESS_BASE_DOMAIN: ""
         EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: ""
         EXTERNAL_ACCESS_API_INTERNAL_NETWORK: ""
+        # Provider-reserved IPv4 range for CaaS guest ingress VIPs, written as
+        # <first>-<last> with full addresses (10.10.0.240-10.10.0.243). The
+        # create-hosted-cluster job reserves one address per ClusterOrder and
+        # holds the claim until teardown, so the CI fabric must route the whole
+        # range to guest workers. Required with CaaS, unset otherwise.
+        CI_GUEST_INGRESS_IP_RANGE: ""
         HOSTED_CLUSTER_BASE_DOMAIN: ""
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
+        # Optional and unset by default: DNS_SERVER (the resolver the DNS
+        # readiness wait queries) and the dns.rfc2136.dns settings. Set
+        # DNS_RFC2136_SERVER, DNS_RFC2136_PORT, DNS_RFC2136_PROTOCOL,
+        # DNS_RFC2136_KEY_NAME and DNS_RFC2136_KEY_ALGORITHM here, and
+        # DNS_RFC2136_KEY_SECRET under secret. See values-example.yaml and
+        # docs/dns-backend.md.
       secret:
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
@@ -417,6 +453,11 @@ ui:
 # revenue. The database wiring points at the secrets this chart's
 # workload-db-secrets template creates for the configured DB host.
 metering:
+  # Deployment variant, like service.variant above: the echo adapter's
+  # OpenShift Route renders only with "openshift". "kind" and "vcluster"
+  # render none and leave the echo adapter's ingress to the platform or the
+  # CI run setup.
+  variant: openshift
   image:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
@@ -489,6 +530,11 @@ bmf:
     profiles: "osac-profiles"
   env:
     aapInsecureSkipVerify: "true"
+    # Prefix of the AAP job template names the BMF operator launches. Empty
+    # keeps the operator's own "osac" default; installs that share one AAP
+    # between several deployments set it to their instance ID, like
+    # operator.aap.templatePrefix for the osac-operator.
+    aapTemplatePrefix: ""
   bcm:
     enabled: false
     url: ""
@@ -502,6 +548,11 @@ bmf:
     url: "https://fulfillment-internal-api:8001"
     # Keep aligned with service.auth.issuerUrl; tpl resolves the cluster domain at render time.
     issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
+    # The BMF operator's copy of the controller credentials; keep aligned
+    # with operator.fulfillment.credentials.secretName. The BMF subchart
+    # mounts it as the client-id/client-secret files for its Fulfillment
+    # Service client.
+    credentialsSecret: "fulfillment-controller-credentials"
     caBundle:
       configMap: "ca-bundle"
       key: "bundle.pem"
@@ -522,6 +573,12 @@ bmf:
     # Namespace where Metal3 inventory reads BareMetalHost resources.
     namespace: ""
     hostClass: "metal3"
+  # Set together to route the operator's BareMetalHost reads and writes to a
+  # remote (outer) cluster, as operator.remoteClusterKubeconfig does for the
+  # osac-operator.
+  remoteClusterKubeconfig: ""
+  remoteClusterKubeconfigSecretName: ""
+  remoteClusterKubeconfigSecretKey: kubeconfig
 
 # --- Install preflight ---
 # Checks run while Helm renders the chart (helm install, helm upgrade and
@@ -529,6 +586,8 @@ bmf:
 # prerequisite is missing. The report is the ConfigMap <release>-preflight-report
 # and, on a failed render, the OSAC-PREFLIGHT-JSON line on stderr.
 # validation.enabled=false skips every check; the report still lists them.
+# One thing still stops the install in that mode: preflight.skipChecks naming
+# a check id that does not exist, because the skip list itself is broken.
 validation:
   enabled: true
 
@@ -543,6 +602,14 @@ preflight:
   #   skip:
   #     cert-issuer-ready: "the issuer is created by GitOps after this install"
   skip: {}
+  # Skip checks by id without reasons: a plain list for automation. Each
+  # skipped check is reported as skipped with "skipped by preflight.skipChecks"
+  # as its reason; prefer skip above when a human-readable reason is useful.
+  # An id that matches no check fails the install, so a typo cannot silently
+  # disable a check.
+  # Example:
+  #   skipChecks: [db-init-host-endpoints, default-storageclass]
+  skipChecks: []
 
 hubAccess:
   enabled: false

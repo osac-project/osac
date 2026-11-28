@@ -3,8 +3,9 @@ One KafkaUser per entry in .Values.readers. A reader is an outside system
 that reads every tenant's heartbeat topics with its own credentials, granted and
 revoked as chart values.
 
-The user reads the heartbeat topic prefix osac.metering.heartbeat. and one
-consumer group named after the reader. The prefix covers every tenant,
+The user reads the heartbeat topic prefix resolved by
+osac-metering.heartbeatTopicPrefix (osac.metering.heartbeat. by default) and
+one consumer group named after the reader. The prefix covers every tenant,
 including tenants created after the grant, so onboarding a tenant needs no
 chart change. Deny ACLs take back the system and shared tenants, whose topics
 exist but whose usage is never billed. It gets no write ACL and no access to
@@ -21,7 +22,8 @@ names are customer-supplied infrastructure identifiers (often internal
 hostnames), and the installer's offline validation gate surfaces this chart's
 render errors in its logs.
 */}}
-{{- $reserved := list "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" -}}
+{{- $heartbeatPrefix := include "osac-metering.heartbeatTopicPrefix" . }}
+{{- $reserved := list (include "osac-metering.kafkaSaslUsername" .) (include "osac-metering.echoAdapterKafkaUserName" .) (include "osac-metering.m360AdapterKafkaUserName" .) -}}
 {{- $seen := dict -}}
 {{- if not (or (kindIs "invalid" .Values.readers) (kindIs "slice" .Values.readers)) }}
 {{- fail "readers must be a list of objects" }}
@@ -62,7 +64,7 @@ spec:
     acls:
       - resource:
           type: topic
-          name: osac.metering.heartbeat.
+          name: {{ $heartbeatPrefix }}
           patternType: prefix
         operations:
           - Read
@@ -76,7 +78,7 @@ spec:
       {{- range list "system" "shared" }}
       - resource:
           type: topic
-          name: {{ printf "osac.metering.heartbeat.%s" . }}
+          name: {{ printf "%s%s" $heartbeatPrefix . }}
           patternType: literal
         operations:
           - Read

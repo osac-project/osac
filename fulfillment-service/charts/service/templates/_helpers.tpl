@@ -25,10 +25,10 @@ On OpenShift a Route provides TLS passthrough on port 443, so the URL omits the 
 variant traffic goes directly to the Kubernetes Service on port 8000.
 */}}
 {{- define "fulfillment-api.tokenIssuerUrl" -}}
-{{- if eq .Values.variant "openshift" -}}
-https://{{ include "fulfillment-api.hostname" . }}
-{{- else -}}
+{{- if eq .Values.variant "kind" -}}
 https://{{ include "fulfillment-api.hostname" . }}:8000
+{{- else -}}
+https://{{ include "fulfillment-api.hostname" . }}
 {{- end -}}
 {{- end -}}
 
@@ -79,6 +79,21 @@ Returns non-empty string for enabled, empty for disabled (for use in {{- if incl
 {{- end -}}
 {{- end -}}
 {{- $enabled -}}
+{{- end }}
+
+{{/*
+Consumer-group prefix the gRPC server prepends to a watch's group name.
+global.instanceId, when set, makes it <id>.system. so runs sharing one Kafka
+cluster keep their own consumer groups; otherwise kafka.consumerGroupPrefix
+applies. The umbrella chart's fulfillment KafkaUser resolves the same value
+for the group ACL, so both charts must agree on this order.
+*/}}
+{{- define "fulfillment-service.kafkaConsumerGroupPrefix" -}}
+{{- if .Values.global.instanceId -}}
+{{- printf "%s.system." .Values.global.instanceId -}}
+{{- else -}}
+{{- .Values.kafka.consumerGroupPrefix | default "osac.system." -}}
+{{- end -}}
 {{- end }}
 
 {{/*

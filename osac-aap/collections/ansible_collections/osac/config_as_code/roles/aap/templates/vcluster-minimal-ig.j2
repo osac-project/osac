@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    ansible_job: ''
+  namespace: {{ current_namespace }}
+spec:
+  serviceAccountName: {{ osac_sa_name }}
+  containers:
+    - image: >-
+        {{ aap_ee_image }}
+      name: worker
+      args:
+        - ansible-runner
+        - worker
+        - '--private-data-dir=/runner'
+{% if osac_instance_id %}
+      env:
+        - name: OSAC_INSTANCE_ID
+          value: {{ osac_instance_id }}
+{% endif %}

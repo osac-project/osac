@@ -72,6 +72,19 @@ spec:
           {{- if .Values.aap.templatePrefix }}
           - name: OSAC_AAP_TEMPLATE_PREFIX
             value: {{ .Values.aap.templatePrefix | quote }}
+          # Storage job templates are looked up by full name, not through the
+          # prefix: derive them from the same prefix so a deployment whose
+          # templates live in a prefixed organization (for example a vcluster
+          # run with its own AAP organization) launches them in that context.
+          # With the default prefix "osac" these equal the built-in defaults.
+          - name: OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE
+            value: {{ printf "%s-create-tenant-storage-backend" .Values.aap.templatePrefix | quote }}
+          - name: OSAC_STORAGE_BACKEND_AAP_DEPROVISION_TEMPLATE
+            value: {{ printf "%s-delete-tenant-storage-backend" .Values.aap.templatePrefix | quote }}
+          - name: OSAC_STORAGE_CLUSTER_AAP_PROVISION_TEMPLATE
+            value: {{ printf "%s-create-tenant-cluster-storage" .Values.aap.templatePrefix | quote }}
+          - name: OSAC_STORAGE_CLUSTER_AAP_DEPROVISION_TEMPLATE
+            value: {{ printf "%s-delete-tenant-cluster-storage" .Values.aap.templatePrefix | quote }}
           {{- end }}
           {{- if .Values.stall.preparingInfrastructureThreshold }}
           - name: OSAC_CLUSTER_PREPARING_INFRASTRUCTURE_STALL_THRESHOLD

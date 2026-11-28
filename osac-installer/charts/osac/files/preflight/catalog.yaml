@@ -242,6 +242,8 @@
   category: operators
   requiredFor: [bmaas]
   whenAny: [bmf.metal3.enabled, bmf.netbox.enabled]
+  unless: bmf.remoteClusterKubeconfigSecretName
+  unlessReason: "BMaaS targets a remote cluster"
   title: "The Metal3 BareMetalHost CRD exists"
   params:
     crds: [baremetalhosts.metal3.io]
@@ -254,6 +256,8 @@
   category: operators
   requiredFor: [bmaas]
   whenAny: [bmf.metal3.enabled, bmf.netbox.enabled]
+  unless: bmf.remoteClusterKubeconfigSecretName
+  unlessReason: "BMaaS targets a remote cluster"
   dependsOn: [metal3-bmh-crd]
   title: "The Provisioning resource watches all namespaces"
   params:
@@ -283,6 +287,8 @@
   severity: required
   category: operators
   requiredFor: [caas]
+  unless: operator.remoteClusterKubeconfigSecretName
+  unlessReason: "CaaS targets a remote cluster"
   title: "multicluster engine or RHACM is installed"
   params:
     anyCrds:

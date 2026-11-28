@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -11,6 +12,69 @@ from pathlib import Path
 from typing import Any
 
 from tests.e2e.core.runner import CommandFailed, run, run_unchecked
+
+
+def impersonation_user() -> str:
+    """The user kubectl impersonates, from OSAC_IMPERSONATE_USER.
+
+    An OpenShift hub's kubeconfig carries credentials allowed to impersonate a
+    cluster admin, so the suite asks for that identity explicitly. A vanilla
+    Kubernetes hub (a vcluster run) rejects the request; an empty value drops
+    the flag and uses the kubeconfig's own identity instead.
+    """
+    return os.environ.get("OSAC_IMPERSONATE_USER", "system:admin").strip()
+
+
+def impersonation_args() -> list[str]:
+    """The kubectl impersonation flags, empty when no impersonation is configured."""
+    user = impersonation_user()
+    return ["--as", user] if user else []
+
+
+def hub_kubeconfig() -> str | None:
+    """The hub kubeconfig from OSAC_HUB_KUBECONFIG, or None for the current context.
+
+    A vcluster run points the hub at the vcluster API while the workload
+    cluster (where VMs land) stays in OSAC_VM_KUBECONFIG.
+    """
+    return os.environ.get("OSAC_HUB_KUBECONFIG", "").strip() or None
+
+
+def bmh_kubeconfig() -> str | None:
+    """The BareMetalHost inventory kubeconfig from OSAC_BMH_KUBECONFIG, or None.
+
+    A vcluster run keeps the hub on the vcluster while the BMH inventory, and
+    the BareMetalHost CRs that describe it, stay on the outer cluster. None
+    means the inventory lives where the hub does, which is how a single-cluster
+    installation runs.
+    """
+    return os.environ.get("OSAC_BMH_KUBECONFIG", "").strip() or None
+
+
+def service_account_token_args(
+    *,
+    namespace: str,
+    service_account: str,
+    duration: str | None = None,
+    kubeconfig: str | None = None,
+) -> list[str]:
+    """The `oc create token` arguments for a service-account token.
+
+    The caller prepends the binary and the ``create token`` verbs; the
+    impersonation flags are appended only when ``OSAC_IMPERSONATE_USER`` is set.
+
+    ``kubeconfig`` names the cluster the token is minted on. Pass the hub
+    client's kubeconfig: a vcluster run keeps the ambient context on the outer
+    cluster, where the service account does not exist. None keeps the ambient
+    context, which is how a single-cluster deployment runs.
+    """
+    args = [service_account, "-n", namespace]
+    if kubeconfig is not None:
+        args.extend(["--kubeconfig", kubeconfig])
+    if duration is not None:
+        args.extend(["--duration", duration])
+    return [*args, *impersonation_args()]
+
 
 _CLUSTER_ORDER_NOT_FOUND_RE = re.compile(
     r'Error from server \(NotFound\): clusterorders(?:\.osac\.openshift\.io)? "(?P<name>[^"]+)" not found',
@@ -47,6 +111,8 @@ class K8sClient:
     def __init__(self, *, namespace: str, kubeconfig: str | None = None, as_system_admin: bool = True) -> None:
         self.namespace: str = namespace
         self.kubeconfig: str | None = kubeconfig
+        # True asks for the impersonated admin identity, which
+        # OSAC_IMPERSONATE_USER may turn off for a vanilla Kubernetes hub.
         self.as_system_admin: bool = as_system_admin
 
     def _base(self) -> list[str]:
@@ -54,7 +120,7 @@ class K8sClient:
         if self.kubeconfig is not None:
             args.extend(["--kubeconfig", self.kubeconfig])
         if self.as_system_admin:
-            args.extend(["--as", "system:admin"])
+            args.extend(impersonation_args())
         return args
 
     def base_args(self) -> list[str]:
@@ -873,7 +939,10 @@ class K8sClient:
             resource="baremetalinstance", name=name, jsonpath="{.status.networkAttachmentStatuses[0].ipAddress}"
         )
 
-    # BareMetalHost queries (explicit namespace — BMHs live in a different namespace)
+    # BareMetalHost queries (explicit namespace — BMHs live in a different
+    # namespace and, in a vcluster run, on a different cluster). Callers read
+    # them through the BMH client (the k8s_bmh_client fixture, built from
+    # OSAC_BMH_KUBECONFIG), never the hub client.
 
     def get_bmh_provisioning_state(self, *, name: str, bmh_namespace: str) -> str:
         output, rc = self._get(
@@ -913,7 +982,11 @@ class K8sClient:
         return output if rc == 0 else ""
 
     def count_bmhs_by_provisioning_state(self, *, bmh_namespace: str, states: set[str]) -> int:
-        """Return how many BareMetalHosts in ``bmh_namespace`` are in any of ``states``."""
+        """Return how many BareMetalHosts in ``bmh_namespace`` are in any of ``states``.
+
+        The listing runs against this client, so pass the BMH client: the
+        inventory is not guaranteed to live on the hub's cluster.
+        """
         raw: str = run(*self._base(), "get", "baremetalhost", "-n", bmh_namespace, "-o", "json")
         items: list[dict[str, Any]] = json.loads(raw).get("items", [])
         count = 0

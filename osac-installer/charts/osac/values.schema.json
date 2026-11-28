@@ -236,6 +236,26 @@
             }
           ]
         },
+        "instanceId": {
+          "type": "string",
+          "description": "Run ID that names every shared-service object this deployment creates, so two deployments sharing one outer cluster cannot collide: the database prefix, the KafkaUser names, the consumer-group prefix (<id>.system.) and the metering heartbeat/DLQ topic prefixes (<id>.metering.heartbeat. and <id>.metering.dlq.). Empty means exactly the single-instance behavior of today. Lowercase letters, digits and inner hyphens, alphanumeric at both ends, at most 12 characters: the ID becomes a PostgreSQL identifier, which cannot start or end with a hyphen.",
+          "default": "",
+          "anyOf": [
+            {
+              "enum": [""]
+            },
+            {
+              "allOf": [
+                {
+                  "maxLength": 12
+                },
+                {
+                  "pattern": "^[a-z0-9]([a-z0-9-]{0,10}[a-z0-9])?$"
+                }
+              ]
+            }
+          ]
+        },
         "networking": {
           "$ref": "#/$defs/globalNetworking"
         }
@@ -876,10 +896,11 @@
         },
         "variant": {
           "type": "string",
-          "description": "Deployment variant",
+          "description": "Deployment variant: openshift renders OpenShift Routes, kind renders Gateway API TLSRoutes, vcluster renders neither (the CI run setup publishes the run's routes in the outer cluster)",
           "enum": [
             "openshift",
-            "kind"
+            "kind",
+            "vcluster"
           ],
           "default": "openshift"
         },
@@ -1140,6 +1161,26 @@
             "connection": {
               "type": "array",
               "description": "Kafka connection volume sources (secret or configMap references). Each item maps keys to Kafka properties named brokers, user, and password."
+            },
+            "consumerGroupPrefix": {
+              "type": "string",
+              "description": "Prefix of the Kafka consumer groups the fulfillment gRPC server's grouped event watches join. Include the trailing dot. Empty uses osac.system. The umbrella chart's global.instanceId, when set, overrides this value with <instance id>.system.",
+              "default": "osac.system.",
+              "anyOf": [
+                {
+                  "enum": [""]
+                },
+                {
+                  "allOf": [
+                    {
+                      "maxLength": 249
+                    },
+                    {
+                      "pattern": "^[A-Za-z0-9._-]*\\.$"
+                    }
+                  ]
+                }
+              ]
             }
           },
           "additionalProperties": false
@@ -1200,6 +1241,45 @@
       "type": "object",
       "description": "AAP bootstrap and instance configuration",
       "properties": {
+        "controllerUrl": {
+          "type": "string",
+          "description": "Base URL of the AAP controller API without a path suffix; callers append their own API paths (for example /api/controller/v2/...). Required when the AAP instance is disabled.",
+          "default": ""
+        },
+        "caBundleConfigMap": {
+          "type": "string",
+          "description": "ConfigMap holding the CA bundle that trusts the external AAP's HTTPS certificate, read when the AAP instance is disabled",
+          "default": "ca-bundle"
+        },
+        "vcluster": {
+          "type": "object",
+          "description": "Vcluster settings for runs whose AAP job pods must be created inside their own vcluster instead of the outer cluster (shared-infrastructure E2E). Empty leaves every vcluster wiring out of the render; a half-set pair fails the render naming what is missing.",
+          "properties": {
+            "apiServerUrl": {
+              "type": "string",
+              "description": "Base URL of the vcluster API as the AAP controller reaches it (a TLS SAN the vcluster carries, for example https://pr2100v1.vc-pr2100v1.svc.cluster.local). Must be an http(s) URL without a path; required together with tokenSecret when either is set.",
+              "default": ""
+            },
+            "tokenSecret": {
+              "type": "object",
+              "description": "Secret, in the release namespace, holding the vcluster service-account token the AAP controller presents as the bearer token when creating job pods",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Name of the Secret holding the vcluster token",
+                  "default": ""
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Key of the vcluster token in that Secret",
+                  "default": ""
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "aap": {
           "type": "object",
           "properties": {
@@ -1329,6 +1409,23 @@
               "default": 3,
               "minimum": 1
             },
+            "adminPasswordSecret": {
+              "type": "object",
+              "description": "Admin credentials of an external AAP (aap.aap.instance.enabled=false)",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Secret holding the external AAP admin password",
+                  "minLength": 1
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Key of the admin password in that Secret",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
             "gateway": {
               "type": "object",
               "properties": {
@@ -1348,6 +1445,19 @@
                 }
               },
               "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "hooks": {
+          "type": "object",
+          "description": "Timeouts for the post-install hook Jobs",
+          "properties": {
+            "publishPollTimeout": {
+              "type": "integer",
+              "description": "Seconds the publish-templates hook polls the AAP job before failing. Raising this above the hook Job's activeDeadlineSeconds (1300) has no effect, because Kubernetes stops the pod first.",
+              "default": 600,
+              "minimum": 1
             }
           },
           "additionalProperties": false
@@ -1439,15 +1549,66 @@
                   "properties": {
                     "DNS_CLASS": {
                       "type": "string",
-                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
+                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.rfc2136.dns manages records with RFC 2136 dynamic updates signed with a TSIG key; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
                       "enum": [
                         "dns.noop.dns",
+                        "dns.rfc2136.dns",
                         "dns.route53.dns"
                       ]
                     },
                     "DNS_ZONE": {
                       "type": "string",
-                      "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN)"
+                      "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN). With dns.rfc2136.dns, the zone configured on the DNS server."
+                    },
+                    "DNS_SERVER": {
+                      "type": "string",
+                      "maxLength": 253,
+                      "description": "IPv4 address, IPv6 address or host name of the DNS server that the readiness wait queries with an unsigned dig after records are created. When omitted, the wait uses the execution environment's resolver, or the zone's authoritative nameserver when EXTERNAL_ACCESS_DNS_WAIT_USE_AUTHORITATIVE is true.",
+                      "anyOf": [
+                        {"pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"},
+                        {"pattern": "^[0-9A-Fa-f:.]{2,45}$"},
+                        {"pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?$"}
+                      ]
+                    },
+                    "DNS_RFC2136_SERVER": {
+                      "type": "string",
+                      "description": "dns.rfc2136.dns: IPv4 or IPv6 address of the primary DNS server that accepts dynamic updates. Host names are not supported. Required with dns.rfc2136.dns.",
+                      "anyOf": [
+                        {"pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"},
+                        {"pattern": "^[0-9A-Fa-f:.]{2,45}$"}
+                      ]
+                    },
+                    "DNS_RFC2136_PORT": {
+                      "type": "string",
+                      "default": "53",
+                      "pattern": "^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
+                      "description": "dns.rfc2136.dns: DNS server port, 1-65535 (default 53 when omitted)"
+                    },
+                    "DNS_RFC2136_PROTOCOL": {
+                      "type": "string",
+                      "default": "tcp",
+                      "description": "dns.rfc2136.dns: transport for updates (default tcp when omitted)",
+                      "enum": [
+                        "tcp",
+                        "udp"
+                      ]
+                    },
+                    "DNS_RFC2136_KEY_NAME": {
+                      "type": "string",
+                      "maxLength": 253,
+                      "pattern": "^[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?(\\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*\\.?$",
+                      "description": "dns.rfc2136.dns: name of the TSIG key that the server allows to update the zone, in DNS name form. Required with dns.rfc2136.dns."
+                    },
+                    "DNS_RFC2136_KEY_ALGORITHM": {
+                      "type": "string",
+                      "default": "hmac-sha256",
+                      "description": "dns.rfc2136.dns: TSIG key algorithm (default hmac-sha256 when omitted). Only SHA-2 algorithms are accepted.",
+                      "enum": [
+                        "hmac-sha224",
+                        "hmac-sha256",
+                        "hmac-sha384",
+                        "hmac-sha512"
+                      ]
                     },
                     "SERVER_SSH_BASTION_HOST": {
                       "type": "string",
@@ -1480,6 +1641,19 @@
                     "EXTERNAL_ACCESS_API_INTERNAL_NETWORK": {
                       "type": "string",
                       "description": "Internal network CIDR for API access"
+                    },
+                    "CI_GUEST_INGRESS_IP_RANGE": {
+                      "type": "string",
+                      "description": "Provider-reserved IPv4 range for CaaS guest ingress VIPs, written as <first>-<last> with full addresses, for example 10.10.0.240-10.10.0.243. The create-hosted-cluster job reserves one address per ClusterOrder from it and holds the claim until teardown, so the CI fabric must route the whole range to guest workers. Required with CaaS; empty leaves it unset and the job fails with guidance.",
+                      "default": "",
+                      "anyOf": [
+                        {
+                          "enum": [""]
+                        },
+                        {
+                          "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])-((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"
+                        }
+                      ]
                     },
                     "HOSTED_CLUSTER_BASE_DOMAIN": {
                       "type": "string",
@@ -1522,6 +1696,11 @@
                       "type": "string",
                       "description": "AWS secret key for Route 53 DNS backend"
                     },
+                    "DNS_RFC2136_KEY_SECRET": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "dns.rfc2136.dns: base64-encoded TSIG key secret. Required with dns.rfc2136.dns."
+                    },
                     "SERVER_SSH_KEY": {
                       "type": "string",
                       "description": "SSH private key for server access"
@@ -1534,6 +1713,30 @@
                   "additionalProperties": false
                 }
               },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "config": {
+                        "properties": {"DNS_CLASS": {"const": "dns.rfc2136.dns"}},
+                        "required": ["DNS_CLASS"]
+                      }
+                    },
+                    "required": ["config"]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "required": ["DNS_RFC2136_SERVER", "DNS_RFC2136_KEY_NAME"]
+                      },
+                      "secret": {
+                        "required": ["DNS_RFC2136_KEY_SECRET"]
+                      }
+                    },
+                    "required": ["secret"]
+                  }
+                }
+              ],
               "additionalProperties": false
             },
             "networkFulfillment": {
@@ -1797,6 +2000,16 @@
       "type": "object",
       "description": "OSAC Metering Service configuration",
       "properties": {
+        "variant": {
+          "type": "string",
+          "description": "Deployment variant, like service.variant: the echo adapter's OpenShift Route renders only with openshift",
+          "enum": [
+            "openshift",
+            "kind",
+            "vcluster"
+          ],
+          "default": "openshift"
+        },
         "image": {
           "type": "object",
           "properties": {
@@ -1837,6 +2050,46 @@
               "description": "How long the topics keep records, in milliseconds; -1 keeps them indefinitely. The retention is the recovery window, because metering rebuilds its database from the topics",
               "pattern": "^(-1|[1-9][0-9]*)$",
               "default": "-1"
+            },
+            "heartbeatPrefix": {
+              "type": "string",
+              "description": "Prefix prepended to the tenant name to form its heartbeat topic. Include the trailing dot. Empty uses osac.metering.heartbeat. The umbrella chart's global.instanceId, when set, overrides this value with <instance id>.metering.heartbeat. A tenant name is at most 63 characters and a Kafka topic name is at most 249, so this prefix is at most 186 characters.",
+              "default": "osac.metering.heartbeat.",
+              "anyOf": [
+                {
+                  "enum": [""]
+                },
+                {
+                  "allOf": [
+                    {
+                      "maxLength": 186
+                    },
+                    {
+                      "pattern": "^[A-Za-z0-9._-]*\\.$"
+                    }
+                  ]
+                }
+              ]
+            },
+            "deadLetterPrefix": {
+              "type": "string",
+              "description": "Prefix prepended to the tenant name to form its dead-letter topic. Include the trailing dot. Empty uses osac.metering.dlq. The umbrella chart's global.instanceId, when set, overrides this value with <instance id>.metering.dlq. A tenant name is at most 63 characters and a Kafka topic name is at most 249, so this prefix is at most 186 characters.",
+              "default": "osac.metering.dlq.",
+              "anyOf": [
+                {
+                  "enum": [""]
+                },
+                {
+                  "allOf": [
+                    {
+                      "maxLength": 186
+                    },
+                    {
+                      "pattern": "^[A-Za-z0-9._-]*\\.$"
+                    }
+                  ]
+                }
+              ]
             }
           },
           "additionalProperties": false
@@ -1948,7 +2201,14 @@
         },
         "kafka": {
           "type": "object",
-          "description": "Kafka connection for metering events (subchart default)"
+          "description": "Kafka connection for metering events (subchart default)",
+          "properties": {
+            "strimziResources": {
+              "type": "boolean",
+              "description": "Create the metering Strimzi KafkaUsers and KafkaTopics for the in-cluster Kafka; set false with an external Kafka cluster (kafka.enabled=false)",
+              "default": true
+            }
+          }
         },
         "certs": {
           "type": "object",
@@ -2194,6 +2454,11 @@
             "aapTokenSecretKey": {
               "type": "string",
               "description": "Key within the AAP token Secret"
+            },
+            "aapTemplatePrefix": {
+              "type": "string",
+              "description": "Prefix of the AAP job template names the BMF operator launches (<prefix>-create-bare-metal-pool, ...). Empty keeps the operator's 'osac' default; shared-AAP installs set it to their instance ID, like operator.aap.templatePrefix.",
+              "default": ""
             }
           },
           "additionalProperties": false
@@ -2254,6 +2519,11 @@
               "description": "OIDC issuer for the BMF Keycloak service client; must match service.auth.issuerUrl.",
               "default": "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac",
               "pattern": "^https://([^/\\s]+|[^/]*\\{\\{[^}]+\\}\\})"
+            },
+            "credentialsSecret": {
+              "type": "string",
+              "description": "Secret holding the BMF operator's Keycloak client credentials (keys client-id and client-secret) for the Fulfillment Service; keep aligned with operator.fulfillment.credentials.secretName.",
+              "default": "fulfillment-controller-credentials"
             },
             "caBundle": {
               "type": "object",
@@ -2344,6 +2614,21 @@
           },
           "additionalProperties": false
         },
+        "remoteClusterKubeconfig": {
+          "type": "string",
+          "description": "File path for the remote cluster kubeconfig that holds the BareMetalHosts. Set together with remoteClusterKubeconfigSecretName.",
+          "default": ""
+        },
+        "remoteClusterKubeconfigSecretName": {
+          "type": "string",
+          "description": "Secret containing the remote cluster kubeconfig.",
+          "default": ""
+        },
+        "remoteClusterKubeconfigSecretKey": {
+          "type": "string",
+          "description": "Secret key containing the remote cluster kubeconfig.",
+          "default": "kubeconfig"
+        },
         "fullnameOverride": {
           "type": "string",
           "description": "Override the full resource name for the BMF operator (subchart default)"
@@ -2385,6 +2670,16 @@
             "minLength": 1
           },
           "default": {}
+        },
+        "skipChecks": {
+          "type": "array",
+          "description": "Check ids to skip without reasons, for automation. Each is reported as skipped with a fixed reason. An id that matches no check fails the install.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "uniqueItems": true,
+          "default": []
         }
       },
       "additionalProperties": false

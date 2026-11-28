@@ -15,3 +15,25 @@
     - name: Fail
       ansible.builtin.fail:
         msg: "{{ cudn_evpn_error.message }}"
+
+# Shared-infrastructure E2E runs: stamp the run's instance label on every
+# manifest this task creates in the outer cluster, so the run teardown can
+# delete them by label selector. combine merges recursively, so the label
+# joins each manifest's own labels instead of replacing them; the plan's
+# drift assessment then also restores it like any other wanted label.
+- name: Stamp the run's instance label on the planned manifests
+  when:
+    - osac_instance_id | default('') | length > 0
+    - _manifest in cudn_evpn
+  ansible.builtin.set_fact:
+    cudn_evpn: >-
+      {{ cudn_evpn
+         | combine({_manifest: {'metadata': {'labels': osac_instance_labels | default({})}}},
+                   recursive=true) }}
+  loop:
+    - namespace_manifest
+    - baseline_manifest
+    - cudn_manifest
+    - policy_manifest
+  loop_control:
+    loop_var: _manifest

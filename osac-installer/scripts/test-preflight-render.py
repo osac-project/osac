@@ -211,6 +211,82 @@ def check_values_are_closed() -> None:
         )
         assert proc.returncode != 0, f"{bad} was accepted"
         assert "values don't meet the specifications of the schema" in proc.stderr, (bad, proc.stderr)
+    # Not an array: the schema rejects it before the engine runs.
+    proc = subprocess.run(
+        ["helm", "template", "osac", str(CHART), "--values", str(CHART / "ci/default-values.yaml"),
+         "--set", "preflight.skipChecks=default-storageclass"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0, "a scalar preflight.skipChecks was accepted"
+    assert "values don't meet the specifications of the schema" in proc.stderr, proc.stderr
+
+
+def check_skipchecks() -> None:
+    """skipChecks marks checks skipped by configuration; a typo fails the render."""
+    report = offline_report("--set", "preflight.skipChecks={db-init-host-endpoints,default-storageclass}")
+    by_id = {r["id"]: r for r in report["results"]}
+    for check in ("db-init-host-endpoints", "default-storageclass"):
+        result = by_id[check]
+        assert result["status"] == "skipped", result
+        assert result["skipReason"] == "skipped by preflight.skipChecks", result
+    proc = subprocess.run(
+        ["helm", "template", "osac", str(CHART), "--values", str(CHART / "ci/default-values.yaml"),
+         "--set", "preflight.skipChecks={db-init-host-endpoints,db-init-host-endpint}"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0, "an unknown skipChecks id was accepted"
+    assert "preflight-skipchecks-unknown-id" in proc.stderr, proc.stderr
+    assert "db-init-host-endpint" in proc.stderr, proc.stderr
+
+
+def check_remote_mode_skips() -> None:
+    """Remote-mode installs skip the operator-CRD checks their suites need.
+
+    The metal3 checks look for BareMetalOperator objects and the MCE check
+    for multicluster-engine CRDs in the API the chart installs into. In
+    remote mode those operators run in the outer cluster (a vcluster run
+    never sees them), so the checks must skip themselves -- keyed on the
+    same values the charts mount the remote kubeconfig from, like the
+    existing kubevirt-crds skip.
+    """
+    # BMaaS + Metal3, with the BMF operator in remote mode.
+    bmaas = offline_report(
+        "--set", "global.services.bmaas.enabled=true",
+        "--set", "bmf.metal3.enabled=true",
+        "--set", "bmf.metal3.namespace=hosts",
+        "--set-string", "bmf.remoteClusterKubeconfig=/var/run/secrets/remote/kubeconfig",
+        "--set-string", "bmf.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig",
+    )
+    by_id = {r["id"]: r for r in bmaas["results"]}
+    for check_id in ("metal3-bmh-crd", "metal3-watch-all-namespaces"):
+        result = by_id[check_id]
+        assert result["status"] == "skipped", result
+        assert result["skipReason"] == "BMaaS targets a remote cluster", result
+    # Without remote mode the checks are live (offline: not evaluated).
+    local = offline_report(
+        "--set", "global.services.bmaas.enabled=true",
+        "--set", "bmf.metal3.enabled=true",
+        "--set", "bmf.metal3.namespace=hosts",
+    )
+    by_id = {r["id"]: r for r in local["results"]}
+    for check_id in ("metal3-bmh-crd", "metal3-watch-all-namespaces"):
+        assert by_id[check_id]["status"] == "unknown", by_id[check_id]
+
+    # CaaS + the operator in remote mode (MCE runs in the outer cluster).
+    caas = offline_report(
+        "--set", "global.services.caas.enabled=true",
+        "--set-string", "operator.remoteClusterKubeconfig=/var/run/secrets/remote/kubeconfig",
+        "--set-string", "operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig",
+    )
+    by_id = {r["id"]: r for r in caas["results"]}
+    result = by_id["mce-or-acm-crds"]
+    assert result["status"] == "skipped", result
+    assert result["skipReason"] == "CaaS targets a remote cluster", result
+    local = offline_report("--set", "global.services.caas.enabled=true")
+    by_id = {r["id"]: r for r in local["results"]}
+    assert by_id["mce-or-acm-crds"]["status"] == "unknown", by_id["mce-or-acm-crds"]
 
 
 PACKAGED = (
@@ -247,5 +323,7 @@ if __name__ == "__main__":
     check_offline_never_blocks()
     check_catalog_matches_engine_and_schema()
     check_values_are_closed()
+    check_skipchecks()
+    check_remote_mode_skips()
     check_chart_archive_carries_the_preflight()
     print("Preflight render checks passed.")

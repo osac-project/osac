@@ -5,7 +5,13 @@ aap_hostname: "{{ lookup('env', 'AAP_HOSTNAME', default='http://' + aap_instance
 aap_username: "{{ lookup('env', 'AAP_USERNAME', default='admin') }}"
 aap_password: "{{ lookup('env', 'AAP_PASSWORD', default=Undefined) }}"
 aap_validate_certs: "{{ lookup('env', 'AAP_VALIDATE_CERTS', default='true') | bool }}"
-aap_organization_name: "{{ lookup('env', 'AAP_ORGANIZATION_NAME', default='osac') }}"
+# Run ID of shared-infrastructure E2E runs (the umbrella chart's
+# global.instanceId): one AAP serves many runs, so this run's organization --
+# and through aap_prefix every object config-as-code creates -- is named after
+# the run. Empty keeps today's fixed "osac" organization; an explicit
+# AAP_ORGANIZATION_NAME or AAP_PREFIX still wins.
+osac_instance_id: "{{ lookup('env', 'OSAC_INSTANCE_ID', default='') }}"
+aap_organization_name: "{{ lookup('env', 'AAP_ORGANIZATION_NAME', default=osac_instance_id or 'osac') }}"
 aap_project_name: "{{ lookup('env', 'AAP_PROJECT_NAME', default=current_namespace) }}"
 aap_prefix: "{{ lookup('env', 'AAP_PREFIX', default=aap_organization_name) }}"
 aap_project_git_uri: "{{ lookup('env', 'AAP_PROJECT_GIT_URI', default='https://github.com/osac-project/osac.git') }}"
@@ -37,6 +43,15 @@ osac_import_bcm_agents_enabled: "{{ lookup('env', 'OSAC_IMPORT_BCM_AGENTS_ENABLE
 addon_operator_max_concurrent_jobs: "{{ lookup('env', 'AAP_ADDON_OPERATOR_MAX_CONCURRENT_JOBS', default='50') | int }}"
 netris_ca_config_map_name: "{{ lookup('env', 'NETRIS_CA_CONFIGMAP', default='') }}"
 netris_ca_path: "{{ '/etc/netris/ca/bundle.pem' if netris_ca_config_map_name else '' }}"
-
-aap_fulfillment_reader_issuer_url: "{{ lookup('ansible.builtin.env', 'OSAC_AAP_SECRET_READER_ISSUER_URL') }}"
-aap_fulfillment_reader_api_url: "{{ lookup('ansible.builtin.env', 'OSAC_AAP_SECRET_READER_API_URL') }}"
+# The run's vcluster (shared-infrastructure E2E). Set, the AAP controller
+# creates every job pod inside the vcluster: config-as-code builds a
+# bearer-token credential for this API (see roles/aap/vars/controller.yml)
+# and attaches it to every container group. Empty, none of that exists.
+# The bootstrap job gets the URL and token as its own env; the hourly
+# config-as-code rerun gets the URL and the Secret coordinates from the
+# config-as-code-ig Secret, and its pod spec injects the token from the
+# named Secret.
+vcluster_api_url: "{{ lookup('env', 'VCLUSTER_API_URL', default='') }}"
+vcluster_token: "{{ lookup('env', 'VCLUSTER_TOKEN', default='') }}"
+vcluster_token_secret_name: "{{ lookup('env', 'VCLUSTER_TOKEN_SECRET_NAME', default='') }}"
+vcluster_token_secret_key: "{{ lookup('env', 'VCLUSTER_TOKEN_SECRET_KEY', default='') }}"

@@ -4,6 +4,7 @@
   block:
     - name: Retrieve working cluster namespace from ClusterOrder name and namespace
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         kind: Namespace
         label_selectors:
           - "{{ cluster_order_label }}={{ cluster_working_namespace_cluster_order_name }}"

@@ -39,7 +39,7 @@
       metadata:
         name: "{{ nmstate_config_cluster_name }}-{{ _nmstate_assignment.agent.metadata.name }}"
         namespace: "{{ nmstate_config_namespace }}"
-        labels: "{{ nmstate_config_labels | combine({cluster_order_label: nmstate_config_cluster_name}) }}"
+        labels: "{{ nmstate_config_labels | combine({cluster_order_label: nmstate_config_cluster_name}) | combine(osac_instance_labels | default({})) }}"
         annotations:
           osac.openshift.io/ip-offset: "{{ _nmstate_assignment.offset | string }}"
       spec:

@@ -52,3 +52,9 @@ csi_driver_install_local_provider: lvms
 csi_driver_install_storage_class_provisioner: csi.osac.openshift.io
 csi_driver_install_storage_class_reclaim_policy: Delete
 csi_driver_install_storage_class_volume_binding_mode: WaitForFirstConsumer
+# Tenant StorageClass name prefix. A run ID (shared-infrastructure E2E:
+# several runs share the outer cluster and use the same tenant names) sits
+# between "osac-" and the tenant so two runs never map one StorageClass
+# name; without one the prefix is today's "osac-".
+csi_driver_install_storage_class_prefix: >-
+  {{ 'osac-' ~ osac_instance_id ~ '-' if osac_instance_id | default('') else 'osac-' }}

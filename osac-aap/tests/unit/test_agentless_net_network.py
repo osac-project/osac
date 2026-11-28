@@ -406,6 +406,8 @@ def test_network_worker_reuses_config_and_secret_environment(remote_secret):
         netris_controller_url="",
         netris_validate_certs=True,
         osac_sa_name="osac-sa",
+        vcluster_api_url="",
+        osac_instance_id="",
     ))
     worker = pod["spec"]["containers"][0]
     assert pod["spec"]["serviceAccountName"] == "osac-sa"
@@ -443,6 +445,8 @@ def test_network_worker_uses_configured_service_account():
         netris_controller_url="",
         netris_validate_certs=True,
         osac_sa_name="customer-aap-sa",
+        vcluster_api_url="",
+        osac_instance_id="",
     ))
 
     assert pod["spec"]["serviceAccountName"] == "customer-aap-sa"

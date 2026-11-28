@@ -86,7 +86,7 @@ func NewMetal3Client(ctx context.Context, cfg *Config) (Client, error) {
 		return nil, fmt.Errorf("failed to add metal3 types to scheme: %w", err)
 	}
 
-	restConfig, err := ctrl.GetConfig()
+	restConfig, err := resolveRestConfig(cfg.RESTConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubernetes config: %w", err)
 	}
@@ -130,6 +130,16 @@ func parseMetal3Namespace(cfg *Config) (string, error) {
 	}
 
 	return opts.Namespace, nil
+}
+
+// resolveRestConfig returns the config a Kubernetes-reaching backend dials:
+// the operator-supplied override in remote mode, the local in-cluster
+// config otherwise.
+func resolveRestConfig(override *rest.Config) (*rest.Config, error) {
+	if override != nil {
+		return override, nil
+	}
+	return ctrl.GetConfig()
 }
 
 func validateBareMetalHostCRD(restConfig *rest.Config) error {

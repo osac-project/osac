@@ -64,6 +64,7 @@ Focused contracts, selected by the changed wiring:
 | NetworkClass step against a fake fulfillment API | `make network-class-step-test` |
 | MCE defaults and lifecycle gate | `make mce-render-test` |
 | Optional LVMS worker/device allowlist | `make lvms-optional-path-render-test` |
+| Suite selection on the vcluster-ci profile (per-run overlay keys) | `make vcluster-suite-render-test` |
 | Fulfillment trust and CA mounts | `make fulfillment-trust-render-test` |
 | Service-account IDP credentials and realm roles | `make service-account-idp-render-test` |
 | Fulfillment hook token exchange and dev-full wiring | `make fulfillment-auth-test dev-full-render-test` |

@@ -1,5 +1,6 @@
 - name: Look up finalizer target
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ finalizer_kubeconfig | default(omit) }}"
     api_version: "{{ finalizer_target.api_version }}"
     kind: "{{ finalizer_target.kind }}"
     namespace: "{{ finalizer_target.namespace | default(omit) }}"
@@ -22,6 +23,7 @@
     - finalizer_state == "present"
     - finalizer_resources.resources | length > 0
   kubernetes.core.k8s:
+    kubeconfig: "{{ finalizer_kubeconfig | default(omit) }}"
     state: present
     definition:
       apiVersion: "{{ finalizer_target.api_version }}"
@@ -37,6 +39,7 @@
     - finalizer_state == "absent"
     - finalizer_resources.resources | length > 0
   kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ finalizer_kubeconfig | default(omit) }}"
     api_version: "{{ finalizer_target.api_version }}"
     kind: "{{ finalizer_target.kind }}"
     namespace: "{{ finalizer_target.namespace | default(omit) }}"

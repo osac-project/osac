@@ -1,0 +1,15 @@
+# Run identity of shared-infrastructure E2E runs (the umbrella chart's
+# global.instanceId): several runs share one outer cluster, so every object
+# the roles create there carries this label and tenant StorageClass names
+# start with it (see csi_driver_install and lvms_storage). Empty -- any
+# deployment that is alone on its cluster -- adds no label and keeps today's
+# names.
+osac_instance_id: "{{ lookup('env', 'OSAC_INSTANCE_ID', default='') }}"
+
+# Combined into the labels of every object a role creates in the outer
+# cluster, so the run teardown can delete exactly this run's objects by
+# label selector. Creation sites guard with | default({}) because contexts
+# without this group_vars file (integration fixtures, unit tests) have no
+# run ID either.
+osac_instance_labels: >-
+  {{ {'osac.openshift.io/instance': osac_instance_id} if osac_instance_id else {} }}

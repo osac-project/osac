@@ -10,6 +10,9 @@
 # This requires updates to the bare-metal-fulfillment-operator
 
 - name: Step - Create BareMetalPool
+  # BareMetalPool is a hub object (an OSAC CR in POD_NAMESPACE): it stays
+  # on the in-cluster API; the bare-metal-fulfillment-operator drives the
+  # outer-cluster hosts it describes.
   kubernetes.core.k8s:
     state: present
     definition:
@@ -47,6 +50,7 @@
     total_desired_nodes: "{{ cluster_infra_node_requests | map(attribute='numberOfNodes') | map('int') | sum }}"
 
 - name: Wait for BareMetalInstances to be allocated
+  # BareMetalInstances are hub objects (OSAC CRs in POD_NAMESPACE).
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
     kind: BareMetalInstance
@@ -111,6 +115,7 @@
 
 - name: Get all agents in the namespace
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     kind: Agent
     api_version: agent-install.openshift.io/v1beta1
     namespace: "{{ default_agent_namespace }}"
@@ -160,6 +165,7 @@
 
 - name: Label selected agents with cluster order
   kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: agent-install.openshift.io/v1beta1
     kind: Agent
     name: "{{ agent.metadata.name }}"

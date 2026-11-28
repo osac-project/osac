@@ -8,6 +8,13 @@ from tests.e2e.core import k8s_client
 from tests.e2e.core.k8s_client import K8sClient
 
 
+@pytest.fixture(autouse=True)
+def _default_connection_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep assertions independent of the caller's OSAC connection overrides."""
+    monkeypatch.delenv("OSAC_IMPERSONATE_USER", raising=False)
+    monkeypatch.delenv("OSAC_HUB_KUBECONFIG", raising=False)
+
+
 def test_get_json_supports_an_explicit_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, ...]] = []
 
@@ -102,9 +109,7 @@ def test_get_storage_class_for_tier_and_datavolume_support_tenant_and_vm_namespa
     ) in calls
 
 
-def test_get_storage_class_for_tier_fallback_uses_target_tenant(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_get_storage_class_for_tier_fallback_uses_target_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, ...]] = []
 
     def fake_run(*args: str, **_kwargs: object) -> str:
@@ -117,10 +122,7 @@ def test_get_storage_class_for_tier_fallback_uses_target_tenant(
                     {
                         "metadata": {
                             "name": "shared-gold-sc",
-                            "labels": {
-                                "osac.openshift.io/storage-tier": "gold",
-                                "osac.openshift.io/tenant": "shared",
-                            },
+                            "labels": {"osac.openshift.io/storage-tier": "gold", "osac.openshift.io/tenant": "shared"},
                         }
                     },
                     {
@@ -150,9 +152,7 @@ def test_get_storage_class_for_tier_fallback_uses_target_tenant(
     hub_client = K8sClient(namespace="osac-devel", kubeconfig="/tmp/hub-kubeconfig")
     virt_client = K8sClient(namespace="osac-devel", kubeconfig="/tmp/virt-kubeconfig")
     assert (
-        hub_client.get_storage_class_for_tier(
-            tier_name="gold", tenant_name="tenant1", storage_class_client=virt_client
-        )
+        hub_client.get_storage_class_for_tier(tier_name="gold", tenant_name="tenant1", storage_class_client=virt_client)
         == "tenant-gold-sc"
     )
     assert (
@@ -180,3 +180,53 @@ def test_get_storage_class_for_tier_fallback_uses_target_tenant(
         "-o",
         "json",
     ) in calls
+
+
+def test_impersonation_user_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        calls.append(args)
+        return json.dumps({"items": []})
+
+    monkeypatch.setattr(k8s_client, "run", fake_run)
+    monkeypatch.setenv("OSAC_IMPERSONATE_USER", "kubernetes-admin")
+
+    K8sClient(namespace="osac").list_json(resource="nodes")
+
+    assert calls == [("kubectl", "--as", "kubernetes-admin", "get", "nodes", "-o", "json")]
+
+
+def test_empty_impersonation_user_drops_the_as_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        calls.append(args)
+        return json.dumps({"items": []})
+
+    monkeypatch.setattr(k8s_client, "run", fake_run)
+    monkeypatch.setenv("OSAC_IMPERSONATE_USER", "")
+
+    K8sClient(namespace="osac").list_json(resource="nodes")
+
+    assert calls == [("kubectl", "get", "nodes", "-o", "json")]
+
+
+def test_hub_kubeconfig_prefers_the_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSAC_HUB_KUBECONFIG", "/tmp/vcluster-kubeconfig")
+    assert k8s_client.hub_kubeconfig() == "/tmp/vcluster-kubeconfig"
+
+    monkeypatch.delenv("OSAC_HUB_KUBECONFIG")
+    assert k8s_client.hub_kubeconfig() is None
+
+    monkeypatch.setenv("OSAC_HUB_KUBECONFIG", "  ")
+    assert k8s_client.hub_kubeconfig() is None
+
+
+def test_service_account_token_args_follow_the_impersonation_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    args = k8s_client.service_account_token_args(namespace="osac", service_account="admin", duration="4h")
+    assert args == ["admin", "-n", "osac", "--duration", "4h", "--as", "system:admin"]
+
+    monkeypatch.setenv("OSAC_IMPERSONATE_USER", "")
+    args = k8s_client.service_account_token_args(namespace="osac", service_account="admin")
+    assert args == ["admin", "-n", "osac"]

@@ -1,0 +1,28 @@
+---
+- name: Validate RFC 2136 settings and record
+  ansible.builtin.include_tasks: validate.yaml
+
+- name: Delete DNS record via RFC 2136
+  community.general.nsupdate:
+    state: absent
+    server: "{{ dns_rfc2136_server }}"
+    port: "{{ dns_rfc2136_port | int }}"
+    protocol: "{{ dns_rfc2136_protocol }}"
+    key_name: "{{ dns_rfc2136_key_name }}"
+    key_algorithm: "{{ dns_rfc2136_key_algorithm }}"
+    key_secret: "{{ dns_rfc2136_key_secret }}"
+    zone: "{{ dns_rfc2136_zone }}."
+    # Absolute name: nsupdate treats a name without a final dot as relative
+    # to the zone.
+    record: "{{ dns_rfc2136_record }}."
+    type: "{{ dns_record_type | default('A') }}"
+  register: dns_rfc2136_delete
+  ignore_errors: true  # noqa: ignore-errors
+  no_log: true
+
+# NXRRSET means the record was already absent, so a repeated delete succeeds.
+- name: Check the delete result
+  ansible.builtin.include_tasks: check_result.yaml
+  vars:
+    dns_rfc2136_result: "{{ dns_rfc2136_delete }}"
+    dns_rfc2136_ok_rcodes: [NOERROR, NXRRSET]

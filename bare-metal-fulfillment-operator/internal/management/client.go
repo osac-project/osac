@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"k8s.io/client-go/rest"
 )
 
 var ErrTransitioning = errors.New("power state transition already in progress")
@@ -25,6 +27,12 @@ type Config struct {
 	Name    string         `json:"name"`
 	Type    string         `json:"type"`
 	Options map[string]any `json:"options"`
+
+	// RESTConfig overrides the Kubernetes config for backends that reach
+	// Kubernetes (metal3): the outer cluster's config in remote mode, nil in
+	// local mode. The operator's startup sets it; the config file never
+	// carries it, and the json tag keeps that contract unchanged.
+	RESTConfig *rest.Config `json:"-"`
 }
 
 type Client interface {

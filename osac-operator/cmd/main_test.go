@@ -690,7 +690,7 @@ var _ = Describe("newClusterFromKubeconfig", func() {
 	BeforeEach(func() {
 		localScheme := runtime.NewScheme()
 		remoteScheme = runtime.NewScheme()
-		addSchemesForRemoteControllers(localScheme, remoteScheme, true, true, true, true)
+		addSchemesForRemoteControllers(localScheme, remoteScheme, true, true, true, true, true, true)
 	})
 
 	It("rejects empty or whitespace-only kubeconfig paths without falling back to in-cluster config", func() {
@@ -762,26 +762,20 @@ users:
 })
 
 var _ = Describe("controllerFlags.validateRemoteCluster", func() {
-	It("rejects Cluster controller when remoteClusterKubeconfig is set", func() {
+	It("accepts the cluster controller when remoteClusterKubeconfig is set", func() {
 		f := &controllerFlags{Cluster: true, ComputeInstance: true}
-		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(
-			MatchError(ContainSubstring("remote cluster kubeconfig option is not supported along with cluster controller")),
-		)
+		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(Succeed())
 	})
 
-	It("rejects BareMetalInstance controller when remoteClusterKubeconfig is set", func() {
+	It("accepts the bare metal instance controller when remoteClusterKubeconfig is set", func() {
 		f := &controllerFlags{BareMetalInstance: true, Tenant: true}
-		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(
-			MatchError(ContainSubstring(
-				"remote cluster kubeconfig option is not supported along with bare metal instance controller",
-			)),
-		)
+		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(Succeed())
 	})
 
-	It("rejects default enableAllIfNoneSet flags when remoteClusterKubeconfig is set", func() {
+	It("accepts every controller combination when remoteClusterKubeconfig is set", func() {
 		f := &controllerFlags{}
 		f.enableAllIfNoneSet()
-		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(HaveOccurred())
+		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(Succeed())
 	})
 
 	It("rejects whitespace-only remoteClusterKubeconfig instead of falling back to local mode", func() {
@@ -811,13 +805,30 @@ var _ = Describe("controllerFlags.validateRemoteCluster", func() {
 })
 
 var _ = Describe("addSchemesForRemoteControllers", func() {
-	It("registers StorageClass on remoteScheme and HostedControlPlane/BareMetalInstance on localScheme", func() {
+	It("registers HyperShift and StorageClass on remoteScheme and BareMetalInstance on localScheme", func() {
 		localScheme := runtime.NewScheme()
 		remoteScheme := runtime.NewScheme()
-		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, true, true)
+		addSchemesForRemoteControllers(localScheme, remoteScheme, true, false, false, true, true, true)
 
+		Expect(remoteScheme.Recognizes(hypershiftv1beta1.GroupVersion.WithKind("HostedControlPlane"))).To(BeTrue())
 		Expect(remoteScheme.Recognizes(storagev1.SchemeGroupVersion.WithKind("StorageClass"))).To(BeTrue())
-		Expect(localScheme.Recognizes(hypershiftv1beta1.GroupVersion.WithKind("HostedControlPlane"))).To(BeTrue())
+		Expect(localScheme.Recognizes(bmfov1alpha1.GroupVersion.WithKind("BareMetalInstance"))).To(BeTrue())
+	})
+
+	It("registers BareMetalInstance on localScheme without HyperShift on remoteScheme when they are off", func() {
+		localScheme := runtime.NewScheme()
+		remoteScheme := runtime.NewScheme()
+		addSchemesForRemoteControllers(localScheme, remoteScheme, false, true, false, false, true, true)
+
+		Expect(localScheme.Recognizes(bmfov1alpha1.GroupVersion.WithKind("BareMetalInstance"))).To(BeTrue())
+		Expect(remoteScheme.Recognizes(hypershiftv1beta1.GroupVersion.WithKind("HostedControlPlane"))).To(BeFalse())
+	})
+
+	It("registers BareMetalInstance on localScheme when only the bare metal instance controller is enabled", func() {
+		localScheme := runtime.NewScheme()
+		remoteScheme := runtime.NewScheme()
+		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, false, false, false, true)
+
 		Expect(localScheme.Recognizes(bmfov1alpha1.GroupVersion.WithKind("BareMetalInstance"))).To(BeTrue())
 	})
 

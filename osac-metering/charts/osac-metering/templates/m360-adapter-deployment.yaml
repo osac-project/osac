@@ -39,7 +39,7 @@ spec:
           emptyDir:
             sizeLimit: 10Mi
       initContainers:
-        {{- include "osac-metering.kafkaSecretsInitContainer" (list . "osac-metering-m360-adapter") | nindent 8 }}
+        {{- include "osac-metering.kafkaSecretsInitContainer" (list . (include "osac-metering.m360AdapterKafkaUserName" .)) | nindent 8 }}
       containers:
         - name: m360-adapter
           image: "{{ required "m360Adapter.image.repository is required when m360Adapter is enabled" .Values.m360Adapter.image.repository }}:{{ required "m360Adapter.image.tag is required when m360Adapter is enabled" .Values.m360Adapter.image.tag }}"
@@ -50,9 +50,9 @@ spec:
             - name: KAFKA_TLS_CA_CERT
               value: /etc/ca-bundle/bundle.pem
             - name: KAFKA_SASL_USERNAME
-              value: osac-metering-m360-adapter
+              value: {{ include "osac-metering.m360AdapterKafkaUserName" . }}
             - name: KAFKA_CONSUMER_GROUP
-              value: osac-metering-m360-adapter
+              value: {{ include "osac-metering.m360AdapterKafkaUserName" . }}
             - name: KAFKA_SASL_PASSWORD_FILE
               value: /etc/kafka-secrets/password
             - name: M360_API_URL
@@ -63,6 +63,14 @@ spec:
               value: {{ .Values.m360Adapter.m360.apiVersion | default "v1" | quote }}
             - name: METRICS_ADDR
               value: ":8080"
+            {{- if ne (include "osac-metering.heartbeatTopicPrefix" .) "osac.metering.heartbeat." }}
+            - name: METERING_HEARTBEAT_TOPIC_PREFIX
+              value: {{ include "osac-metering.heartbeatTopicPrefix" . | quote }}
+            {{- end }}
+            {{- if ne (include "osac-metering.deadLetterTopicPrefix" .) "osac.metering.dlq." }}
+            - name: METERING_DEADLETTER_TOPIC_PREFIX
+              value: {{ include "osac-metering.deadLetterTopicPrefix" . | quote }}
+            {{- end }}
           volumeMounts:
             - name: kafka-secrets
               mountPath: /etc/kafka-secrets

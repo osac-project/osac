@@ -39,6 +39,78 @@ AAP instance name
 {{- end }}
 
 {{/*
+Admin password Secret name. The in-cluster instance creates
+<instance name>-admin-password; an external AAP (aap.instance.enabled=false)
+uses bootstrap.adminPasswordSecret.
+*/}}
+{{- define "osac-aap.adminPasswordSecretName" -}}
+{{- if .Values.aap.instance.enabled -}}
+{{- printf "%s-admin-password" (include "osac-aap.instanceName" .) -}}
+{{- else -}}
+{{- .Values.bootstrap.adminPasswordSecret.name | required "bootstrap.adminPasswordSecret.name is required when aap.instance.enabled is false" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Admin password Secret key. Same two cases as osac-aap.adminPasswordSecretName.
+*/}}
+{{- define "osac-aap.adminPasswordSecretKey" -}}
+{{- if .Values.aap.instance.enabled -}}
+{{- "password" -}}
+{{- else -}}
+{{- .Values.bootstrap.adminPasswordSecret.key | required "bootstrap.adminPasswordSecret.key is required when aap.instance.enabled is false" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+External AAP base URL (the umbrella chart's aap.controllerUrl). Empty is
+allowed and fails loudly in the job's wait-for-aap script; a non-empty value
+must be an http(s) URL without a path, because callers append
+/api/controller/v2 themselves.
+*/}}
+{{- define "osac-aap.controllerUrl" -}}
+{{- if and (not .Values.aap.instance.enabled) .Values.controllerUrl }}
+{{- /* No path, query, fragment or IPv6 literal: callers append their own path,
+     and the netrc hostname derivation handles bare hostnames only. */}}
+{{- if not (regexMatch "^https?://[^/?#\\[\\s]+$" .Values.controllerUrl) }}
+{{- fail (printf "controllerUrl must be an http(s) AAP base URL without a path, for example https://aap.example.com (got %q)" .Values.controllerUrl) }}
+{{- end -}}
+{{- end -}}
+{{- .Values.controllerUrl -}}
+{{- end }}
+
+{{/*
+The run's vcluster API URL (the umbrella chart's aap.vcluster.apiServerUrl).
+Empty leaves every vcluster wiring out of the render. A non-empty value must
+be an https:// URL without a path (the AAP credential uses it as the API host,
+and the job pods' bearer token is sent there), and must come with
+vcluster.tokenSecret.name and .key: the controller reads the bearer token from
+that Secret, so a half-set pair would configure a credential that cannot work.
+Each check fails the render naming what is missing; config-as-code-secret.yaml
+always renders, so the validation always runs. Include this in an {{ if }} to
+gate vcluster-only template sections.
+*/}}
+{{- define "osac-aap.vclusterApiServerUrl" -}}
+{{- $url := .Values.vcluster.apiServerUrl | toString -}}
+{{- $secretName := .Values.vcluster.tokenSecret.name | toString -}}
+{{- $secretKey := .Values.vcluster.tokenSecret.key | toString -}}
+{{- if $url -}}
+{{- if not (regexMatch "^https://[^/?#\\[\\s]+$" $url) }}
+{{- fail (printf "vcluster.apiServerUrl must be an https:// URL without a path, for example https://pr2100v1.vc-pr2100v1.svc.cluster.local (got %q)" $url) }}
+{{- end -}}
+{{- if not $secretName -}}
+{{- fail "vcluster.tokenSecret.name is required when vcluster.apiServerUrl is set" }}
+{{- end -}}
+{{- if not $secretKey -}}
+{{- fail "vcluster.tokenSecret.key is required when vcluster.apiServerUrl is set" }}
+{{- end -}}
+{{- else if or $secretName $secretKey -}}
+{{- fail "vcluster.apiServerUrl is required when vcluster.tokenSecret is set" }}
+{{- end -}}
+{{- $url -}}
+{{- end }}
+
+{{/*
 AAP gateway hostname (service name)
 */}}
 {{- define "osac-aap.gatewayHostname" -}}
@@ -63,8 +135,19 @@ AAP controller hostname
 Shared wait-for-aap readiness script (bootstrap-job.yaml, create-api-token.yaml).
 Wall-clock-bounded (1500s epoch deadline, not iteration count) since each
 iteration can take up to ~65s worst case -- keep activeDeadlineSeconds above this.
+
+With aap.instance.enabled=true the script polls the in-cluster services by
+hostname over http. With aap.instance.enabled=false it polls the external AAP
+at AAP_URL (the umbrella chart's aap.controllerUrl) and fails immediately when
+that value is empty.
 */}}
 {{- define "osac-aap.waitForAapScript" -}}
+{{- if not .Values.aap.instance.enabled }}
+if [ -z "${AAP_URL}" ]; then
+  echo "ERROR: aap.controllerUrl is empty, but aap.instance.enabled is false. Set aap.controllerUrl to the external AAP base URL, for example https://aap.example.com."
+  exit 1
+fi
+{{ end -}}
 echo "Checking AAP controller and gateway readiness..."
 
 # A threshold < 1 would satisfy the streak check immediately, reintroducing the race.
@@ -84,7 +167,13 @@ echo "Waiting for AAP to be ready (${AAP_READINESS_CONSECUTIVE_SUCCESSES} consec
 # netrc avoids leaking the password via curl -u's process args; cleaned up via
 # trap since /tmp is a shared emptyDir mounted by later containers too.
 trap 'rm -f /tmp/.netrc' EXIT
+{{- if .Values.aap.instance.enabled }}
 ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "${AAP_GATEWAY_HOSTNAME}" "${AAP_PASSWORD}" > /tmp/.netrc )
+{{- else }}
+# curl matches netrc entries by hostname only, so drop any port from the URL.
+AAP_NETRC_HOST="${AAP_URL#*://}"
+( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "${AAP_NETRC_HOST%%:*}" "${AAP_PASSWORD}" > /tmp/.netrc )
+{{- end }}
 
 POLL_INTERVAL=5
 AUTH_FAILURE_LIMIT=5
@@ -94,8 +183,8 @@ READINESS_DEADLINE=$(( $(date +%s) + 1500 ))
 i=0
 while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
   i=$((i + 1))
-  curl -sf --connect-timeout 5 --max-time 15 \
-    "http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/" \
+  curl -sf --connect-timeout 5 --max-time 15{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
+    "{{ if .Values.aap.instance.enabled }}http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/{{ else }}${AAP_URL}/api/controller/v2/ping/{{ end }}" \
     | grep -q 'version'
   controller_ping="${?}"
 
@@ -107,8 +196,8 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
     continue
   fi
 
-  curl -sf --connect-timeout 5 --max-time 15 \
-    "http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/" \
+  curl -sf --connect-timeout 5 --max-time 15{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
+    "{{ if .Values.aap.instance.enabled }}http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/{{ else }}${AAP_URL}/api/gateway/v1/ping/{{ end }}" \
     | grep -q 'good'
   gateway_ping="${?}"
 
@@ -120,9 +209,9 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
     continue
   fi
 
-  response=$(curl -s --connect-timeout 5 --max-time 15 -w '\n%{http_code}' -X POST \
+  response=$(curl -s --connect-timeout 5 --max-time 15 -w '\n%{http_code}' -X POST{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
     --netrc-file /tmp/.netrc \
-    "http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/" \
+    "{{ if .Values.aap.instance.enabled }}http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/{{ else }}${AAP_URL}/api/gateway/v1/tokens/{{ end }}" \
     -H "Content-Type: application/json" -d '{"description": "readiness-check", "scope": "read"}')
   auth_code=$(echo "${response}" | tail -1)
 
@@ -137,9 +226,9 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
       # Not logging auth_body: it may contain the live token value.
       echo "WARNING: readiness-check token created but its ID could not be parsed from the response"
     else
-      delete_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
+      delete_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
         -X DELETE --netrc-file /tmp/.netrc \
-        "http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/${token_id}/")
+        "{{ if .Values.aap.instance.enabled }}http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/${token_id}/{{ else }}${AAP_URL}/api/gateway/v1/tokens/${token_id}/{{ end }}")
       case "${delete_code}" in
         2??)
           consecutive_successes=$((consecutive_successes + 1))
@@ -184,7 +273,11 @@ secretKeyRef -- otherwise a missing Secret at pod-schedule time blocks the
 whole pod in Init:CreateContainerConfigError with no log output.
 */}}
 {{- define "osac-aap.waitForAdminSecretScript" -}}
+{{- if .Values.aap.instance.enabled -}}
 echo "Waiting for AAP admin password Secret to be created by the operator..."
+{{- else -}}
+echo "Waiting for AAP admin password Secret ${AAP_ADMIN_SECRET_NAME}; no AAP operator creates it in external mode, it must exist before install"
+{{- end }}
 for i in {1..60}; do
   if oc get secret "${AAP_ADMIN_SECRET_NAME}" -n "${NAMESPACE}" --request-timeout=10s >/dev/null 2>&1; then
     echo "Found admin password Secret."
@@ -193,7 +286,11 @@ for i in {1..60}; do
   echo "Attempt $i: admin password Secret not found yet, waiting 5 seconds..."
   sleep 5
 done
+{{- if .Values.aap.instance.enabled }}
 echo "ERROR: Timed out waiting for admin password Secret to be created."
+{{- else }}
+echo "ERROR: Timed out waiting for admin password Secret ${AAP_ADMIN_SECRET_NAME} in namespace ${NAMESPACE}."
+{{- end }}
 exit 1
 {{- end }}
 
@@ -202,20 +299,30 @@ exit 1
 env:
 - name: HOME
   value: /tmp
+{{- if .Values.aap.instance.enabled }}
 - name: AAP_GATEWAY_HOSTNAME
   value: {{ include "osac-aap.gatewayHostname" . | quote }}
 - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
   value: {{ include "osac-aap.controllerHostname" . | quote }}
+{{- else }}
+- name: AAP_URL
+  value: {{ include "osac-aap.controllerUrl" . | quote }}
+{{- end }}
 - name: AAP_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ include "osac-aap.instanceName" . }}-admin-password
-      key: password
+      name: {{ include "osac-aap.adminPasswordSecretName" . }}
+      key: {{ include "osac-aap.adminPasswordSecretKey" . }}
 - name: AAP_READINESS_CONSECUTIVE_SUCCESSES
   value: {{ .Values.bootstrap.readinessConsecutiveSuccesses | quote }}
 volumeMounts:
 - name: tmp
   mountPath: /tmp
+{{- if not .Values.aap.instance.enabled }}
+- name: ca-bundle
+  mountPath: /etc/ca-bundle
+  readOnly: true
+{{- end }}
 resources:
   requests:
     cpu: 50m
@@ -241,7 +348,57 @@ env:
     fieldRef:
       fieldPath: metadata.namespace
 - name: AAP_ADMIN_SECRET_NAME
-  value: {{ printf "%s-admin-password" (include "osac-aap.instanceName" .) | quote }}
+  value: {{ include "osac-aap.adminPasswordSecretName" . | quote }}
+volumeMounts:
+- name: tmp
+  mountPath: /tmp
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: ["ALL"]
+{{- end }}
+
+{{/*
+Polls for the vcluster token Secret before the bootstrap container mounts it
+via secretKeyRef, for the same reason as wait-for-admin-secret: the run setup
+creates the Secret outside this release, and a missing Secret at pod-schedule
+time would otherwise block the whole pod with no log output.
+Rendered only when the vcluster settings are set.
+*/}}
+{{- define "osac-aap.waitForVclusterTokenScript" -}}
+echo "Waiting for vcluster token Secret ${VCLUSTER_TOKEN_SECRET_NAME}; the run setup creates it outside this release"
+for i in {1..60}; do
+  if oc get secret "${VCLUSTER_TOKEN_SECRET_NAME}" -n "${NAMESPACE}" --request-timeout=10s >/dev/null 2>&1; then
+    echo "Found vcluster token Secret."
+    exit 0
+  fi
+  echo "Attempt $i: vcluster token Secret not found yet, waiting 5 seconds..."
+  sleep 5
+done
+echo "ERROR: Timed out waiting for vcluster token Secret ${VCLUSTER_TOKEN_SECRET_NAME} in namespace ${NAMESPACE}."
+exit 1
+{{- end }}
+
+{{/* wait-for-vcluster-token init container env/volumeMounts/resources/securityContext. */}}
+{{- define "osac-aap.waitForVclusterTokenContainerSpec" -}}
+env:
+- name: HOME
+  value: /tmp
+- name: NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+- name: VCLUSTER_TOKEN_SECRET_NAME
+  value: {{ .Values.vcluster.tokenSecret.name | quote }}
 volumeMounts:
 - name: tmp
   mountPath: /tmp

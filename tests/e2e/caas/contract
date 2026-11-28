@@ -1,1 +1,5 @@
 REQUIRED_VARS="KUBECONFIG OSAC_NAMESPACE OSAC_PULL_SECRET_PATH"
+# OSAC_TARGET_KUBECONFIG is optional: when unset, the CaaS suite reads Agents,
+# InfraEnvs, HostedClusters, NodePools and HostedControlPlanes from the hub,
+# which is a single-cluster deployment. A vcluster backend sets it to the outer
+# cluster kubeconfig.

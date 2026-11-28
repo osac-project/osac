@@ -55,6 +55,12 @@ type config struct {
 	// per-tenant loops use it to find osac.events.<tenant>, or whatever prefix
 	// this deployment publishes under.
 	eventTopicPrefix string
+
+	// heartbeatTopicPrefix and deadLetterTopicPrefix are the prefixes of the
+	// per-tenant heartbeat and dead-letter topics. Empty means the defaults
+	// (osac.metering.heartbeat. and osac.metering.dlq.).
+	heartbeatTopicPrefix  string
+	deadLetterTopicPrefix string
 }
 
 func main() {
@@ -90,11 +96,13 @@ func configFromEnv() *config {
 			SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
 			SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
 		},
-		dbURLFile:        envOrDefault("DB_URL_FILE", "/etc/metering/db/url"),
-		heartbeatTick:    parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), time.Minute),
-		deploymentID:     os.Getenv("METERING_DEPLOYMENT_ID"),
-		topicRetentionMS: envOrDefault("METERING_TOPIC_RETENTION_MS", "-1"),
-		eventTopicPrefix: envOrDefault("KAFKA_EVENT_TOPIC_PREFIX", schema.EventsPrefix),
+		dbURLFile:             envOrDefault("DB_URL_FILE", "/etc/metering/db/url"),
+		heartbeatTick:         parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), time.Minute),
+		deploymentID:          os.Getenv("METERING_DEPLOYMENT_ID"),
+		topicRetentionMS:      envOrDefault("METERING_TOPIC_RETENTION_MS", "-1"),
+		eventTopicPrefix:      envOrDefault("KAFKA_EVENT_TOPIC_PREFIX", schema.EventsPrefix),
+		heartbeatTopicPrefix:  envOrDefault("METERING_HEARTBEAT_TOPIC_PREFIX", schema.HeartbeatPrefix),
+		deadLetterTopicPrefix: envOrDefault("METERING_DEADLETTER_TOPIC_PREFIX", schema.DeadLetterPrefix),
 	}
 }
 
@@ -193,14 +201,16 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 		return err
 	}
 	metering, err := service.New(ctx, service.Config{
-		Kafka:            cfg.kafka,
-		Store:            database.NewStore(dbPool),
-		Rules:            rulesSource,
-		HeartbeatTick:    cfg.heartbeatTick,
-		DeploymentID:     cfg.deploymentID,
-		Logger:           logger,
-		TopicRetentionMS: cfg.topicRetentionMS,
-		EventTopicPrefix: cfg.eventTopicPrefix,
+		Kafka:                 cfg.kafka,
+		Store:                 database.NewStore(dbPool),
+		Rules:                 rulesSource,
+		HeartbeatTick:         cfg.heartbeatTick,
+		DeploymentID:          cfg.deploymentID,
+		Logger:                logger,
+		TopicRetentionMS:      cfg.topicRetentionMS,
+		EventTopicPrefix:      cfg.eventTopicPrefix,
+		HeartbeatTopicPrefix:  cfg.heartbeatTopicPrefix,
+		DeadLetterTopicPrefix: cfg.deadLetterTopicPrefix,
 	})
 	if err != nil {
 		return err

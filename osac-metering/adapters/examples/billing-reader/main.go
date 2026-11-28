@@ -68,7 +68,8 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 
-	config, err := kafka.NewConsumerConfig(kafka.KafkaConfigFromEnv())
+	kafkaCfg := kafka.KafkaConfigFromEnv()
+	config, err := kafka.NewConsumerConfig(kafkaCfg)
 	if err != nil {
 		log.Fatalf("creating Kafka client config: %v", err)
 	}
@@ -93,12 +94,13 @@ func main() {
 		}
 	}()
 
-	topics, err := kafka.HeartbeatTopics(client)
+	topics, err := kafka.HeartbeatTopics(client, kafkaCfg.HeartbeatTopicPrefix)
 	if err != nil {
 		log.Fatalf("listing heartbeat topics: %v", err)
 	}
 	if len(topics) == 0 {
-		log.Fatalf("no osac.metering.heartbeat.* topics exist; check that metering has served a tenant")
+		log.Fatalf("no %s* topics exist; check that metering has served a tenant",
+			kafka.ResolveHeartbeatPrefix(kafkaCfg.HeartbeatTopicPrefix))
 	}
 
 	consumerGroup, err := sarama.NewConsumerGroupFromClient(group, client)

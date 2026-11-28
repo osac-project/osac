@@ -7,6 +7,11 @@
     bare_metal_instance: "{{ osac_job_vars.resource }}"
 
   pre_tasks:
+    - name: Include get remote cluster kubeconfig
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: get_remote_cluster_kubeconfig
+
     - name: Display bare metal instance information
       ansible.builtin.debug:
         msg:

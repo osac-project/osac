@@ -1,3 +1,16 @@
+# Base URL of the AAP controller API, without a path suffix; callers append
+# their own API paths (for example /api/controller/v2/...). Set it when the AAP
+# instance is disabled and OSAC talks to an AAP outside this release; an empty
+# value then fails the render. While the instance is enabled, consumers address
+# it by its service name and this value is not read.
+controllerUrl: ""
+
+# ConfigMap holding the CA bundle that trusts the external AAP's HTTPS
+# certificate. Read only when the AAP instance is disabled: the external AAP
+# is reached over TLS, and its certificate comes from the shared CI CA the
+# bundle carries. Same name the fulfillment chart's certs mount uses.
+caBundleConfigMap: "ca-bundle"
+
 aap:
   instance:
     enabled: true
@@ -20,6 +33,34 @@ bootstrap:
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
   readinessConsecutiveSuccesses: 3
+  # Admin credentials the bootstrap job and the create-token hook
+  # authenticate with when aap.instance.enabled=false. Defaults match the
+  # Secret the in-cluster instance creates, so a deployment that copies the
+  # external AAP's admin password under that name needs no override.
+  adminPasswordSecret:
+    name: "osac-aap-admin-password"
+    key: "password"
+
+# Runs that share one AAP with other runs (shared-infrastructure E2E) create
+# their AAP job pods inside their own vcluster instead of the outer cluster.
+# Set apiServerUrl and tokenSecret together: the bootstrap config-as-code
+# then creates a bearer-token credential for that API and attaches it to every
+# container group, and points every group's pod spec at the release namespace
+# inside the vcluster. Empty disables all of it; a half-set pair fails the
+# render naming what is missing.
+vcluster:
+  # Base URL of the vcluster API as the AAP controller reaches it: a TLS SAN
+  # the vcluster carries, for example
+  # https://pr2100v1.vc-pr2100v1.svc.cluster.local. Must be an https:// URL
+  # without a path: the controller sends the token there as a bearer
+  # credential.
+  apiServerUrl: ""
+  # Secret, in the release namespace, holding the vcluster service-account
+  # token (a long-lived cluster-admin token minted in the vcluster) that the
+  # AAP controller presents as the bearer token when creating job pods.
+  tokenSecret:
+    name: ""
+    key: ""
 
 configAsCode:
   manifestSecret: "config-as-code-manifest-ig"

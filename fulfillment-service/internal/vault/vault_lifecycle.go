@@ -269,7 +269,7 @@ func (c *VaultLifecycleClient) DeleteTenantNamespace(ctx context.Context, tenant
 	_, err = parentClient.Logical().DeleteWithContext(ctx,
 		fmt.Sprintf("sys/namespaces/%s", tenantName))
 	if err != nil && !isNotFoundError(err) {
-		return fmt.Errorf("failed to delete namespace %q: %w", tenantName, err)
+		return newProvisioningError("failed to delete namespace", tenantName, err)
 	}
 
 	c.logger.InfoContext(ctx, "Tenant vault namespace deleted",
@@ -284,7 +284,7 @@ func (c *VaultLifecycleClient) createNamespace(ctx context.Context, client *vaul
 	_, err := client.Logical().WriteWithContext(ctx,
 		fmt.Sprintf("sys/namespaces/%s", tenantName), nil)
 	if err != nil && !isAlreadyExistsError(err) {
-		return fmt.Errorf("failed to create namespace %q: %w", tenantName, err)
+		return newProvisioningError("failed to create namespace", tenantName, err)
 	}
 	return nil
 }
@@ -313,6 +313,8 @@ func (c *VaultLifecycleClient) mountEngine(ctx context.Context, client *vaultapi
 	}
 
 	// Reuse an occupied path only when its engine and required options match.
+	// Vault reports this as HTTP 400 and OpenBao as HTTP 409, so the decision
+	// is made from the mount table rather than from the error text.
 	mounts, err := client.Sys().ListMountsWithContext(ctx)
 	if err != nil {
 		return mountProvisioningError("inspect mount", input.Type, tenantName, err)
@@ -329,14 +331,55 @@ func (c *VaultLifecycleClient) mountEngine(ctx context.Context, client *vaultapi
 	return nil
 }
 
+// provisioningError reports a failed tenant namespace provisioning step. Its
+// message names the step, the tenant and, when available, the provider HTTP
+// status, so it is safe to log. The underlying error is kept for errors.Is and
+// errors.As but is never reproduced, because provider response bodies may
+// contain sensitive data.
+type provisioningError struct {
+	message string
+	err     error
+}
+
+func (e *provisioningError) Error() string {
+	return e.message
+}
+
+func (e *provisioningError) Unwrap() error {
+	return e.err
+}
+
+func newProvisioningError(operation, tenantName string, err error) error {
+	message := fmt.Sprintf("%s for tenant %q", operation, tenantName)
+	var response *vaultapi.ResponseError
+	if errors.As(err, &response) {
+		message = fmt.Sprintf("%s (HTTP %d)", message, response.StatusCode)
+	}
+	return &provisioningError{message: message, err: err}
+}
+
 // Provider response bodies can contain sensitive data. Report the operation and
 // HTTP status without including the body or request credentials.
 func mountProvisioningError(operation, engine, tenantName string, err error) error {
 	var response *vaultapi.ResponseError
 	if errors.As(err, &response) {
-		return fmt.Errorf("failed to %s %s for tenant %q (HTTP %d); verify lifecycle mount permissions and backend availability", operation, engine, tenantName, response.StatusCode)
+		return &provisioningError{
+			message: fmt.Sprintf(
+				"failed to %s %s for tenant %q (HTTP %d); verify lifecycle mount "+
+					"permissions and backend availability",
+				operation, engine, tenantName, response.StatusCode,
+			),
+			err: err,
+		}
 	}
-	return fmt.Errorf("failed to %s %s for tenant %q; verify backend connectivity and TLS configuration", operation, engine, tenantName)
+	return &provisioningError{
+		message: fmt.Sprintf(
+			"failed to %s %s for tenant %q; verify backend connectivity and TLS "+
+				"configuration",
+			operation, engine, tenantName,
+		),
+		err: err,
+	}
 }
 
 func (c *VaultLifecycleClient) enableJWTAuth(ctx context.Context, client *vaultapi.Client,
@@ -345,7 +388,7 @@ func (c *VaultLifecycleClient) enableJWTAuth(ctx context.Context, client *vaulta
 		Type: "jwt",
 	})
 	if err != nil && !isAlreadyExistsError(err) {
-		return fmt.Errorf("failed to enable JWT auth for tenant %q: %w", tenantName, err)
+		return newProvisioningError("failed to enable JWT auth", tenantName, err)
 	}
 	return nil
 }
@@ -361,7 +404,7 @@ func (c *VaultLifecycleClient) configureJWTAuth(ctx context.Context, client *vau
 	}
 	_, err := client.Logical().WriteWithContext(ctx, fmt.Sprintf("auth/%s/config", TenantAuthMountPath), config)
 	if err != nil {
-		return fmt.Errorf("failed to configure JWT auth for tenant %q: %w", tenantName, err)
+		return newProvisioningError("failed to configure JWT auth", tenantName, err)
 	}
 	return nil
 }
@@ -377,7 +420,7 @@ path "%s/metadata/*" {
 
 	err := client.Sys().PutPolicyWithContext(ctx, TenantKVAccessPolicy, policy)
 	if err != nil {
-		return fmt.Errorf("failed to create policy for tenant %q: %w", tenantName, err)
+		return newProvisioningError("failed to create policy", tenantName, err)
 	}
 	return nil
 }
@@ -395,7 +438,7 @@ func (c *VaultLifecycleClient) createRole(ctx context.Context, client *vaultapi.
 			"policies":   []string{TenantKVAccessPolicy},
 		})
 	if err != nil {
-		return fmt.Errorf("failed to create role for tenant %q: %w", tenantName, err)
+		return newProvisioningError("failed to create role", tenantName, err)
 	}
 	return nil
 }
@@ -428,9 +471,20 @@ func (c *VaultLifecycleClient) tenantClient(ctx context.Context, tenantName stri
 	return client, nil
 }
 
+// isAlreadyExistsError reports whether Vault rejected a request because the
+// target already exists. Vault answers a duplicate namespace, mount or auth
+// mount with HTTP 400, while OpenBao answers a duplicate mount or auth mount
+// with HTTP 409 ("path is already in use at secret/", "existing mount at
+// secret/"). Both mean the previous reconciliation already did this step.
 func isAlreadyExistsError(err error) bool {
 	var respErr *vaultapi.ResponseError
-	if errors.As(err, &respErr) && respErr.StatusCode == http.StatusBadRequest {
+	if !errors.As(err, &respErr) {
+		return false
+	}
+	switch respErr.StatusCode {
+	case http.StatusConflict:
+		return true
+	case http.StatusBadRequest:
 		body := strings.Join(respErr.Errors, " ")
 		return strings.Contains(body, "already exists") ||
 			strings.Contains(body, "existing mount") ||

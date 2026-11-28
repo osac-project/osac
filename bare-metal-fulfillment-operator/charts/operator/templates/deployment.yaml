@@ -6,6 +6,12 @@ metadata:
   labels:
     {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
     control-plane: controller-manager
+{{- if and .Values.remoteClusterKubeconfig (not .Values.remoteClusterKubeconfigSecretName) }}
+{{- fail "remoteClusterKubeconfigSecretName is required when remoteClusterKubeconfig is set" }}
+{{- end }}
+{{- if and .Values.remoteClusterKubeconfigSecretName (not .Values.remoteClusterKubeconfig) }}
+{{- fail "remoteClusterKubeconfig is required when remoteClusterKubeconfigSecretName is set" }}
+{{- end }}
 spec:
   selector:
     matchLabels:
@@ -87,6 +93,10 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
+          {{- if .Values.remoteClusterKubeconfig }}
+          - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
+            value: {{ .Values.remoteClusterKubeconfig | quote }}
+          {{- end }}
           {{- if .Values.env.aapUrl }}
           - name: OSAC_AAP_URL
             value: {{ .Values.env.aapUrl | quote }}
@@ -102,6 +112,10 @@ spec:
           {{- if .Values.env.aapInsecureSkipVerify }}
           - name: OSAC_AAP_INSECURE_SKIP_VERIFY
             value: {{ .Values.env.aapInsecureSkipVerify | quote }}
+          {{- end }}
+          {{- if .Values.env.aapTemplatePrefix }}
+          - name: OSAC_AAP_TEMPLATE_PREFIX
+            value: {{ .Values.env.aapTemplatePrefix | quote }}
           {{- end }}
           - name: OSAC_ENABLE_NETWORKING_PROVISIONING
             value: {{ .Values.global.networking.provisioningEnabled | quote }}
@@ -165,6 +179,11 @@ spec:
             readOnly: true
           {{- end }}
           {{- end }}
+          {{- if .Values.remoteClusterKubeconfigSecretName }}
+          - name: remote-kubeconfig
+            mountPath: {{ dir .Values.remoteClusterKubeconfig | quote }}
+            readOnly: true
+          {{- end }}
       volumes:
         - name: inventory-config
           secret:
@@ -204,7 +223,7 @@ spec:
         {{- if .Values.secretAPI.url }}
         - name: secret-api-client-credentials
           secret:
-            secretName: fulfillment-controller-credentials
+            secretName: {{ .Values.secretAPI.credentialsSecret }}
             optional: true
             items:
               - key: client-id
@@ -219,6 +238,14 @@ spec:
               - key: {{ .Values.secretAPI.caBundle.key }}
                 path: bundle.pem
         {{- end }}
+        {{- end }}
+        {{- if .Values.remoteClusterKubeconfigSecretName }}
+        - name: remote-kubeconfig
+          secret:
+            secretName: {{ .Values.remoteClusterKubeconfigSecretName }}
+            items:
+              - key: {{ .Values.remoteClusterKubeconfigSecretKey | default "kubeconfig" | quote }}
+                path: {{ base .Values.remoteClusterKubeconfig | quote }}
         {{- end }}
       serviceAccountName: {{ include "bare-metal-fulfillment-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10

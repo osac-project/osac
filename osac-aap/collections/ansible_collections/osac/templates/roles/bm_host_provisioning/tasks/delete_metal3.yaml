@@ -14,6 +14,7 @@
 
     - name: Get BareMetalHost
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         api_version: metal3.io/v1alpha1
         kind: BareMetalHost
         namespace: "{{ bmh_namespace }}"
@@ -44,6 +45,7 @@
         - name: Patch BareMetalHost to remove image, networkData, userData, and metaData
           when: bmh_has_image | bool
           kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
             api_version: metal3.io/v1alpha1
             kind: BareMetalHost
             namespace: "{{ bmh_namespace }}"
@@ -58,6 +60,7 @@
 
         - name: Wait for BMH to reach available or ready state
           kubernetes.core.k8s_info:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
             api_version: metal3.io/v1alpha1
             kind: BareMetalHost
             namespace: "{{ bmh_namespace }}"
@@ -85,6 +88,7 @@
             - generated_root_hints_annotation | length > 0
             - bmh_deprovision_status.resources[0].spec.rootDeviceHints | default({}) | length > 0
           kubernetes.core.k8s_json_patch:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
             api_version: metal3.io/v1alpha1
             kind: BareMetalHost
             namespace: "{{ bmh_namespace }}"
@@ -97,6 +101,7 @@
 
         - name: Delete networkData Secret
           kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
             api_version: v1
             kind: Secret
             namespace: "{{ bmh_namespace }}"
@@ -105,6 +110,7 @@
 
         - name: Delete userData Secret
           kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
             api_version: v1
             kind: Secret
             namespace: "{{ bmh_namespace }}"
@@ -113,6 +119,7 @@
 
         - name: Delete metaData Secret
           kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
             api_version: v1
             kind: Secret
             namespace: "{{ bmh_namespace }}"

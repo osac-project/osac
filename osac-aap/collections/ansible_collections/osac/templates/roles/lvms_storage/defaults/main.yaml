@@ -14,6 +14,20 @@ lvms_storage_config_namespace: >-
 # topolvm StorageClass provisioner name.
 lvms_storage_provisioner: "topolvm.io"
 
+# Tenant StorageClass name prefix. A run ID (shared-infrastructure E2E:
+# several runs share the outer cluster and use the same tenant names) sits
+# between "osac-" and the tenant so two runs never map one StorageClass
+# name; without one the prefix is today's "osac-".
+lvms_storage_storage_class_prefix: >-
+  {{ 'osac-' ~ osac_instance_id ~ '-' if osac_instance_id | default('') else 'osac-' }}
+
+# Extra label selectors scoping tenant StorageClass lookups to this run, so
+# one run's tenant teardown never deletes another run's classes with the
+# same tenant name in the shared outer cluster. Empty without a run ID.
+lvms_storage_instance_selectors: >-
+  {{ ['osac.openshift.io/instance=' ~ osac_instance_id]
+     if osac_instance_id | default('') else [] }}
+
 # LVMCluster device class name created by osac-installer's configure-lvms.sh hook.
 lvms_storage_device_class: "vg1"
 

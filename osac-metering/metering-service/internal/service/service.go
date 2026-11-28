@@ -83,6 +83,17 @@ type Config struct {
 	// that tenant's event topic. Discovery, the fold, and the round all use it.
 	// Empty means the default osac.events. prefix.
 	EventTopicPrefix string
+
+	// HeartbeatTopicPrefix is the prefix prepended to a tenant name to form that
+	// tenant's heartbeat topic. The relay sends to it, catch-up reads it, and the
+	// topics are created under it. Empty means the default osac.metering.heartbeat.
+	// prefix.
+	HeartbeatTopicPrefix string
+
+	// DeadLetterTopicPrefix is the prefix prepended to a tenant name to form that
+	// tenant's dead-letter topic. The topics are created under it. Empty means the
+	// default osac.metering.dlq. prefix.
+	DeadLetterTopicPrefix string
 }
 
 // Service runs the per-tenant loops.
@@ -314,7 +325,9 @@ func (s *Service) Run(ctx context.Context) error {
 	ticker := time.NewTicker(DiscoverInterval)
 	defer ticker.Stop()
 	for {
-		tenants, err := kafkaconn.ListEventTenants(ctx, s.cfg.Kafka, s.cfg.EventTopicPrefix)
+		tenants, err := kafkaconn.ListEventTenants(
+			ctx, s.cfg.Kafka, s.cfg.EventTopicPrefix, s.cfg.HeartbeatTopicPrefix, s.cfg.DeadLetterTopicPrefix,
+		)
 		if err != nil {
 			// A failed listing must not stop the service: the next pass lists again.
 			s.cfg.Logger.Error(err, "listing tenant event topics; retrying on the next pass")
@@ -431,7 +444,9 @@ func (s *Service) startNew(ctx context.Context, live map[string]bool) {
 		// The heartbeat and dead-letter topics are metering's own infrastructure:
 		// without them the loops cannot produce or deliver, so the tenant waits for
 		// the next pass instead of starting half-way.
-		if err := kafkaconn.EnsureTenantTopics(s.cfg.Kafka, tenant, s.cfg.TopicRetentionMS); err != nil {
+		if err := kafkaconn.EnsureTenantTopics(
+			s.cfg.Kafka, tenant, s.cfg.TopicRetentionMS, s.cfg.HeartbeatTopicPrefix, s.cfg.DeadLetterTopicPrefix,
+		); err != nil {
 			s.cfg.Logger.Error(err, "ensuring tenant topics; retrying on the next pass", "tenant", tenant)
 			// Readiness must fail while a discovered tenant has no loops at all.
 			s.lock.Lock()
@@ -613,6 +628,7 @@ func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tena
 	roundLoop, err := round.New(
 		s.cfg.Store, s.ruleset, s.client, s.consumer,
 		s.cfg.Logger.WithValues("loop", "round"), s.rulesGate, s.cfg.EventTopicPrefix,
+		s.cfg.HeartbeatTopicPrefix,
 	)
 	if err != nil {
 		s.cfg.Logger.Error(err, "creating round", "tenant", tenant)
@@ -621,6 +637,7 @@ func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tena
 	}
 	relayLoop, err := relay.New(
 		s.cfg.Store, s.producer, s.cfg.Logger.WithValues("loop", "relay"),
+		s.cfg.HeartbeatTopicPrefix,
 	)
 	if err != nil {
 		s.cfg.Logger.Error(err, "creating relay", "tenant", tenant)

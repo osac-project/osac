@@ -20,6 +20,7 @@ import pytest
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import unique_name
 from tests.e2e.core.keycloak import get_jwt
+from tests.e2e.core.keycloak_admin import admin_realm
 from tests.e2e.core.runner import poll_until
 
 pytestmark = [pytest.mark.regression, pytest.mark.iam]
@@ -243,7 +244,7 @@ def _keycloak_admin_token(*, keycloak_url: str, password: str) -> str:
 
 def _keycloak_client_exists(*, keycloak_url: str, admin_token: str, client_id: str) -> bool:
     query = urlencode({"clientId": client_id})
-    url = f"{keycloak_url.rstrip('/')}/admin/realms/osac/clients?{query}"
+    url = f"{keycloak_url.rstrip('/')}/admin/realms/{admin_realm()}/clients?{query}"
     status, clients = _https_json(url=url, bearer_token=admin_token)
     if status != 200 or not isinstance(clients, list):
         raise RuntimeError(f"Keycloak client lookup failed (HTTP {status})")

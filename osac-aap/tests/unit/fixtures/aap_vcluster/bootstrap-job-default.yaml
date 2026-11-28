@@ -1,0 +1,302 @@
+---
+# Source: osac-aap/templates/bootstrap-job.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aap-test-osac-aap-bootstrap
+  namespace: default
+  labels:
+    helm.sh/chart: osac-aap-0.0.0
+    app.kubernetes.io/name: osac-aap
+    app.kubernetes.io/instance: aap-test
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: osac-aap/templates/bootstrap-job.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aap-test-osac-aap-read-admin-secret
+  namespace: default
+  labels:
+    helm.sh/chart: osac-aap-0.0.0
+    app.kubernetes.io/name: osac-aap
+    app.kubernetes.io/instance: aap-test
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["osac-aap-admin-password"]
+    verbs: ["get"]
+---
+# Source: osac-aap/templates/bootstrap-job.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aap-test-osac-aap-read-admin-secret
+  namespace: default
+  labels:
+    helm.sh/chart: osac-aap-0.0.0
+    app.kubernetes.io/name: osac-aap
+    app.kubernetes.io/instance: aap-test
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aap-test-osac-aap-read-admin-secret
+subjects:
+  - kind: ServiceAccount
+    name: aap-test-osac-aap-bootstrap
+    namespace: default
+---
+# Source: osac-aap/templates/bootstrap-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aap-test-osac-aap-bootstrap
+  namespace: default
+  labels:
+    helm.sh/chart: osac-aap-0.0.0
+    app.kubernetes.io/name: osac-aap
+    app.kubernetes.io/instance: aap-test
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-output-log-policy": hook-failed
+spec:
+  backoffLimit: 15
+  # Cumulative across all backoffLimit retries; must exceed both init containers'
+  # combined worst-case runtime (see _helpers.tpl) so a stuck attempt exits
+  # cleanly instead of being SIGKILLed.
+  activeDeadlineSeconds: 8400
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: osac-aap-0.0.0
+        app.kubernetes.io/name: osac-aap
+        app.kubernetes.io/instance: aap-test
+        app.kubernetes.io/managed-by: Helm
+    spec:
+      serviceAccountName: aap-test-osac-aap-bootstrap
+      initContainers:
+      - name: wait-for-admin-secret
+        image: quay.io/openshift/origin-cli:4.20.0
+        command:
+          - /bin/bash
+          - -c
+          - |
+            echo "Waiting for AAP admin password Secret to be created by the operator..."
+            for i in {1..60}; do
+              if oc get secret "${AAP_ADMIN_SECRET_NAME}" -n "${NAMESPACE}" --request-timeout=10s >/dev/null 2>&1; then
+                echo "Found admin password Secret."
+                exit 0
+              fi
+              echo "Attempt $i: admin password Secret not found yet, waiting 5 seconds..."
+              sleep 5
+            done
+            echo "ERROR: Timed out waiting for admin password Secret to be created."
+            exit 1
+        env:
+        - name: HOME
+          value: /tmp
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: AAP_ADMIN_SECRET_NAME
+          value: "osac-aap-admin-password"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+      - name: wait-for-aap
+        image: quay.io/openshift/origin-cli:4.20.0
+        command:
+          - /bin/bash
+          - -c
+          - |
+            echo "Checking AAP controller and gateway readiness..."
+
+            # A threshold < 1 would satisfy the streak check immediately, reintroducing the race.
+            case "${AAP_READINESS_CONSECUTIVE_SUCCESSES}" in
+              ''|*[!0-9]*)
+                echo "ERROR: AAP_READINESS_CONSECUTIVE_SUCCESSES must be a positive integer, got '${AAP_READINESS_CONSECUTIVE_SUCCESSES}'"
+                exit 1
+                ;;
+            esac
+            if [ "${AAP_READINESS_CONSECUTIVE_SUCCESSES}" -lt 1 ]; then
+              echo "ERROR: AAP_READINESS_CONSECUTIVE_SUCCESSES must be >= 1, got '${AAP_READINESS_CONSECUTIVE_SUCCESSES}'"
+              exit 1
+            fi
+
+            echo "Waiting for AAP to be ready (${AAP_READINESS_CONSECUTIVE_SUCCESSES} consecutive successful checks required)..."
+
+            # netrc avoids leaking the password via curl -u's process args; cleaned up via
+            # trap since /tmp is a shared emptyDir mounted by later containers too.
+            trap 'rm -f /tmp/.netrc' EXIT
+            ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "${AAP_GATEWAY_HOSTNAME}" "${AAP_PASSWORD}" > /tmp/.netrc )
+
+            POLL_INTERVAL=5
+            AUTH_FAILURE_LIMIT=5
+            consecutive_successes=0
+            auth_failures=0
+            READINESS_DEADLINE=$(( $(date +%s) + 1500 ))
+            i=0
+            while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
+              i=$((i + 1))
+              curl -sf --connect-timeout 5 --max-time 15 \
+                "http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/" \
+                | grep -q 'version'
+              controller_ping="${?}"
+
+              if [ "${controller_ping}" -ne 0 ]; then
+                consecutive_successes=0
+                echo "Attempt $i: controller_ping=fail gateway_ping=skipped auth=skipped delete=skipped streak: ${consecutive_successes}/${AAP_READINESS_CONSECUTIVE_SUCCESSES}"
+                echo "AAP is not ready, waiting ${POLL_INTERVAL} seconds..."
+                sleep "${POLL_INTERVAL}"
+                continue
+              fi
+
+              curl -sf --connect-timeout 5 --max-time 15 \
+                "http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/" \
+                | grep -q 'good'
+              gateway_ping="${?}"
+
+              if [ "${gateway_ping}" -ne 0 ]; then
+                consecutive_successes=0
+                echo "Attempt $i: controller_ping=ok gateway_ping=fail auth=skipped delete=skipped streak: ${consecutive_successes}/${AAP_READINESS_CONSECUTIVE_SUCCESSES}"
+                echo "AAP is not ready, waiting ${POLL_INTERVAL} seconds..."
+                sleep "${POLL_INTERVAL}"
+                continue
+              fi
+
+              response=$(curl -s --connect-timeout 5 --max-time 15 -w '\n%{http_code}' -X POST \
+                --netrc-file /tmp/.netrc \
+                "http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/" \
+                -H "Content-Type: application/json" -d '{"description": "readiness-check", "scope": "read"}')
+              auth_code=$(echo "${response}" | tail -1)
+
+              if [ "${auth_code}" = "200" ] || [ "${auth_code}" = "201" ]; then
+                auth_failures=0
+                auth_body=$(echo "${response}" | sed '$d')
+                token_id=$(echo "${auth_body}" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+                if [ -z "${token_id}" ]; then
+                  consecutive_successes=0
+                  delete_code="skipped"
+                  # Not logging auth_body: it may contain the live token value.
+                  echo "WARNING: readiness-check token created but its ID could not be parsed from the response"
+                else
+                  delete_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
+                    -X DELETE --netrc-file /tmp/.netrc \
+                    "http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/${token_id}/")
+                  case "${delete_code}" in
+                    2??)
+                      consecutive_successes=$((consecutive_successes + 1))
+                      ;;
+                    *)
+                      consecutive_successes=0
+                      echo "WARNING: readiness-check token cleanup failed (delete_code='${delete_code}')"
+                      ;;
+                  esac
+                fi
+                echo "Attempt $i: controller_ping=ok gateway_ping=ok auth=${auth_code} delete=${delete_code} streak: ${consecutive_successes}/${AAP_READINESS_CONSECUTIVE_SUCCESSES}"
+              else
+                consecutive_successes=0
+                if [ "${auth_code}" = "401" ] || [ "${auth_code}" = "403" ]; then
+                  auth_failures=$((auth_failures + 1))
+                  echo "WARNING: AAP authentication rejected (HTTP ${auth_code}), consecutive auth failures: ${auth_failures}/${AUTH_FAILURE_LIMIT}"
+                  if [ "${auth_failures}" -ge "${AUTH_FAILURE_LIMIT}" ]; then
+                    echo "ERROR: AAP authentication is failing repeatedly -- check AAP_PASSWORD/admin credentials"
+                    exit 1
+                  fi
+                else
+                  auth_failures=0
+                fi
+                echo "Attempt $i: controller_ping=ok gateway_ping=ok auth=${auth_code} delete=skipped streak: ${consecutive_successes}/${AAP_READINESS_CONSECUTIVE_SUCCESSES}"
+              fi
+
+              if [ "${consecutive_successes}" -ge "${AAP_READINESS_CONSECUTIVE_SUCCESSES}" ]; then
+                echo "AAP is ready!"
+                exit 0
+              fi
+
+              echo "AAP is not ready, waiting ${POLL_INTERVAL} seconds..."
+              sleep "${POLL_INTERVAL}"
+            done
+            echo "Timeout waiting for AAP."
+            exit 1
+        env:
+        - name: HOME
+          value: /tmp
+        - name: AAP_GATEWAY_HOSTNAME
+          value: "osac-aap"
+        - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
+          value: "osac-aap-controller-service"
+        - name: AAP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: osac-aap-admin-password
+              key: password
+        - name: AAP_READINESS_CONSECUTIVE_SUCCESSES
+          value: "3"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+      containers:
+      - name: bootstrap
+        image: ghcr.io/osac-project/osac-aap:latest
+        args:
+        - ansible-playbook
+        - osac.config_as_code.subscription
+        - osac.config_as_code.configure
+        envFrom:
+        - secretRef:
+            name: config-as-code-ig
+        env:
+        - name: AAP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: osac-aap-admin-password
+              key: password
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: config-as-code-manifest-volume
+          mountPath: /var/secrets/config-as-code-manifest
+          readOnly: true
+      volumes:
+      - name: config-as-code-manifest-volume
+        secret:
+          secretName: config-as-code-manifest-ig
+      - name: tmp
+        emptyDir: {}
+      restartPolicy: Never

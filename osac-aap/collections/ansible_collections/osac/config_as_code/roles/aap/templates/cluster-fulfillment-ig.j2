@@ -3,6 +3,9 @@ kind: Pod
 metadata:
   labels:
     ansible_job: ''
+{% if vcluster_api_url %}
+  namespace: {{ current_namespace }}
+{% endif %}
 spec:
   serviceAccountName: {{ osac_sa_name }}
   affinity:
@@ -27,6 +30,14 @@ spec:
         - name: kube-api-access
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount
           readOnly: true
+{% if remote_cluster_kubeconfig_secret_name %}
+        # Cluster fulfillment creates HostedClusters, NodePools, Machines and
+        # the working namespace in the outer infrastructure cluster; the
+        # roles reach it through OSAC_REMOTE_CLUSTER_KUBECONFIG.
+        - name: remote-cluster-kubeconfig
+          mountPath: /etc/osac
+          readOnly: true
+{% endif %}
       env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -40,6 +51,14 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
+{% if remote_cluster_kubeconfig_secret_name %}
+        - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
+          value: /etc/osac/remote-cluster-kubeconfig
+{% endif %}
+{% if osac_instance_id %}
+        - name: OSAC_INSTANCE_ID
+          value: {{ osac_instance_id }}
+{% endif %}
       envFrom:
         - configMapRef:
             name: cluster-fulfillment-ig
@@ -66,7 +85,20 @@ spec:
                     fieldPath: metadata.namespace
           - configMap:
               name: openshift-service-ca.crt
+              # A vcluster has no service-ca operator: its pods only get this
+              # ConfigMap when the run setup copies it in. Leaving it required
+              # would then block the pod in CreateContainerConfigError.
+              optional: true
               items:
                 - key: service-ca.crt
                   path: service-ca.crt
         defaultMode: 420
+{% if remote_cluster_kubeconfig_secret_name %}
+    - name: remote-cluster-kubeconfig
+      secret:
+        secretName: {{ remote_cluster_kubeconfig_secret_name }}
+        items:
+          - key: {{ remote_cluster_kubeconfig_secret_key }}
+            path: remote-cluster-kubeconfig
+        defaultMode: 420
+{% endif %}

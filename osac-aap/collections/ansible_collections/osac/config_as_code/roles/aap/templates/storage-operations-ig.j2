@@ -3,6 +3,9 @@ kind: Pod
 metadata:
   labels:
     ansible_job: ''
+{% if vcluster_api_url %}
+  namespace: {{ current_namespace }}
+{% endif %}
 spec:
   serviceAccountName: {{ osac_sa_name }}
   affinity:
@@ -51,22 +54,16 @@ spec:
         - configMapRef:
             name: storage-operations-ig
             optional: true
+{% if remote_cluster_kubeconfig_secret_name or osac_instance_id %}
       env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: POD_UID
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.uid
 {% if remote_cluster_kubeconfig_secret_name %}
         - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
           value: /etc/osac/remote-cluster-kubeconfig
+{% endif %}
+{% if osac_instance_id %}
+        - name: OSAC_INSTANCE_ID
+          value: {{ osac_instance_id }}
+{% endif %}
 {% endif %}
   volumes:
     - name: kube-api-access

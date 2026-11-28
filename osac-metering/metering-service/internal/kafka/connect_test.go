@@ -27,7 +27,7 @@ var _ = Describe("event tenant discovery", func() {
 			"osac.events.oscar",
 			"osac.events.acme",
 			"unrelated",
-		}, "osac.events.")).To(Equal([]string{"acme", "oscar"}))
+		}, "osac.events.", "", "")).To(Equal([]string{"acme", "oscar"}))
 	})
 
 	It("skips the built-in system and shared tenants", func() {
@@ -35,7 +35,7 @@ var _ = Describe("event tenant discovery", func() {
 			"osac.events.system",
 			"osac.events.shared",
 			"osac.events.acme",
-		}, "osac.events.")).To(Equal([]string{"acme"}))
+		}, "osac.events.", "", "")).To(Equal([]string{"acme"}))
 	})
 
 	It("uses a configured prefix and ignores the default names", func() {
@@ -44,7 +44,7 @@ var _ = Describe("event tenant discovery", func() {
 			"custom.events.acme",
 			"custom.events.system",
 			"custom.events.shared",
-		}, "custom.events.")).To(Equal([]string{"acme"}))
+		}, "custom.events.", "", "")).To(Equal([]string{"acme"}))
 	})
 
 	It("does not treat heartbeat and dead-letter topics as event tenants", func() {
@@ -53,14 +53,25 @@ var _ = Describe("event tenant discovery", func() {
 			"osac.metering.dlq.acme",
 			"osac.acme",
 			"osac.events.oscar",
-		}, "osac.")).To(Equal([]string{"acme", "events.oscar"}))
+		}, "osac.", "", "")).To(Equal([]string{"acme", "events.oscar"}))
+	})
+
+	It("skips heartbeat and dead-letter topics under configured prefixes", func() {
+		Expect(kafka.EventTenantsOf([]string{
+			"pr2100v1.metering.heartbeat.acme",
+			"pr2100v1.metering.dlq.acme",
+			"pr2100v1.events.acme",
+			"pr2100v1.events.oscar",
+			"osac.metering.heartbeat.acme",
+		}, "pr2100v1.events.", "pr2100v1.metering.heartbeat.", "pr2100v1.metering.dlq.")).
+			To(Equal([]string{"acme", "oscar"}))
 	})
 
 	It("treats an empty prefix as the default", func() {
 		Expect(kafka.EventTenantsOf([]string{
 			"osac.events.acme",
 			"custom.events.oscar",
-		}, "")).To(Equal([]string{"acme"}))
+		}, "", "", "")).To(Equal([]string{"acme"}))
 	})
 })
 

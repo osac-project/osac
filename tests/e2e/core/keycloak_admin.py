@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any
 from urllib.parse import urlencode
 
 from tests.e2e.core.runner import run
+
+
+def admin_realm() -> str:
+    """The realm the suite administers, from OSAC_KEYCLOAK_REALM.
+
+    Single-cluster installs use "osac"; a vcluster run uses its own realm
+    named after the run (the same realm its issuer URL carries).
+    """
+    return os.environ.get("OSAC_KEYCLOAK_REALM", "osac").strip() or "osac"
 
 
 def get_admin_token(*, keycloak_url: str, username: str, password: str) -> str:
@@ -44,11 +54,12 @@ def keycloak_admin_request(
     data: Any = None,  # noqa: ANN401
 ) -> tuple[int, bytes]:
     """
-    Make an authenticated request to the Keycloak admin API for the 'osac' realm.
-    The path is relative to /admin/realms/osac (e.g., "/organizations", "/users/{id}").
+    Make an authenticated request to the Keycloak admin API for the configured
+    realm (OSAC_KEYCLOAK_REALM, default "osac").
+    The path is relative to /admin/realms/<realm> (e.g., "/organizations", "/users/{id}").
     Returns (status_code, response_body).
     """
-    url = f"{keycloak_url}/admin/realms/osac{path}"
+    url = f"{keycloak_url}/admin/realms/{admin_realm()}{path}"
     args = [
         "curl",
         "-sk",

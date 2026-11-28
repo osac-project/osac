@@ -26,6 +26,12 @@ type KafkaConfig struct {
 	TLSCACert    string // Path to CA certificate file (empty = system CAs)
 	SASLUser     string // SASL/SCRAM username
 	SASLPassFile string // Path to file containing SASL password
+
+	// HeartbeatTopicPrefix and DeadLetterTopicPrefix are the prefixes of the per-tenant
+	// heartbeat and dead-letter topics the adapter consumes and writes. Empty uses the
+	// shared defaults.
+	HeartbeatTopicPrefix  string
+	DeadLetterTopicPrefix string
 }
 
 // NewConsumerConfig creates a Sarama config for the adapter consumer group.

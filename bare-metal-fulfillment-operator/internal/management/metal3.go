@@ -24,6 +24,7 @@ import (
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -69,7 +70,7 @@ func NewMetal3ManagementClient(ctx context.Context, cfg *Config) (Client, error)
 		return nil, fmt.Errorf("failed to add metal3 types to scheme: %w", err)
 	}
 
-	restConfig, err := ctrl.GetConfig()
+	restConfig, err := resolveRestConfig(cfg.RESTConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubernetes config: %w", err)
 	}
@@ -83,6 +84,16 @@ func NewMetal3ManagementClient(ctx context.Context, cfg *Config) (Client, error)
 		client:    k8sClient,
 		namespace: namespace,
 	}, nil
+}
+
+// resolveRestConfig returns the config a Kubernetes-reaching backend dials:
+// the operator-supplied override in remote mode, the local in-cluster
+// config otherwise.
+func resolveRestConfig(override *rest.Config) (*rest.Config, error) {
+	if override != nil {
+		return override, nil
+	}
+	return ctrl.GetConfig()
 }
 
 func ParseMetal3ManagementNamespace(cfg *Config) (string, error) {

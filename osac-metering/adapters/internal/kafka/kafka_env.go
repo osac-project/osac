@@ -21,11 +21,17 @@ import "os"
 //   - KAFKA_TLS_CA_CERT       — path to CA certificate file (default: system CAs)
 //   - KAFKA_SASL_USERNAME     — SASL/SCRAM username (default: disabled)
 //   - KAFKA_SASL_PASSWORD_FILE — path to file containing SASL password
+//   - METERING_HEARTBEAT_TOPIC_PREFIX — prefix of the per-tenant heartbeat topics
+//     (default: osac.metering.heartbeat.)
+//   - METERING_DEADLETTER_TOPIC_PREFIX — prefix of the per-tenant dead-letter topics
+//     (default: osac.metering.dlq.)
 func KafkaConfigFromEnv() KafkaConfig {
 	return KafkaConfig{
-		TLSEnabled:   os.Getenv("KAFKA_TLS_ENABLED") != "false",
-		TLSCACert:    os.Getenv("KAFKA_TLS_CA_CERT"),
-		SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
-		SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
+		TLSEnabled:            os.Getenv("KAFKA_TLS_ENABLED") != "false",
+		TLSCACert:             os.Getenv("KAFKA_TLS_CA_CERT"),
+		SASLUser:              os.Getenv("KAFKA_SASL_USERNAME"),
+		SASLPassFile:          os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
+		HeartbeatTopicPrefix:  os.Getenv("METERING_HEARTBEAT_TOPIC_PREFIX"),
+		DeadLetterTopicPrefix: os.Getenv("METERING_DEADLETTER_TOPIC_PREFIX"),
 	}
 }

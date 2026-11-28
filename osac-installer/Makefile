@@ -5,15 +5,15 @@
 #
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
-#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
+#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
 #   make install-multicluster PLATFORM=openshift PROFILE=vmaas-ci NS=osac KUBECONFIG=... REMOTE_KUBECONFIG=...
 #   make prepare-remote-cluster NS=osac REMOTE_KUBECONFIG=...
-#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf|caas
+#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf|caas
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -149,7 +149,10 @@ REMOTE_CLUSTER_HELM_ARGS := \
 	--set-string operator.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME} \
 	--set-string operator.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY} \
 	--set-string aap.configAsCode.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME} \
-	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY} \
+	--set-string bmf.remoteClusterKubeconfig=/var/run/secrets/remote/$${REMOTE_KUBECONFIG_SECRET_KEY} \
+	--set-string bmf.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME} \
+	--set-string bmf.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}
 endif
 
 # Work around HTTP/2 stream resets from proxy.golang.org during container
@@ -173,10 +176,10 @@ ifeq ($(filter $(PLATFORM),kind openshift),)
 $(error PLATFORM=$(PLATFORM) is invalid; must be kind or openshift)
 endif
 ifndef PROFILE
-$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci))
+$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci))
 endif
-ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci bmaas-netbox-ci caas-ci full-ci),)
-$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, bmaas-netbox-ci, caas-ci, or full-ci)
+ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci bmaas-netbox-ci caas-ci full-ci vcluster-ci),)
+$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, bmaas-netbox-ci, caas-ci, full-ci, or vcluster-ci)
 endif
 ifndef NS
 $(error NS is required (namespace for OSAC instance, e.g. NS=osac))
@@ -184,6 +187,11 @@ endif
 ifeq ($(PLATFORM),kind)
 ifeq ($(filter $(PROFILE),dev dev-full),)
 $(error PLATFORM=kind only supports PROFILE=dev or PROFILE=dev-full)
+endif
+endif
+ifneq ($(filter install-infra uninstall-infra,$(MAKECMDGOALS)),)
+ifeq ($(PROFILE),vcluster-ci)
+$(error PROFILE=vcluster-ci installs no infrastructure: the outer cluster owns it. Install the infrastructure there with a vmaas-ci-like profile, and install-osac into the vcluster)
 endif
 endif
 ifneq ($(filter install,$(MAKECMDGOALS)),)
@@ -210,7 +218,7 @@ ifneq ($(PLATFORM),openshift)
 $(error install-multicluster requires PLATFORM=openshift)
 endif
 ifneq ($(PROFILE),vmaas-ci)
-$(error install-multicluster requires PROFILE=vmaas-ci)
+$(error install-multicluster requires PROFILE=vmaas-ci; a vcluster run prepares its outer cluster with the run setup and calls install-osac directly)
 endif
 ifndef REMOTE_KUBECONFIG
 $(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
@@ -225,16 +233,26 @@ $(error install-devstack requires PROFILE=dev-full)
 endif
 endif
 ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
+ifeq ($(PROFILE),vcluster-ci)
+ifndef REMOTE_KUBECONFIG
+$(error PROFILE=vcluster-ci runs in remote mode; REMOTE_KUBECONFIG (the outer cluster) is required)
+endif
+endif
 ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
 ifneq ($(PLATFORM),openshift)
 $(error remote-cluster installation requires PLATFORM=openshift)
 endif
-ifneq ($(PROFILE),vmaas-ci)
-$(error remote-cluster installation requires PROFILE=vmaas-ci)
+ifeq ($(filter $(PROFILE),vmaas-ci vcluster-ci),)
+$(error remote-cluster installation requires PROFILE=vmaas-ci or PROFILE=vcluster-ci)
 endif
 ifeq ($(strip $(REMOTE_KUBECONFIG)),)
 $(error REMOTE_KUBECONFIG is required when REMOTE_API_ADDRESS is set)
 endif
+endif
+endif
+ifneq ($(filter install uninstall,$(MAKECMDGOALS)),)
+ifeq ($(PROFILE),vcluster-ci)
+$(error PROFILE=vcluster-ci installs no infrastructure, so the composite install does not apply; run install-osac directly)
 endif
 endif
 ifneq ($(filter install,$(MAKECMDGOALS)),)
@@ -872,6 +890,15 @@ endif
 else
 	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' $(OC_QUERY_STDERR) | cut -d. -f1,2 | grep -Eo '^[0-9]+\.[0-9]+' | head -1))
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' $(OC_QUERY_STDERR) | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
+	# CLUSTER_OCP_VERSION and CLUSTER_DOMAIN override the cluster reads: a
+	# vcluster has neither clusterversion nor ingresses.config API to ask,
+	# so a run against one carries the outer cluster's values explicitly.
+ifneq ($(strip $(CLUSTER_OCP_VERSION)),)
+	$(eval OCP_VERSION := $(CLUSTER_OCP_VERSION))
+endif
+ifneq ($(strip $(CLUSTER_DOMAIN)),)
+	$(eval DOMAIN := $(CLUSTER_DOMAIN))
+endif
 	@[ -n "$(OCP_VERSION)" ] || { echo "ERROR: could not determine the OpenShift version for input validation. Is oc logged in?" >&2; exit 1; }
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain for input validation. Is oc logged in?" >&2; exit 1; }
 	@source scripts/lib.sh && render_chart_offline osac-deps $(DEPS_CHART) \
@@ -967,7 +994,14 @@ ifneq ($(PLATFORM),kind)
 		osac.openshift.io/project=osac-aap \
 		-n $(NS) --overwrite
 	@bash -c 'source scripts/lib.sh && check_postgres_prerequisites "$(NS)" "$(INFRA_VALUES)"'
+	# CLUSTER_DOMAIN overrides the cluster read: a vcluster has no
+	# ingresses.config.openshift.io API to ask, so a run against one must
+	# carry the outer cluster's domain explicitly.
+ifneq ($(strip $(CLUSTER_DOMAIN)),)
+	$(eval DOMAIN := $(CLUSTER_DOMAIN))
+else
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' $(OC_QUERY_STDERR) | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
+endif
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
 	@source scripts/lib.sh; \
@@ -1542,6 +1576,10 @@ dev-full-fedora-test: ## Check Mac Fedora image build/load and catalog create/up
 bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
+.PHONY: vcluster-suite-render-test
+vcluster-suite-render-test: helm-deps ## Check the suite-selection overlay on the vcluster-ci profile
+	uv run --project .. python scripts/test-vcluster-suite-render.py
+
 .PHONY: netris-ca-lifecycle-test
 netris-ca-lifecycle-test: helm-deps ## Check Netris CA validation and protection
 	uv run --project .. python scripts/test-netris-ca-lifecycle.py
@@ -1551,7 +1589,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test vcluster-suite-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

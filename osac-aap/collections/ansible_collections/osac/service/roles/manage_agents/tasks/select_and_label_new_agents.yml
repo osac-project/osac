@@ -1,6 +1,7 @@
 ---
 - name: List agents currently labeled with the cluster order label
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     kind: Agent
     api_version: agent-install.openshift.io/v1beta1
     namespace: "{{ default_agent_namespace }}"
@@ -26,6 +27,7 @@
 
     - name: Retrieve the list of available agents with a matching instance type
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         kind: Agent
         api_version: agent-install.openshift.io/v1beta1
         namespace: "{{ default_agent_namespace }}"
@@ -56,6 +58,7 @@
 
     - name: Add selected agents to the cluster
       kubernetes.core.k8s_json_patch:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         api_version: agent-install.openshift.io/v1beta1
         kind: Agent
         name: "{{ agent.metadata.name }}"

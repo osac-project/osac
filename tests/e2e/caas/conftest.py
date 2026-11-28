@@ -9,16 +9,43 @@ import pytest
 
 from tests.e2e.core import failure_snapshot
 from tests.e2e.core.helpers import registered_ssh_key_secret
-from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.k8s_client import K8sClient, hub_kubeconfig, service_account_token_args
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
 
 
+@pytest.fixture(scope="session")
+def k8s_target_client(k8s_hub_client: K8sClient) -> K8sClient:
+    """Kubernetes client for the cluster that owns the CaaS outer resources.
+
+    OSAC_TARGET_KUBECONFIG identifies it explicitly. In a vcluster run the hub is
+    the vcluster, so Agents, InfraEnvs, HostedClusters, NodePools, the
+    HostedControlPlane and its kubeconfig Secret live on the outer cluster while
+    OSAC_HUB_KUBECONFIG (or KUBECONFIG) is the vcluster one. Unset keeps every
+    read on the hub, which is how a single-cluster deployment runs.
+    """
+    kubeconfig = env("OSAC_TARGET_KUBECONFIG", "")
+    if not kubeconfig.strip():
+        return k8s_hub_client
+    client = K8sClient(namespace=k8s_hub_client.namespace, kubeconfig=kubeconfig.strip())
+    # Fail on broken initial outer-cluster access before entering retrying polls.
+    # kube-system is cluster-scoped and always present, unlike the install
+    # namespace, whose name belongs to the hub.
+    client.get_json(resource="namespace", name="kube-system")
+    return client
+
+
 @pytest.fixture(scope="module", autouse=True)
-def caas_failure_snapshot_sources(k8s_hub_client: K8sClient, namespace: str) -> Iterator[None]:
+def caas_failure_snapshot_sources(
+    k8s_hub_client: K8sClient, k8s_target_client: K8sClient, namespace: str
+) -> Iterator[None]:
     """Keep CaaS management and guest reads scoped to CaaS runs."""
-    failure_snapshot.SOURCES.register("caas", failure_snapshot.caas_source(k8s_hub_client, namespace))
-    failure_snapshot.SOURCES.register("caas-guest", failure_snapshot.caas_guest_source(k8s_hub_client, namespace))
+    failure_snapshot.SOURCES.register(
+        "caas", failure_snapshot.caas_source(k8s_hub_client, namespace, k8s_target_client)
+    )
+    failure_snapshot.SOURCES.register(
+        "caas-guest", failure_snapshot.caas_guest_source(k8s_hub_client, namespace, k8s_target_client)
+    )
     yield
     failure_snapshot.SOURCES.unregister("caas")
     failure_snapshot.SOURCES.unregister("caas-guest")
@@ -36,7 +63,16 @@ def cli(namespace: str, fulfillment_address: str, service_account: str, jwt_cli_
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=f"oc create token -n {shlex.quote(namespace)} {shlex.quote(service_account)} --as system:admin",
+        token_script=shlex.join(
+            [
+                "oc",
+                "create",
+                "token",
+                *service_account_token_args(
+                    namespace=namespace, service_account=service_account, kubeconfig=hub_kubeconfig()
+                ),
+            ]
+        ),
         namespace=namespace,
     )
     yield instance

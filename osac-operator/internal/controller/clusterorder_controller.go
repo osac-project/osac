@@ -37,8 +37,10 @@ import (
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -506,48 +508,65 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 			mcbuilder.WithEngageWithProviderClusters(false)).
 		Watches(
 			&corev1.Namespace{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			enqueueLocalClusterRequests(r.mapObjectToCluster),
 			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&corev1.ServiceAccount{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			enqueueLocalClusterRequests(r.mapObjectToCluster),
 			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&rbacv1.RoleBinding{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			enqueueLocalClusterRequests(r.mapObjectToCluster),
 			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&hypershiftv1beta1.HostedCluster{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			enqueueLocalClusterRequests(r.mapObjectToCluster),
 			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&hypershiftv1beta1.NodePool{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			enqueueLocalClusterRequests(r.mapObjectToCluster),
 			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&corev1.Service{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapControlPlaneServiceToCluster),
+			enqueueLocalClusterRequests(r.mapControlPlaneServiceToCluster),
 		).
 		Watches(
 			&v1alpha1.Subnet{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapSubnetToCluster),
+			enqueueLocalClusterRequests(r.mapSubnetToCluster),
 			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Watches(
 			&v1alpha1.ExternalIPAttachment{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapAutomaticAttachmentToCluster),
+			enqueueLocalClusterRequests(r.mapAutomaticAttachmentToCluster),
 			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Complete(reconcile.TypedFunc[mcreconcile.Request](r.reconcileLocalRequest))
+}
+
+// enqueueLocalClusterRequests wraps a map function so that every request it produces is
+// keyed under the local cluster. The work queue keeps one entry per cluster and name, and
+// two entries for the same ClusterOrder let two reconciles run for it at once; the
+// ClusterOrder watch itself keys its requests under the local cluster, so a mapped event
+// must use the same key. Every mapped object is a hub object or resolves the order on the
+// hub: the mapper reads the ClusterOrder from the local cluster, so the cluster the event
+// came from carries no meaning.
+func enqueueLocalClusterRequests(
+	mapFunc handler.MapFunc,
+) mchandler.TypedEventHandlerFunc[client.Object, mcreconcile.Request] {
+	return func(mc.ClusterName, cluster.Cluster) handler.TypedEventHandler[client.Object, mcreconcile.Request] {
+		return mchandler.TypedForCluster[client.Object](
+			handler.EnqueueRequestsFromMapFunc(mapFunc), mcmanager.LocalCluster,
+		)
+	}
 }
 
 // reconcileLocalRequest strips the multicluster request's source cluster: the

@@ -10,6 +10,15 @@ gateway_settings:
 # stay exactly as they are today.
 aap_vcluster_credential_name: "{{ (aap_prefix ~ '-vcluster') if vcluster_api_url else '' }}"
 
+# Coordinates of the AAP admin-password Secret that the hourly config-as-code
+# rerun reads its own login from. config-as-code-secret.yaml sets both to the
+# Secret the bootstrap job uses: the bundled instance's
+# <instance>-admin-password, or bootstrap.adminPasswordSecret for an external
+# AAP. A direct playbook run without that Secret falls back to the bundled
+# defaults.
+aap_admin_password_secret_name: "{{ lookup('env', 'AAP_ADMIN_PASSWORD_SECRET_NAME', default='osac-aap-admin-password') }}"
+aap_admin_password_secret_key: "{{ lookup('env', 'AAP_ADMIN_PASSWORD_SECRET_KEY', default='password') }}"
+
 # The credential itself. verify_ssl is false: the CI CA that signed the
 # vcluster API certificate is not in the controller's trust store. The empty
 # list without a vcluster API URL leaves the dispatcher's credentials step a
@@ -957,11 +966,14 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                     name: {{ vcluster_token_secret_name }}
                     key: {{ vcluster_token_secret_key }}
       {% endif %}
+              # Same Secret the bootstrap job authenticates with; the
+              # coordinates come from the envFrom Secret above, so an
+              # external AAP's own admin-password Secret name works here too.
               - name: AAP_PASSWORD
                 valueFrom:
                   secretKeyRef:
-                    name: osac-aap-admin-password
-                    key: password
+                    name: {{ aap_admin_password_secret_name }}
+                    key: {{ aap_admin_password_secret_key }}
               - name: LICENSE_MANIFEST_PATH
                 value: /var/secrets/config-as-code/license.zip
             volumeMounts:

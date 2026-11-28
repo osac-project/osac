@@ -18,6 +18,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -68,6 +70,7 @@ var _ = Describe("Disk images server", func() {
 	Describe("OBSOLETE filtering", func() {
 		var server *DiskImagesServer
 		var privateServer *PrivateDiskImagesServer
+		var createWithLifecycle func(string, privatev1.DiskImageLifecycle, privatev1.Architecture)
 
 		BeforeEach(func() {
 			var err error
@@ -85,18 +88,16 @@ var _ = Describe("Disk images server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			createWithLifecycle := func(name string, lifecycle privatev1.DiskImageLifecycle) {
+			createWithLifecycle = func(name string, lifecycle privatev1.DiskImageLifecycle, architecture privatev1.Architecture) {
 				createResponse, createErr := privateServer.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 					Object: privatev1.DiskImage_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name: name,
 						}.Build(),
 						Spec: privatev1.DiskImageSpec_builder{
-							SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
-							SourceRef:  "quay.io/test:" + name,
-							Architecture: []privatev1.Architecture{
-								privatev1.Architecture_ARCHITECTURE_AMD64,
-							},
+							SourceType:   privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+							SourceRef:    "quay.io/test:" + name,
+							Architecture: []privatev1.Architecture{architecture},
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -133,10 +134,58 @@ var _ = Describe("Disk images server", func() {
 				Expect(updateErr).ToNot(HaveOccurred())
 			}
 
-			createWithLifecycle("image-available", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE)
-			createWithLifecycle("image-deprecated", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED)
-			createWithLifecycle("image-obsolete", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE)
+			createWithLifecycle("image-available", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, privatev1.Architecture_ARCHITECTURE_AMD64)
+			createWithLifecycle("image-deprecated", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED, privatev1.Architecture_ARCHITECTURE_AMD64)
+			createWithLifecycle("image-obsolete", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE, privatev1.Architecture_ARCHITECTURE_AMD64)
 		})
+
+		It("Filters by architecture", func() {
+			baseline, err := server.List(ctx, publicv1.DiskImagesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(baseline.GetItems()).To(HaveLen(2))
+
+			matching := publicv1.DiskImagesListRequest_builder{}.Build()
+			matching.SetFilter("1 in this.spec.architecture")
+			matchingResponse, err := server.List(ctx, matching)
+			Expect(err).ToNot(HaveOccurred())
+
+			nonmatching := publicv1.DiskImagesListRequest_builder{}.Build()
+			nonmatching.SetFilter("2 in this.spec.architecture")
+			nonmatchingResponse, err := server.List(ctx, nonmatching)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(nonmatchingResponse.GetItems()).To(BeEmpty())
+
+			names := make([]string, len(matchingResponse.GetItems()))
+			for i, item := range matchingResponse.GetItems() {
+				names[i] = item.GetMetadata().GetName()
+			}
+			Expect(names).To(ConsistOf("image-available", "image-deprecated"))
+
+			createWithLifecycle("image-arm64", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, privatev1.Architecture_ARCHITECTURE_ARM64)
+			createWithLifecycle("image-s390x", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, privatev1.Architecture_ARCHITECTURE_S390X)
+			request := publicv1.DiskImagesListRequest_builder{}.Build()
+			request.SetFilter("2 in this.spec.architecture || 3 in this.spec.architecture")
+			response, err := server.List(ctx, request)
+			Expect(err).ToNot(HaveOccurred())
+			names = make([]string, len(response.GetItems()))
+			for i, item := range response.GetItems() {
+				names[i] = item.GetMetadata().GetName()
+			}
+			Expect(names).To(ConsistOf("image-arm64", "image-s390x"))
+		})
+
+		DescribeTable("Rejects invalid architecture filters", func(filter, message string) {
+			request := publicv1.DiskImagesListRequest_builder{}.Build()
+			request.SetFilter(filter)
+			_, err := server.List(ctx, request)
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(message))
+		},
+			Entry("zero enum", `0 in this.spec.architecture`, "does not support zero values stored as null"),
+			Entry("unknown enum", `99 in this.spec.architecture`, "unknown enum value 99"),
+			Entry("wrong type", `'ARCHITECTURE_AMD64' in this.spec.architecture`, "no matching overload"),
+			Entry("nonliteral", `(1 + 1) in this.spec.architecture`, "requires a literal integer value"),
+		)
 
 		It("Excludes OBSOLETE from default list", func() {
 			response, err := server.List(ctx, publicv1.DiskImagesListRequest_builder{}.Build())

@@ -2438,11 +2438,11 @@ var _ = Describe("Generic DAO", func() {
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			filterSQL, err := clusterDao.filterTranslator.Translate(ctx, `this.metadata.labels['ordinary'] == 'visible'`)
+			filterSQL, filterArgs, err := clusterDao.filterTranslator.Translate(ctx, `this.metadata.labels['ordinary'] == 'visible'`, 0)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = tx.Exec(ctx, `set local enable_seqscan = off`)
 			Expect(err).ToNot(HaveOccurred())
-			rows, err := tx.Query(ctx, `explain select id from clusters where `+filterSQL)
+			rows, err := tx.Query(ctx, `explain select id from clusters where `+filterSQL, filterArgs...)
 			Expect(err).ToNot(HaveOccurred())
 			defer rows.Close()
 			var queryPlan strings.Builder

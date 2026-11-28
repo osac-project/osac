@@ -27,8 +27,11 @@ import (
 
 const diskImageAPISourceRef = "quay.io/containerdisks/fedora:41"
 
-func createPublicDiskImageFixture(ctx context.Context, client publicv1.DiskImagesClient, tenant string) *publicv1.DiskImage {
+func createPublicDiskImageFixture(ctx context.Context, client publicv1.DiskImagesClient, tenant string, architectures ...publicv1.Architecture) *publicv1.DiskImage {
 	GinkgoHelper()
+	if len(architectures) == 0 {
+		architectures = []publicv1.Architecture{publicv1.Architecture_ARCHITECTURE_AMD64}
+	}
 	response, err := client.Create(ctx, publicv1.DiskImagesCreateRequest_builder{
 		Object: publicv1.DiskImage_builder{
 			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: tenant}.Build(),
@@ -36,7 +39,7 @@ func createPublicDiskImageFixture(ctx context.Context, client publicv1.DiskImage
 				SourceType:    publicv1.SourceType_SOURCE_TYPE_REGISTRY,
 				SourceRef:     diskImageAPISourceRef,
 				GuestOsFamily: publicv1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
-				Architecture:  []publicv1.Architecture{publicv1.Architecture_ARCHITECTURE_AMD64},
+				Architecture:  architectures,
 			}.Build(),
 		}.Build(),
 	}.Build())
@@ -89,6 +92,33 @@ var _ = Describe("DiskImage API", Label("disk-images"), func() {
 		Entry("tenant admin registers an own-tenant image", "tenant admin"),
 		Entry("tenant user registers an own-tenant image", "tenant user"),
 	)
+
+	It("filters disk images by architecture", func(ctx context.Context) {
+		client := publicv1.NewDiskImagesClient(tool.ExternalView().AdminConn())
+		image := createPublicDiskImageFixture(ctx, client, "shared")
+		filter := fmt.Sprintf("this.id == %q && 1 in this.spec.architecture", image.GetId())
+		listed, err := client.List(ctx, publicv1.DiskImagesListRequest_builder{Filter: new(filter)}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(HaveLen(1))
+		Expect(listed.GetItems()[0].GetId()).To(Equal(image.GetId()))
+
+		filter = fmt.Sprintf("this.id == %q && 2 in this.spec.architecture", image.GetId())
+		listed, err = client.List(ctx, publicv1.DiskImagesListRequest_builder{Filter: new(filter)}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(BeEmpty())
+
+		arm64 := createPublicDiskImageFixture(ctx, client, "shared", publicv1.Architecture_ARCHITECTURE_ARM64)
+		s390x := createPublicDiskImageFixture(ctx, client, "shared", publicv1.Architecture_ARCHITECTURE_S390X)
+		filter = fmt.Sprintf("this.id in [%q, %q, %q] && (2 in this.spec.architecture || 3 in this.spec.architecture)",
+			image.GetId(), arm64.GetId(), s390x.GetId())
+		listed, err = client.List(ctx, publicv1.DiskImagesListRequest_builder{Filter: new(filter)}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		ids := make([]string, len(listed.GetItems()))
+		for i, item := range listed.GetItems() {
+			ids[i] = item.GetId()
+		}
+		Expect(ids).To(ConsistOf(arm64.GetId(), s390x.GetId()))
+	})
 
 	It("deprecates, hides obsolete images, filters explicitly, and reactivates", func(ctx context.Context) {
 		client := publicv1.NewDiskImagesClient(tool.ExternalView().AdminConn())

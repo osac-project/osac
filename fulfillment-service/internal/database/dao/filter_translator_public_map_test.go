@@ -45,32 +45,32 @@ var _ = Describe("Public metadata map translation", func() {
 	})
 
 	It("uses the public map projection only for whole-map comparisons", func(ctx context.Context) {
-		translated, err := publicTranslator.Translate(ctx, `this.metadata.labels == this.metadata.annotations`)
+		translated, _, err := publicTranslator.Translate(ctx, `this.metadata.labels == this.metadata.annotations`, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(translated).To(ContainSubstring(`jsonb_each(labels)`))
 		Expect(translated).To(ContainSubstring(`jsonb_each(annotations)`))
 		Expect(translated).To(ContainSubstring(`position('/' in public_metadata.key) = 0`))
 		Expect(translated).To(ContainSubstring(`not like '%.admin.osac.openshift.io'`))
 
-		translated, err = publicTranslator.Translate(ctx, `'ordinary' in this.metadata.labels`)
+		translated, _, err = publicTranslator.Translate(ctx, `'ordinary' in this.metadata.labels`, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(translated).To(Equal(`labels ? 'ordinary'`))
 
-		translated, err = publicTranslator.Translate(ctx, `this.metadata.labels['ordinary'] == 'visible'`)
+		translated, _, err = publicTranslator.Translate(ctx, `this.metadata.labels['ordinary'] == 'visible'`, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(translated).To(Equal(`labels @> '{"ordinary":"visible"}'`))
 
-		translated, err = publicTranslator.Translate(ctx, `this.metadata.labels['probe'] in this.metadata.labels`)
+		translated, _, err = publicTranslator.Translate(ctx, `this.metadata.labels['probe'] in this.metadata.labels`, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(translated).To(ContainSubstring(`labels->>'probe'`))
 		Expect(translated).To(ContainSubstring(`jsonb_each(labels)`))
 		Expect(translated).ToNot(ContainSubstring(`labels ? labels->>'probe'`))
 
-		translated, err = publicTranslator.Translate(ctx, `this.metadata.annotations['ordinary'] == 'value'`)
+		translated, _, err = publicTranslator.Translate(ctx, `this.metadata.annotations['ordinary'] == 'value'`, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(translated).To(Equal(`annotations @> '{"ordinary":"value"}'`))
 
-		translated, err = privateTranslator.Translate(ctx, `this.metadata.labels == this.metadata.annotations`)
+		translated, _, err = privateTranslator.Translate(ctx, `this.metadata.labels == this.metadata.annotations`, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(translated).To(Equal(`labels = annotations`))
 	})

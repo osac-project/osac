@@ -37,7 +37,7 @@ attrs==26.1.0
     #   referencing
 autopage==0.6.0
     # via cliff
-babel==2.18.0
+babel==2.19.0
     # via python-esiclient
 bcrypt==5.0.0
     # via py-pure-client

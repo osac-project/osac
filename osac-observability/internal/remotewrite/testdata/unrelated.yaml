@@ -1,0 +1,3 @@
+prometheusK8s:
+  retention: 15d
+alertmanagerMain: {}

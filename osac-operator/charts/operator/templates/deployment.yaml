@@ -35,7 +35,15 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          {{- if .Values.metrics.tls.enabled }}
           - --metrics-bind-address=:8443
+          - --metrics-cert-path=/etc/metrics-certs
+          {{- else }}
+          - --metrics-bind-address=:8080
+          # Without this the server still speaks HTTPS with a self-signed
+          # certificate on 8080, which no scrape or health check expects.
+          - --metrics-secure=false
+          {{- end }}
           - --fulfillment-ca-file=/etc/ca-bundle/bundle.pem
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -216,7 +224,20 @@ spec:
             mountPath: {{ dir .Values.remoteClusterKubeconfig | quote }}
             readOnly: true
         {{- end }}
+          {{- if .Values.metrics.tls.enabled }}
+          - name: metrics-certs
+            mountPath: /etc/metrics-certs
+            readOnly: true
+          {{- end }}
       volumes:
+        {{- if .Values.metrics.tls.enabled }}
+        # Not optional: the process exits when the service-CA Secret is absent,
+        # so the pod must wait for it rather than serve a self-signed
+        # certificate that Prometheus cannot verify.
+        - name: metrics-certs
+          secret:
+            secretName: {{ include "osac-operator.fullname" . }}-metrics-tls
+        {{- end }}
         - name: fulfillment-ca-bundle
           configMap:
             name: {{ .Values.fulfillment.tls.caBundle.configMap | required "fulfillment.tls.caBundle.configMap is required" }}

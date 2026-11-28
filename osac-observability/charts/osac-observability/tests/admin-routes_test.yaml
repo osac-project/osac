@@ -1,0 +1,394 @@
+suite: admin query routes
+templates:
+  - templates/*.yaml
+release:
+  name: osac
+  namespace: osac
+set:
+  global.observability.enabled: true
+  global.observability.admin.openshiftGroup: osac-cloud-infrastructure-admins
+  global.observability.keycloak.realm: osac
+  global.observability.keycloak.keycloakAdminRole: cloud-provider-admin
+  global.observability.keycloak.issuerUrl: https://keycloak.example.com/realms/osac
+  global.clusterDomain: apps.example.com
+  global.observability.objectStorage.secretName: thanos-object-storage
+  global.observability.objectStorage.endpoint: https://s3.example.com
+  global.observability.objectStorage.bucket: thanos
+  global.observability.objectStorage.region: us-east-1
+  global.observability.thanos.image.registry: registry.redhat.io
+  global.observability.thanos.image.repository: openshift4/ose-thanos-rhel8
+  global.observability.services.metricsAuth.repository: ghcr.io/osac-project/osac-observability
+  global.observability.thanos.image.tag: test-thanos
+  global.observability.services.metricsAuth.tag: test-metrics-auth
+
+tests:
+  - it: lists exactly the five documented endpoints once
+    template: templates/query-allowlist.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: osac-observability-query-allowlist
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      # The key is the file name the allowlist reads under its directory mount
+      # (/etc/query-allowlist/endpoints.txt); any other key leaves the sidecar
+      # reading a missing file and failing to start.
+      - notExists:
+          path: data.endpoints
+      # Five non-empty lines and nothing else: no method, no wildcard, no
+      # sixth endpoint.
+      - matchRegex:
+          path: data["endpoints.txt"]
+          pattern: '\A([^\s]+\n){5}\z'
+      - equal:
+          path: data["endpoints.txt"]
+          value: |
+            /api/v1/query
+            /api/v1/query_range
+            /api/v1/series
+            /api/v1/labels
+            /api/v1/label/<name>/values
+
+  - it: runs the Keycloak gate and allowlist, with no browser sign-in
+    template: templates/admin-proxies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin
+    asserts:
+      - isKind:
+          of: Deployment
+      # Two containers: the gate and the allowlist. The OAuth proxy is gone,
+      # so a browser session cannot reach the Route at all.
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: query-auth-gate
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: query-allowlist
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/osac-project/osac-observability:test-metrics-auth
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - /query-auth-gate
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MODE
+            value: keycloak
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_ISSUER_URL
+            value: https://keycloak.example.com/realms/osac
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_AUDIENCE
+            value: osac-ui,osac-cli
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADMIN_ROLE
+            value: cloud-provider-admin
+      # The Cloud Provider Admin's arm is not scoped: it sees platform and
+      # provider metrics.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SCOPE_LABEL
+            value: visibility
+      # The gate fetches discovery and the JWK set from the cluster-signed
+      # Route, so it reads the copied trust bundle.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_CA_FILE
+            value: /etc/keycloak-ca/bundle.pem
+      - equal:
+          path: spec.template.spec.containers[1].ports[0].containerPort
+          value: 9091
+      - equal:
+          path: spec.template.spec.containers[1].volumeMounts[0].mountPath
+          value: /etc/query-allowlist
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: osac-observability-query-allowlist
+
+  - it: runs the OpenShift gate and allowlist for bearer tokens
+    template: templates/admin-proxies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin-openshift
+    asserts:
+      - isKind:
+          of: Deployment
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: query-auth-gate
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MODE
+            value: openshift
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENSHIFT_GROUP
+            value: osac-cloud-infrastructure-admins
+      # The infrastructure admin sees the platform visibility class only.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SCOPE_LABEL
+            value: visibility
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SCOPE_VALUE
+            value: platform
+      # The gate calls TokenReview and reads the group, so it needs its token.
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: thanos-query-admin-openshift
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: grants the OpenShift gate only TokenReview and group reads
+    template: templates/admin-gate-rbac.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.name
+          value: osac-thanos-query-admin-token-review
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["authentication.k8s.io"]
+              resources: ["tokenreviews"]
+              verbs: ["create"]
+            - apiGroups: ["user.openshift.io"]
+              resources: ["groups"]
+              resourceNames: ["osac-cloud-infrastructure-admins"]
+              verbs: ["get"]
+
+  # TokenReview and the OpenShift Group resource are cluster scoped: a
+  # namespaced RoleBinding would grant nothing here and every token would come
+  # back 401 from the gate.
+  - it: binds the gate permissions only to the OpenShift admin service account
+    template: templates/admin-gate-rbac.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - notExists:
+          path: metadata.namespace
+      - equal:
+          path: roleRef.kind
+          value: ClusterRole
+      - equal:
+          path: roleRef.name
+          value: osac-thanos-query-admin-token-review
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: thanos-query-admin-openshift
+              namespace: osac-observability
+
+  - it: renders the OpenShift gate service account without an OAuth client
+    template: templates/admin-oauth.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: thanos-query-admin-openshift
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      # No annotation: without the oauth-proxy this account is not an
+      # OpenShift OAuth client.
+      - notExists:
+          path: metadata.annotations
+
+  - it: serves the Keycloak Route through the gate on 9091
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: thanos-query-admin
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: query-auth-proxy
+      - equal:
+          path: spec.ports[0].port
+          value: 9091
+      - equal:
+          path: spec.ports[0].targetPort
+          value: gate
+
+  - it: serves the OpenShift Route through the gate on 9091
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin-openshift
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: thanos-query-admin-openshift
+      - equal:
+          path: spec.ports[0].port
+          value: 9091
+      - equal:
+          path: spec.ports[0].targetPort
+          value: gate
+
+  - it: exposes the Keycloak Route only through its own gate
+    template: templates/admin-routes.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin
+    asserts:
+      - isKind:
+          of: Route
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: spec.host
+          value: thanos-query-admin-osac-observability.apps.example.com
+      - equal:
+          path: spec.to.name
+          value: thanos-query-admin
+      - equal:
+          path: spec.port.targetPort
+          value: http
+      - equal:
+          path: spec.tls.termination
+          value: edge
+      - equal:
+          path: spec.tls.insecureEdgeTerminationPolicy
+          value: Redirect
+      - notExists:
+          path: spec.path
+      - notExists:
+          path: spec.alternateBackends
+
+  - it: exposes the OpenShift Route only through its own gate
+    template: templates/admin-routes.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin-openshift
+    asserts:
+      - isKind:
+          of: Route
+      - equal:
+          path: spec.host
+          value: thanos-query-admin-openshift-osac-observability.apps.example.com
+      - equal:
+          path: spec.to.name
+          value: thanos-query-admin-openshift
+      - equal:
+          path: spec.port.targetPort
+          value: http
+      - equal:
+          path: spec.tls.termination
+          value: edge
+      - equal:
+          path: spec.tls.insecureEdgeTerminationPolicy
+          value: Redirect
+      - notExists:
+          path: spec.path
+      - notExists:
+          path: spec.alternateBackends
+
+  - it: admits both gate pods as query-auth-proxy peers
+    template: templates/admin-proxies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["osac.openshift.io/observability-role"]
+          value: query-auth-proxy
+
+  - it: marks the OpenShift gate pod as an admitted query-auth-proxy peer
+    template: templates/admin-proxies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin-openshift
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["osac.openshift.io/observability-role"]
+          value: query-auth-proxy
+
+  - it: omits the Route host when no cluster domain is configured
+    template: templates/admin-routes.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin
+    set:
+      global.clusterDomain: ""
+    asserts:
+      - notExists:
+          path: spec.host
+      - equal:
+          path: spec.to.name
+          value: thanos-query-admin
+
+  - it: renders no admin object when observability is disabled
+    template: templates/admin-proxies.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no admin Route when observability is disabled
+    template: templates/admin-routes.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no allowlist when observability is disabled
+    template: templates/query-allowlist.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no service account when observability is disabled
+    template: templates/admin-oauth.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

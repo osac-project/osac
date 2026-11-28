@@ -328,3 +328,10 @@ kafka:
   # `brokers`. TLS trust uses `certs.caBundle`; include the broker CA in that ConfigMap when it is
   # not already trusted.
   connection: []
+
+# Standalone ServiceMonitor override for a component-only install. The umbrella
+# chart turns scrapes on through global.observability and leaves this false.
+serviceMonitor:
+  enabled: false
+  # When empty, global.observability.collection.osacControlPlane is used.
+  interval: ""

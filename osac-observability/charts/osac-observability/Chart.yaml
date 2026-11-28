@@ -1,0 +1,6 @@
+apiVersion: v2
+name: osac-observability
+description: OSAC shared metrics store and query tier (Thanos)
+type: application
+version: 0.0.0
+appVersion: "0.0.0"

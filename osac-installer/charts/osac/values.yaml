@@ -57,6 +57,138 @@ global:
     # Enable only when tenant CSI trust support is deployed.
     enabled: false
     tenantNamespace: osac-csi
+  # The single observability switch. Helm propagates only global.* into subchart
+  # values, so this one key drives the umbrella templates (platform-monitoring
+  # namespace labels and namespace-scoped scrape RBAC), the component charts'
+  # plain-HTTP ServiceMonitors, and the Thanos Receive, Store, Query and
+  # Compactor workloads in the osac-observability namespace.
+  observability:
+    enabled: false
+    thanos:
+      image:
+        registry: registry.redhat.io
+        repository: openshift4/ose-thanos-rhel8
+        # Must be set when observability is enabled: an empty tag fails the
+        # render instead of falling back to :latest. Set this to the hub
+        # cluster's OpenShift minor (for example v4.20); the Red Hat image is
+        # published per minor.
+        tag: ""
+      # How long any role may query samples. Must be positive; 0d fails the
+      # render. Aggregate levels must equal this value.
+      retention: 365d
+      resolution:
+        raw: 365d
+        5m: 365d
+        1h: 365d
+      storageClass: ""
+      receive:
+        replicas: 2
+        # Two copies of every sample; the Receive pods gossip the hashring and
+        # forward each write to their replication peer.
+        replicationFactor: 2
+        resources:
+          requests:
+            cpu: 500m
+            memory: 4Gi
+          limits:
+            cpu: "2"
+            memory: 8Gi
+        pvcSize: 20Gi
+      store:
+        replicas: 2
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+      query:
+        replicas: 2
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+      compactor:
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+        pvcSize: 100Gi
+      deduplication:
+        # Receive stamps this label with each pod's name; Query deduplicates on
+        # it because replicationFactor copies every sample.
+        replicaLabel: replica
+      downsampling:
+        # false renders --downsampling.disable and keeps no 5-minute or
+        # 1-hour aggregates. true renders explicit --retention.resolution-5m
+        # and --retention.resolution-1h from thanos.resolution;
+        # osac.validateValues requires both to equal thanos.retention, so
+        # every role keeps one retention and a long-range admin query returns
+        # coarser points than the samples collected.
+        enabled: false
+    services:
+      metricsAuth:
+        # Builds the remote-write and query-allowlist helpers plus the admin
+        # query gate.
+        repository: ghcr.io/osac-project/osac-observability
+        # Placeholder; overwritten at release time.
+        tag: ""
+    clusterRemoteWrite:
+      # Not enforced in this release: no controller reads these yet. Later
+      # work uses them for tenant and workload cluster writes and their client
+      # certificates.
+      enabled: false
+      certificateDuration: 90d
+      renewBefore: 30d
+    tenant:
+      # Not enforced in this release: no controller reads these yet; admins
+      # are not limited.
+      limits:
+        maxConcurrentQueries: 10
+        maxQueryRange: 24h
+        queryTimeout: 2m
+    collection:
+      # Scrape interval for every OSAC control-plane target. Prometheus duration.
+      osacControlPlane: "30s"
+      # kube_pod_* and container_* are kept only for these namespaces.
+      platformNamespaces: [osac, osac-csi, osac-observability]
+      # Metric families only a Cloud Provider Admin may read. Every stored
+      # series is stamped with visibility=platform or visibility=provider from
+      # this list, and the infrastructure admin's query Route is restricted to
+      # platform. Regexes are matched against the metric name.
+      providerOnlyMetrics:
+        - osac_metering_.*
+    objectStorage:
+      # Required when enabled. Names an existing Secret in osac-observability
+      # whose AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys are exported
+      # into the Thanos containers. Never put key material in values.
+      secretName: ""
+      endpoint: ""
+      bucket: ""
+      region: ""
+      insecure: false
+    admin:
+      # OpenShift group allowed through thanos-query-admin-openshift.
+      openshiftGroup: osac-cloud-infrastructure-admins
+    keycloak:
+      realm: osac
+      keycloakAdminRole: cloud-provider-admin
+      tenantClientId: thanos-tenant
+      # Accepted bearer audiences: the clients OSAC users log in with
+      # (ui.auth.oidcClientId and the CLI client). The admin Routes serve API
+      # clients only; interactive access belongs to the OSAC UI.
+      adminAudience: "osac-ui,osac-cli"
+      # tpl is applied at render time -- {{ .Values.global.clusterDomain }}
+      # expands via global.clusterDomain. The admin gates verify tokens against
+      # this realm and the render fails when it is empty.
+      issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
   # --- Service Enablement ---
   # Controls which service tiers are active across all OSAC components.
   # When all are true (the default), OSAC operates as a full-stack cloud.
@@ -445,6 +577,7 @@ metering:
           param: sslkey
         - key: ca.crt
           param: sslrootcert
+
 
 # --- Bare Metal Fulfillment Operator CRDs ---
 bmfCrds: {}

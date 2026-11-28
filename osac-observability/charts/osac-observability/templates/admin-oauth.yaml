@@ -1,0 +1,15 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- /* The OpenShift gate validates the caller's bearer token with a
+       TokenReview and reads the configured group, so it runs as this service
+       account and the ClusterRoleBinding in admin-gate-rbac.yaml grants exactly
+       those two reads. No OAuth client and no cookie secret are involved: the
+       Route serves API clients only. */ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: thanos-query-admin-openshift
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+{{- end }}

@@ -22,6 +22,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -38,6 +40,33 @@ const serviceAccountName = "bmf-operator"
 
 // metricsServiceName is the name of the metrics service of the project
 const metricsServiceName = "bmf-operator-controller-manager-metrics-service"
+
+// metricsServicePort returns the port and URL scheme the chart rendered for the
+// metrics Service. The chart serves HTTPS on 8443 only where the service-ca
+// controller creates the serving certificate, and plain HTTP on 8080 otherwise,
+// so this test reads the Service instead of assuming TLS.
+func metricsServicePort() (int, string, error) {
+	cmd := exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace,
+		"-o", `jsonpath={.spec.ports[0].port}{"\t"}{.spec.ports[0].name}`)
+	output, err := utils.Run(cmd)
+	if err != nil {
+		return 0, "", err
+	}
+	fields := strings.Fields(output)
+	if len(fields) != 2 {
+		return 0, "", fmt.Errorf("unexpected metrics service ports %q", output)
+	}
+	port, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, "", err
+	}
+	switch fields[1] {
+	case "https", "http":
+		return port, fields[1], nil
+	default:
+		return 0, "", fmt.Errorf("unknown metrics service port name %q", fields[1])
+	}
+}
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "bmf-operator-metrics-binding"
@@ -173,6 +202,9 @@ var _ = Describe("Manager", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
 
+			metricsPort, metricsScheme, err := metricsServicePort()
+			Expect(err).NotTo(HaveOccurred(), "Failed to read the metrics service port")
+
 			By("getting the service account token")
 			token, err := serviceAccountToken()
 			Expect(err).NotTo(HaveOccurred())
@@ -183,7 +215,7 @@ var _ = Describe("Manager", Ordered, func() {
 				cmd := exec.Command("kubectl", "get", "endpoints", metricsServiceName, "-n", namespace)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("8443"), "Metrics endpoint is not ready")
+				g.Expect(output).To(ContainSubstring(strconv.Itoa(metricsPort)), "Metrics endpoint is not ready")
 			}
 			Eventually(verifyMetricsEndpointReady).Should(Succeed())
 
@@ -205,6 +237,16 @@ var _ = Describe("Manager", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete leftover curl-metrics pod")
 
+			// -k only for HTTPS: the serving certificate is signed by a CA this
+			// curl image does not trust, and plain HTTP has nothing to verify.
+			insecureFlag := ""
+			if metricsScheme == "https" {
+				insecureFlag = "-k "
+			}
+			curlCommand := fmt.Sprintf(
+				"curl -v %s-H 'Authorization: Bearer %s' %s://%s.%s.svc.cluster.local:%d/metrics",
+				insecureFlag, token, metricsScheme, metricsServiceName, namespace, metricsPort)
+
 			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
 				"--namespace", namespace,
 				"--image=curlimages/curl:latest",
@@ -215,7 +257,7 @@ var _ = Describe("Manager", Ordered, func() {
 							"name": "curl",
 							"image": "curlimages/curl:latest",
 							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics"],
+							"args": [%s],
 							"securityContext": {
 								"allowPrivilegeEscalation": false,
 								"capabilities": {
@@ -230,7 +272,7 @@ var _ = Describe("Manager", Ordered, func() {
 						}],
 						"serviceAccount": "%s"
 					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
+				}`, strconv.Quote(curlCommand), serviceAccountName))
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 

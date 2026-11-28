@@ -1,0 +1,133 @@
+suite: metering plain-HTTP ServiceMonitor
+templates:
+  - templates/servicemonitor.yaml
+release:
+  name: osac
+  namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
+    - monitoring.coreos.com/v1/ServiceMonitor
+
+tests:
+  - it: renders nothing with the chart defaults
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: scrapes the metering service and both adapters
+    set:
+      echoAdapter.enabled: true
+      m360Adapter.enabled: true
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - matchRegex:
+          path: metadata.name
+          pattern: osac-metering$
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: spec.namespaceSelector.matchNames[0]
+          value: osac
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: osac-metering
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: osac
+      - lengthEqual:
+          path: spec.endpoints
+          count: 2
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.endpoints[0].scheme
+          value: http
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s
+      - equal:
+          path: spec.endpoints[0].relabelings[0].targetLabel
+          value: job
+      - equal:
+          path: spec.endpoints[0].relabelings[0].replacement
+          value: osac-metering
+      - equal:
+          path: spec.endpoints[1].port
+          value: http
+      - equal:
+          path: spec.endpoints[1].relabelings[0].sourceLabels[0]
+          value: __meta_kubernetes_service_label_app_kubernetes_io_component
+      - equal:
+          path: spec.endpoints[1].relabelings[0].targetLabel
+          value: job
+      - notExists:
+          path: spec.jobLabel
+      - notExists:
+          path: spec.endpoints[0].tlsConfig
+      - notExists:
+          path: spec.endpoints[1].tlsConfig
+
+  - it: drops the adapter endpoint when both adapters are disabled
+    set:
+      echoAdapter.enabled: false
+      m360Adapter.enabled: false
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - lengthEqual:
+          path: spec.endpoints
+          count: 1
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+
+  - it: keeps the adapter endpoint while either adapter is enabled
+    set:
+      echoAdapter.enabled: false
+      m360Adapter.enabled: true
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - lengthEqual:
+          path: spec.endpoints
+          count: 2
+      - equal:
+          path: spec.endpoints[1].port
+          value: http
+
+  - it: supports the standalone serviceMonitor override
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.interval: 15s
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 15s
+
+  - it: fails when no interval is configured
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "serviceMonitor.interval or global.observability.collection.osacControlPlane must be set"
+
+  - it: renders nothing when the ServiceMonitor CRD is absent
+    capabilities:
+      apiVersions:
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - hasDocuments:
+          count: 0

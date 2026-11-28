@@ -109,6 +109,7 @@ COPY osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
 COPY osac-metering/schema/go.mod osac-metering/schema/go.sum osac-metering/schema/
 COPY osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
+COPY osac-observability/go.mod osac-observability/go.sum osac-observability/
 # go.work's `use` entry for osac-ui/proxy expects go.mod at exactly that
 # relative path -- keep the real repo layout under /build instead of
 # flattening into it, then WORKDIR into it for the actual build commands.

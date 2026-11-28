@@ -1,0 +1,51 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $clusterDomain := (.Values.global | default dict).clusterDomain | default "" -}}
+{{- $keycloakHost := printf "thanos-query-admin-%s" $ns -}}
+{{- $openshiftHost := printf "thanos-query-admin-openshift-%s" $ns -}}
+{{- /* Each Route targets its own proxy Service, never Thanos Query: the
+       allowlist sidecar is the only thing an admin may reach. TLS terminates
+       at the router (edge) and plain HTTP is redirected, because the proxy
+       serves loopback HTTP behind it. */ -}}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: thanos-query-admin
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  {{- if $clusterDomain }}
+  host: {{ $keycloakHost }}.{{ $clusterDomain }}
+  {{- end }}
+  to:
+    kind: Service
+    name: thanos-query-admin
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: thanos-query-admin-openshift
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  {{- if $clusterDomain }}
+  host: {{ $openshiftHost }}.{{ $clusterDomain }}
+  {{- end }}
+  to:
+    kind: Service
+    name: thanos-query-admin-openshift
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}

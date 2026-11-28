@@ -1,0 +1,6 @@
+prometheusK8s:
+  remoteWrite:
+    - name: osac
+      url: https://old.example.com/api/v1/receive
+    - name: guest
+      url: https://guest.example.com/api/v1/receive

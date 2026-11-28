@@ -1,0 +1,43 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $admin := ((.Values.global.observability).admin | default dict) -}}
+{{- $group := $admin.openshiftGroup | default "osac-cloud-infrastructure-admins" -}}
+{{- /* The OpenShift gate validates a bearer token with a TokenReview and reads
+       the configured group's membership. Both resources are cluster scoped, so
+       the permission lives in a ClusterRole and must be bound with a
+       ClusterRoleBinding: a namespaced RoleBinding grants the rules only for
+       namespaced resources in its namespace, and the API server answers 403 on
+       TokenReview and Group reads. The binding names only the one
+       ServiceAccount that serves the admin Route, and the group read is
+       narrowed to the configured group; OSAC never creates or edits it. */ -}}
+{{- $name := printf "%s-thanos-query-admin-token-review" .Release.Name -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["user.openshift.io"]
+    resources: ["groups"]
+    resourceNames: [{{ $group | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: thanos-query-admin-openshift
+    namespace: {{ $ns }}
+{{- end }}

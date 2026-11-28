@@ -1,0 +1,245 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $observability := .Values.global.observability | default dict -}}
+{{- $keycloak := $observability.keycloak | default dict -}}
+{{- $admin := $observability.admin | default dict -}}
+{{- $services := $observability.services | default dict -}}
+{{- $metricsAuth := $services.metricsAuth | default dict -}}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $queryURL := printf "http://thanos-query.%s.svc.cluster.local:9090" $ns -}}
+{{- /* Authentication comes first: the Route reaches the gate, which answers
+       with a plain 401 or 403 on the bearer path and forwards an authorised
+       request to the allowlist sidecar on loopback. The sidecar forwards only
+       the five documented endpoints to Thanos Query and answers every other
+       Prometheus API path with 501. There is no browser sign-in here: the
+       Routes serve API clients, and interactive access belongs to the OSAC UI
+       and the dashboards built into it. */ -}}
+{{- $allowlistURL := "http://127.0.0.1:9091" -}}
+{{- /* The umbrella defaults this to a tpl string backed by
+       global.clusterDomain; validate.yaml fails the render when it is empty. */ -}}
+{{- $issuer := tpl ($keycloak.issuerUrl | default "" | toString) . -}}
+{{- $audiences := $keycloak.adminAudience | default "osac-ui,osac-cli" | toString -}}
+{{- $adminRole := $keycloak.keycloakAdminRole | default "cloud-provider-admin" -}}
+{{- $openshiftGroup := $admin.openshiftGroup | default "osac-cloud-infrastructure-admins" -}}
+{{- /* Both admin paths share one implementation of the endpoint set and
+       neither adds a matcher: the sidecar forwards the request exactly as the
+       authorised admin sent it. */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thanos-query-admin
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.adminProxyLabels" (dict "root" . "instance" "thanos-query-admin") | nindent 4 }}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thanos
+      app.kubernetes.io/instance: thanos-query-admin
+      app.kubernetes.io/component: query-auth-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "osac-observability.adminProxyLabels" (dict "root" . "instance" "thanos-query-admin") | nindent 8 }}
+        osac.openshift.io/observability-role: query-auth-proxy
+    spec:
+      securityContext:
+        {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: query-auth-gate
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /query-auth-gate
+          env:
+            - name: LISTEN_ADDR
+              value: ":9092"
+            - name: MODE
+              value: keycloak
+            - name: ALLOWLIST_URL
+              value: {{ $allowlistURL | quote }}
+            - name: OIDC_ISSUER_URL
+              value: {{ $issuer | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ $audiences | quote }}
+            - name: ADMIN_ROLE
+              value: {{ $adminRole | quote }}
+            # The gate fetches discovery and the JWK set from the same issuer,
+            # so it trusts the same copy of the cluster bundle.
+            - name: OIDC_CA_FILE
+              value: /etc/keycloak-ca/bundle.pem
+          ports:
+            - name: gate
+              containerPort: 9092
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: gate
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: keycloak-ca
+              mountPath: /etc/keycloak-ca
+              readOnly: true
+        - name: query-allowlist
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /query-allowlist
+          env:
+            - name: LISTEN_ADDR
+              value: ":9091"
+            - name: UPSTREAM_URL
+              value: {{ $queryURL }}
+            - name: ALLOWLIST_FILE
+              value: /etc/query-allowlist/endpoints.txt
+          ports:
+            - name: allowlist
+              containerPort: 9091
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: allowlist
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: query-allowlist
+              mountPath: /etc/query-allowlist
+              readOnly: true
+      volumes:
+        - name: query-allowlist
+          configMap:
+            name: osac-observability-query-allowlist
+        # Written by the admin-credentials job: a volume cannot cross
+        # namespaces, so the bundle the Keycloak chart publishes is copied here.
+        - name: keycloak-ca
+          configMap:
+            name: keycloak-ca-bundle
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thanos-query-admin-openshift
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.adminProxyLabels" (dict "root" . "instance" "thanos-query-admin-openshift") | nindent 4 }}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thanos
+      app.kubernetes.io/instance: thanos-query-admin-openshift
+      app.kubernetes.io/component: query-auth-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "osac-observability.adminProxyLabels" (dict "root" . "instance" "thanos-query-admin-openshift") | nindent 8 }}
+        osac.openshift.io/observability-role: query-auth-proxy
+    spec:
+      serviceAccountName: thanos-query-admin-openshift
+      # The gate validates the caller's token with a TokenReview and reads the
+      # configured OpenShift group, so it needs its own token and the
+      # cluster-scoped ClusterRoleBinding that admin-gate-rbac.yaml creates.
+      automountServiceAccountToken: true
+      securityContext:
+        {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: query-auth-gate
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /query-auth-gate
+          env:
+            - name: LISTEN_ADDR
+              value: ":9092"
+            - name: MODE
+              value: openshift
+            - name: ALLOWLIST_URL
+              value: {{ $allowlistURL | quote }}
+            - name: OPENSHIFT_GROUP
+              value: {{ $openshiftGroup | quote }}
+            # The infrastructure admin sees the platform visibility class only.
+            # Every series carries the label, stamped by the remote-write job,
+            # and the gate injects the matcher into every selector so a crafted
+            # query cannot reach the provider class.
+            - name: SCOPE_LABEL
+              value: visibility
+            - name: SCOPE_VALUE
+              value: platform
+          ports:
+            - name: gate
+              containerPort: 9092
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: gate
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+        - name: query-allowlist
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /query-allowlist
+          env:
+            - name: LISTEN_ADDR
+              value: ":9091"
+            - name: UPSTREAM_URL
+              value: {{ $queryURL }}
+            - name: ALLOWLIST_FILE
+              value: /etc/query-allowlist/endpoints.txt
+          ports:
+            - name: allowlist
+              containerPort: 9091
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: allowlist
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: query-allowlist
+              mountPath: /etc/query-allowlist
+              readOnly: true
+      volumes:
+        - name: query-allowlist
+          configMap:
+            name: osac-observability-query-allowlist
+{{- end }}

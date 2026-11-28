@@ -17,12 +17,12 @@
 # so no wheel candidate is ever fetched or selected for anything here.
 # Once any entry below has a --hash, pip's own hash-checking mode requires
 # every entry in this file to have one -- keep all of them hashed.
-ansible-core==2.20.10 --hash=sha256:577b8d3c18e4228310a4e5180c3e133bb3955b378367077bfc643f3c21ebee5c
+ansible-core==2.22.0 --hash=sha256:8285d4cc81c3e3eb2d954e75531724fe0ae154d228475638123451f034a74657 --hash=sha256:bf50b4a0cfa985e30585c7ba301897ea7050d224ca49d2816cab10e33a160e1c
 ansible-runner==2.4.3 --hash=sha256:5f3025529bb968fdc3b627457dd8d418dbf9d53bc73735d50e69c28544d53031
 bindep==2.14.0 --hash=sha256:0c804c7e48dd17db24cb39121ade7171f684fb463c8aa01d0338cd11d254364a
-PyYAML==6.0.3 --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f
-packaging==26.3 --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79
-dumb-init==1.2.5 --hash=sha256:2881d15410cc9f175e20a252c2f24331f5ba05c6a8340954d152ff58435e4ca9
+PyYAML==6.0.4 --hash=sha256:070c22b6f490d6cc30912be9fb9ab1af9c752769b39b53616f6510c3f038ee6a --hash=sha256:0a3a351f04dc124f9357512bdb80ac37cd1750cf1371da33e7cbb96d80ac865f --hash=sha256:0db75f402e99c25239003a499c214a61947b4ef5312af34711d4c63e5c179318 --hash=sha256:1088ad740f50c13178dad16fbc2fa1f634c791d42c7009fdb390e38e5b90b788 --hash=sha256:12a155bc41509d71a2eb73e2191d9e400c1345ea99ac3d9946c31f40a4c840f8 --hash=sha256:131d11bd9b60d705a6388366d77ed67850995a4d2be85fe149785a257c17e531 --hash=sha256:132c3c7c37a8e6f334921b05cfea5d26e241d792dcbb4db0462129d25ca53b43 --hash=sha256:15c52bb238a15bb4fd7e6342a5ac71d594507667c7fe0e5a5abbc0f6875d1e91 --hash=sha256:1631d566655f3af7d6c4a4485267830f6b680d3dc9704b659b3c3f4541b5a3fe --hash=sha256:180ac792c958c2173f6e4467c55ae5f73ab1a9a624ee29fc7095c56d5e3a4055 --hash=sha256:18ea9bda247857fc0de05181675dc116b54c1b04ca3db71de5d2108c882823b7 --hash=sha256:1d2f08c122727c86f8303bb1dd45159ca1de1f2d68798e671ec46974e321008e --hash=sha256:1db4d51d3c2c9545dd44c614febc4594240754f74b30d8e501415b118347f0d1 --hash=sha256:2018fda285d1289527a389e1b4ace1e2d3af410930f949136b55ecb0747744d1 --hash=sha256:2c11be5ab4d9f603a598b5ce93a2064ae38087bdf1b384c5397170054cda4e36 --hash=sha256:33506a2620f0e7c49858f09cb44e99f144878d03af3d9c10aa136e9a1d103bcd --hash=sha256:34edca7ab64b705ee7c80bf3f9ac609240677db11e83d9317191f483a4b5a433 --hash=sha256:3c7129bcee5c88c1450802cc6a95b690ee7c51bfcc7a9b60bbd9549a7a4fcbe6 --hash=sha256:41b4669c3a8fd5750e594dff59d3e62d40e321fec467b50449603710ed0a68f3 --hash=sha256:45e37dd647db9d67b757444c74060c064ace5fdaa08f42bf4fda3812275d423e --hash=sha256:49e38a95e24738908ea852e61df0abc58d1e4d4f974ccdb2386eaee412bedc67 --hash=sha256:4a2a8f27d24d4cdc05aa11df5f4c08e13f30d9e6674809b6a5ddcfcba49a653a --hash=sha256:4a329472db6c8858ebd94f2214a54c8bff8f035a6cc7af1ab39cc1b33a5f0e56 --hash=sha256:4d1e8d6e345b4b4424a05a11e699e999e65a88f422f73636f8a0b354bf219ffa --hash=sha256:4d30c2f186612bd2f9f07c08a4c96721af59cfc8da3ec7cb27dfa2834e8bb019 --hash=sha256:4d3bbc5e8a84a5a6775adecac786f489510a7159b1c343d6f31426d888cfdd6e --hash=sha256:50588147ab2c6a59b5f990a4905db80899a6c2bd197e046a6201f1e67587e794 --hash=sha256:52460c6dd874b22d49fda228fac59da74d7a7b06175ffcc80bfa3ba5389d7f73 --hash=sha256:5246a0feaaac497b09c9462aa926280ae02fc8791b0099c0a925ebd7c7f249a6 --hash=sha256:54c23934cf166bb2090d73d82b1388aadb1cead5e73885223dcfa4a459a22d43 --hash=sha256:573debb9fe3075423d4f823795a678580e597218c25baef178d532b124a25a25 --hash=sha256:609e8efaffa5662da16b7d53eef76fc4eedbbe56fce5829b67ba808a6e35d399 --hash=sha256:60e9da2772e259307650e03c24f50e3bc2d9fa5ed1ba44c47582e13b0e7708d1 --hash=sha256:61eef2f08e977b725f37a8d1663f5a222c6f09207ac0794030d5fca062e7c96e --hash=sha256:622aa875fa6533f25fedcffe23079357d65a690d462200afed5d8e9d0e01ebee --hash=sha256:62c5b5669b05dabf991a705f3a3601f57b65e95121a1d3e3a4ae4446c8632865 --hash=sha256:67da066ca12eb60114ea87f2ecbcca622fff0c205c743cc900437127564fabf6 --hash=sha256:69380d4bae12aab2a2c9532deff6a2841bc9fda47c333691bd2368b696301768 --hash=sha256:6ac167ebebc0c387290406a337b9b5c8c343fa5f7928d5941e45a94b8ba3aa39 --hash=sha256:71bb5b87465d88d1dfc577115af6d435bff9b26f2512936f610c26aa55966028 --hash=sha256:730788375056c43d3ac15bd894c9cd2fb7a931a38b302f408620c64b3ef176ed --hash=sha256:7335809813ec838d9cd334b1744cda33deb141c9ef23a9c0df371c37980d3851 --hash=sha256:78be5a1b05a5d1fd46d0290393e5deeb581fa617585462c1b84f7c6b0cb1e489 --hash=sha256:84e97378010f3da8daf673b82d39ed638098d236a1b760d61c0c1348a642bd70 --hash=sha256:8708f6ab9c2581ffa05f66dae3206bb0385949650537d7295fc7ab0d6454dd70 --hash=sha256:872d2a592289061c1b987e335b3568a2616b474be02bd0608d8f551a385441cd --hash=sha256:88a089e6424a8a256321270620d5a4328ad5227fb2061b07d33f596894336914 --hash=sha256:8e0cd755ce5e9009fd95f9c553e5942478feb8f7dffa19435641fcdc3c20e8ca --hash=sha256:914b19e17814315fbcca52031bf79b68237f3d87a948c584a667b18b468e4df7 --hash=sha256:93bfb2459195406a518e2f487a9bbf01df240175f31e06f5a252ac6734c7bbf0 --hash=sha256:93da48af92c84c4236578e330a514ca324362c0bb62894d8d2343363ed57ff03 --hash=sha256:9d4211f080920629a90c9e31c51e326fb70cfae38f18d4128b9913c23642bace --hash=sha256:9e7ec9dc75cadd392fd687cc9b8ccf7dd59ada0a991e0d14ae0fad9ecdba00c3 --hash=sha256:a266cf55ee5cf63c1803432a61c6386e750e0012ca49d12d26ccb0ffd80b343a --hash=sha256:a3cc63af3d639d1609143711837b926183418260aae89ed95193c07b25b99d33 --hash=sha256:a56491babf0d976625807953bd192dd9de973fccb3270e77b1a795b152a26175 --hash=sha256:a65339c24f2fb8d4419e06ceec1bda98bdcff727b3b533a81d5af6bb2dd34520 --hash=sha256:ab874ebcc5c12c31c859a9e9fe159d688df1f7a099818ef8a35906264a8f5d6b --hash=sha256:b525488d5addf5d59ff4610cd8b1deab9dc97fe0fb3fb74533d7f65e9792bd92 --hash=sha256:b9fe0b8c65a1611053eb7fcaa7c022f655b7eebeb0ea034572615453cae6b843 --hash=sha256:c0d68d972f6f6417b4e85e9522f3d57bb4fbc924379766ccd87254a31009c1cd --hash=sha256:c24097c0462f66358c99dc83d3e1850e005f6293cfa1df1edb243428da1668bf --hash=sha256:c57e40928738c4a202852759f9e1ee2c7063429a9469ee1ac15651bbf7d69963 --hash=sha256:c604dc2613c417130479cdd6e55c2faa691b6365aa82b3dafddfcecc2eaf1ac7 --hash=sha256:c680622f85979f2ff59b4ae44c1ecb5566b2f0f0ffe5d0dc8b4bb6a0e916dabb --hash=sha256:d276f23e2371deb5ee68dd252cc9c2402b806b54d8d2cc7efbb6c34c3a78d886 --hash=sha256:d58fe9fa2056fed24f055b74d5dc808fa1f5d084c22e4118f0a08253fe677ffd --hash=sha256:e24bf71af8a432d7808fabff134d38dfe16d3cbb41f2873bb4b1e42422de0a1a --hash=sha256:e39017e1cef43d03b2ba427f60213e4b36dbc6fb092235fa3de3a510ce064d3c --hash=sha256:e956541cc7a3fff2bb5b17aeb6c5bb42c86c8e6dafb5ebdd41a05e72e702076b --hash=sha256:ed9b957abb12f6ffcd92d5db32fa3ffd4e4a8423d80ddd51b4efa63b42f6a76b --hash=sha256:efe68ed09903cca9ab4117c2b9ea6ee8d369818808945bb5a7fa8009b5630b45 --hash=sha256:f1a4a85b419f5cb6470dd4be5f766bc59532f11b9c22c076b58a0348f05dca5f --hash=sha256:f5c410f9e2ffc9286279a46f2e8c107edaf3b1123510af59c828a9c15b23c9db --hash=sha256:f617e4e5c619fef5284335b24e3af3a77ce08dc5c389ff4b25033bb2749032b7
+packaging==26.4 --hash=sha256:81383611a09c1bc0b08b76e0fd5829d7c6824c65b27a6aee339da133f4233ea2 --hash=sha256:c4b671c41ddb9bf26e543c37723610d28fb6bf7affc4da17cf048d419d2c062a
+dumb-init==1.2.5.post1 --hash=sha256:5d6b1fe9b8efcdbbdcb670efe7a55f9117251ee9648d35ffd0c487fd79515ea5 --hash=sha256:6510538a975e0de10658b0210ec2ad62dc3617543af5c6fbd29a3af111eae981 --hash=sha256:a516a16a7dfed012de2524eb449e31f7f583b11b938eebb3ec09fd194497293d --hash=sha256:c52a20fe73a6f56501079f969775098ab83bd9c73648b9e4eb68fa1b02a9b98e --hash=sha256:fc1e309f52c898ee00df056189f46ca3f6055a72b77015f4eefbd7c58c45290f
 # bindep's own transitive dependencies -- Cachi2 didn't auto-resolve these
 # for a build-requirements entry the way it did for ansible-core/
 # ansible-runner's own transitive deps (confirmed live: distro>=1.7 missing
@@ -45,8 +45,8 @@ Parsley==1.3 --hash=sha256:9444278d47161d5f2be76a767809a3cbe6db4db822f46a4fd7481
 # 70.0.0 is the single version satisfying both packages' constraints at
 # once, so one pin covers both rather than needing two coexisting
 # versions.
-setuptools==70.0.0 --hash=sha256:f211a66637b8fa059bb28183da127d4e86396c991a942b028c6650d4319c3fd0
-# ansible-core's build-system.requires also hard-pins wheel == 0.45.1
+setuptools==84.2.1 --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
+# ansible-core's build-system.requires also hard-pins wheel == 0.48.0
 # exactly (confirmed via its real sdist pyproject.toml), a different
 # exact version than python-esiclient's own wheel need below -- both
 # coexist fine in the shared prefetch cache since pip resolves each
@@ -76,9 +76,9 @@ wheel==0.48.0 --hash=sha256:94800765601e9171bf5d58d066e640662842bcedcbab982b2c90
 # (unlike the now-removed orphaned ansible.eda, which contributed a much
 # bigger and genuinely unneeded set of these -- see its vendor removal
 # commit).
-pytz==2026.5 --hash=sha256:fa23724b9c486543b9ff54a327ee7569ac83ade54bb9afd0fc18676620401c86
+pytz==2026.6 --hash=sha256:3b0fc2727707663d6e517936f444fd8a8b240f1fc32f4bf7ee03274245945284 --hash=sha256:7fed3fee8fd6bd4a2b7b75a8d56021d0624127bf69bd5691f115db929ac570b3
 awxkit==24.6.1 --hash=sha256:015421c2c525c5c5dd13890624f453ac3fc7ca2bc3e301b82db871bc4b8da23c
-textfsm==2.1.0 --hash=sha256:45c18ff2b7c90163dfdff7e20d3f482514cc7aac26bc2547744e79dfa761e458
+textfsm==2.1.1 --hash=sha256:78243c7dfd1848ddaf53602fb3634773d64002224077eea2c59239a90ca95c55 --hash=sha256:bddc87e11b937474579c7e564b06f18a07e88f9eaed06f0e802d97bb8e9c5850
 ttp==0.10.1 --hash=sha256:9c928aeb1f2dade05419c7ecc756d62cb45857deb5cc6b1b9f2058e70f25ae59
 xmltodict==1.0.4 --hash=sha256:6d94c9f834dd9e44514162799d344d815a3a4faec913717a9ecbfa5be1bb8e61
 # cryptography/pydantic-core/rpds-py are maturin (Rust/PyO3) build-
@@ -90,7 +90,7 @@ xmltodict==1.0.4 --hash=sha256:6d94c9f834dd9e44514162799d344d815a3a4faec913717a9
 # pyproject.toml: all three declare `build-backend = "maturin"`. rust/
 # cargo RPMs are prefetched in rpms.in.yaml/rpms.lock.yaml for the
 # actual compilation.
-maturin==1.15.0 --hash=sha256:94b26cc8e8aba61a5f2099715fe640e18c5f678e9a500408b38761263954228a
+maturin==1.16.0 --hash=sha256:131fcc17ddb3ccc48aa183d2172ebf994c322b858e1b9694fb8744d783df66f6 --hash=sha256:13e69ca12542999d8c5467131de72a49bb76e4c284b9a45c5783df7c0fcb3a8a --hash=sha256:2216d731c9324869d3bff72c0c73009bb6e640b3fa7d340174ae70dc874d1d9f --hash=sha256:399fadcd4af39532a173e010240c34930eacc1bb1746bb179863481c68bcf1ab --hash=sha256:5b0573a146803f24566f5b301a4572a8e49bcab4917175407c730da13b46e134 --hash=sha256:609228d639c5b888dc41364cbd318547a59f027481f53cba85838f46da4b3f02 --hash=sha256:7001fd3ac591820d01f2fa041552c367ec587c98649d9f10a817cc7f28e59062 --hash=sha256:837db2f4d93d4899c3ac393fb3cc9eebf35b6002336e5d574f4a4fb6c49fe283 --hash=sha256:95f34ce53249fb7095ff4f2aff64d2562c511d6edf3e216c15dbffcd82b72b4f --hash=sha256:9d43a2adf51a2794e907a8f7dbad06eb114d5edb0909c73c1fa9040f15e584e9 --hash=sha256:9e221c047931caa79283cc0c2278904ae1b25880dde3574b0447657d72907689 --hash=sha256:c16d3589cbddda9420237fdb1394b1a9b36483c0bce83b23de6118c908a8e940 --hash=sha256:deacbb204a20326862e194c7df4958e0514a0411c9a3ccf228a00067c11b5c7e --hash=sha256:e285ec9eb10243d45d10417178cb2eb76e0cbb184d0aa4378b503489fa12ee78
 # maturin's OWN build-system.requires (confirmed via its real sdist
 # pyproject.toml) needs setuptools>=77.0.0 -- a range that doesn't
 # overlap ansible-runner's own <=70.0.0 upper bound above, so this
@@ -103,7 +103,7 @@ maturin==1.15.0 --hash=sha256:94b26cc8e8aba61a5f2099715fe640e18c5f678e9a500408b3
 # real PyPI metadata) has no pyproject.toml (legacy setuptools backend,
 # same bootstrap as Cython/python-esiclient) and whose own build-system
 # needs only setuptools>=62.4 + setuptools_scm (already prefetched).
-setuptools==82.0.0 --hash=sha256:22e0a2d69474c6ae4feb01951cb69d515ed23728cf96d05513d36e42b62b37cb
+setuptools==84.2.1 --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
 setuptools-rust==1.13.0 --hash=sha256:f2afcf4baeee689910ce49cfa8aad4e08cce72f417449bcc32891b8664fdc726
 semantic_version==2.10.0 --hash=sha256:bdabb6d336998cbb378d4b9db3a4b56a1e3235701dc05ea2690d9a997ed5041c
 # cryptography's own sdist build-system.requires also lists cffi
@@ -120,7 +120,7 @@ cffi==2.1.1 --hash=sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc82
 # requirement flit_core<4,>=3.8 (from versions: none)". flit_core's own
 # build-system.requires is empty (self-hosting), confirmed via its real
 # sdist pyproject.toml, so no further transitive need here.
-flit_core==3.12.0 --hash=sha256:18f63100d6f94385c6ed57a72073443e1a71a4acb4339491615d0f16d6ff01b2
+flit_core==4.2.0 --hash=sha256:2bee22dc8ba89c2e35b4e1ad575e596aac945c85672dd8f3cad21b629036e044 --hash=sha256:84e4e4d8fdd45ba2613800a3ebc6834de26d47ec9746efc3719f94181137b460
 # ansible-runner's build-system.requires also lists
 # setuptools-scm[toml]>=6.2,<=8.1.0 (confirmed via its real sdist
 # pyproject.toml) alongside setuptools -- 8.1.0 is the exact upper
@@ -130,7 +130,7 @@ flit_core==3.12.0 --hash=sha256:18f63100d6f94385c6ed57a72073443e1a71a4acb4339491
 # bootstrap quirk of that package); its runtime requires_dist reduces
 # to packaging+setuptools (already prefetched above) for python3.12 --
 # the tomli/typing-extensions entries are gated to python_version<3.11.
-setuptools-scm==8.1.0 --hash=sha256:42dea1b65771cba93b7a515d65a65d8246e560768a66b9106a592c8e7f26c8a7
+setuptools-scm==10.3.4 --hash=sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e --hash=sha256:a69f28bfc245608781205e912faae437c2b2165773afa4e7b979d77447a69dd2
 # PyYAML's build-system.requires includes a bare Cython (python_version
 # < "3.13", which this EE's python3.12 matches) alongside setuptools --
 # confirmed via its real sdist pyproject.toml. Confirmed live: "Could
@@ -138,7 +138,7 @@ setuptools-scm==8.1.0 --hash=sha256:42dea1b65771cba93b7a515d65a65d8246e560768a66
 # versions: none)". Cython itself ships no pyproject.toml (legacy
 # setuptools.build_meta backend, same as python-esiclient), so it needs
 # only the setuptools/wheel already prefetched above, nothing further.
-Cython==3.3.0 --hash=sha256:eed0d93fbca7087f143b42c34b05a825849bdf17f101572c2105acfa49aa88b8
+Cython==3.3.2 --hash=sha256:087dd0dfd85a40f17f88befdd7a9448fcc7ed6689e70aae1ca003c7b87951138 --hash=sha256:0acfcf02010f56bb211e9b4e03c262ce85a2e15bbc041038b7f2958058b3752a --hash=sha256:0b2b865e94b0464bc3e1b4aeee4b9224b19727e26ba2b53c535eb6c9729c1822 --hash=sha256:11d40feefebd712e571f811b7c0ae922eafa388f4d3b9e2c22274b0cf15c6184 --hash=sha256:135821f97059980d7f2c7be9b527db6d678e9f6f3623ef2af9770dd3f0519118 --hash=sha256:15aec2b43368e9781a80e7e52ff470ffda8d93e1f115a47467b14fe189af1536 --hash=sha256:1e06773efe53957c00782fba641c1262cb8def78ae14eeeefa344b663aed0e00 --hash=sha256:1fdb32187141db8bdbe172636d4892187b9115ccba425a39cf1fa5d9575ac86e --hash=sha256:3e51a6bf45d1c40334071de7fc36774f1296b2cd3c2778a8e0efdb89a321049c --hash=sha256:50a90024b29057b3c1948a3f14e9666ce589006e954df8507538987c280a8dc0 --hash=sha256:50d897bf566eed97f3a24328bc8aba8881a80a885eb98e313c496a2a1538904e --hash=sha256:53234bb85a21f3735ed42c787cf5db3cc74b115943a3c46f81567140a48b9a89 --hash=sha256:53d681bee402add71745229efc99e3e7e6521a4acc3ff61b115a3b1f0c460321 --hash=sha256:5a67eaeba88ca5674e23160b4fb884e9fb8766e8c38c979c0522707be0bd0246 --hash=sha256:5aa4f21ac90350a2c3893e40049fd66daa37b636341f523e97bc554276954331 --hash=sha256:5e7e8d959ad262d1cda9e4a43b19cfc8c84b78830cf39d8a402e985dd9e7b5e5 --hash=sha256:6fe8f608e8a1949715e59ebe44fb88f493ded20403ac1c5ed50753247cd759ba --hash=sha256:70b42d46b4a63da7c78538ec9b97374813b4967817eece5112c0f62e538e3fd3 --hash=sha256:77f7eb2b1615ff1c6504c7a9986130910c0064ac5f46a6be29cee9910ce7a8e0 --hash=sha256:83489ca3f20dc6a60394b9fb69342a7589dd9c9daf5c69c4160d18cd8458d77f --hash=sha256:835fb36d75736f24792e4c056772dd920b037f0015cf7a618badcc1c8f52816c --hash=sha256:8b138c8351b29d361d866c3b3ab142a1ed318df977c90e0a522ee8f90575d183 --hash=sha256:93ebae3f7d1cd0ce5e49cdc8df2e83c54596fe2f1971767738efb78f43e4032b --hash=sha256:9bb14b1d8bffad0b0f76e246a63f387a281118005915ab89f47b9f62396190d7 --hash=sha256:a15465611e6b5b12ae8822a45f53ecc7b0fe47b4e36d21be7d816079fdc7438b --hash=sha256:aa604d17130cbfcf1c253db427612e900b9ddb107345e6ded95b7ef09e5810e7 --hash=sha256:aaa520548f0c6186fb4b40c4899efe65e298dc2deab023e43aeb871f2ab21edc --hash=sha256:b2830879d118ffa057d6819eb6be66f11e222d00b779e39253cf2931e0b0b32b --hash=sha256:b553d3ad24c9fdb5f62c0d34eb4224bf0c7e349ce76b48a8295e6e6b1ffaeac2 --hash=sha256:bdf74fa39f5949de6004704684d721185535f754be6d18a7e5921c9bf04b1b86 --hash=sha256:cd5637d8b53dfa96a554e9a9e59ba998c6fd5f6dedc35db7a5b2421f45719d4b --hash=sha256:d0978d0b247701acbe97fcb223ef812f687700ccefd25939be23340c6cd48ee2 --hash=sha256:ddcd76f9cf3cf14438995ce8ec09b3c070607185defccbb4556170cab5ade716 --hash=sha256:e5f298e45245c07d3094962a1cc77be9cb34b1efeefbaaae7ad659f83145b3ed --hash=sha256:e789d9fd939b74fb8c572fc2b689e3b14bd141ba95243693a546064c8179a1d3 --hash=sha256:ebdd98653e2a64e7d6ff5abaa526dce94a1ec99e033174eba84151f477640db6 --hash=sha256:f407195e0e87193ba9d79b5155ae6f02714ae5dc625f6d622ea8427705ac4517 --hash=sha256:f7efcadf660ab16198fd1573fd17214a506e9d45af2c69ab6fce46354efccbc0 --hash=sha256:f87d479106fa67bf06808ae80e6c02eefa0e0ebf597e42e6a8653b038372d18f
 # maturin's build-system.requires also lists puccinialin>=0.1,<0.2
 # (confirmed live: "Could not find a version that satisfies the
 # requirement puccinialin>=0.1,<0.2") -- a helper that bootstraps a
@@ -173,24 +173,24 @@ Cython==3.3.0 --hash=sha256:eed0d93fbca7087f143b42c34b05a825849bdf17f101572c2105
 # Resolved via each package's real PyPI metadata/sdist pyproject.toml,
 # same methodology as everything else in this file -- not guessed.
 puccinialin==0.1.14 --hash=sha256:c186d3ab26ceceae709f7edb7a620ea51e46fbeeb4f58d2de717c485e507914b
-filelock==3.32.7 --hash=sha256:37b8a3d9811b0f9aef7e5ec5c71bb320de52df51e6ca9bcd6f5ad81187660da7
+filelock==4.3.1 --hash=sha256:4c5ee627c401f1863ac6a0de9a14a28d3bb5f8c730b45e2fd6e5dbc79cf34b9e --hash=sha256:79e43df8e9fe509cd83a3899a7c186c8077cbbe4d200a1ed3705c2f3bb6bc487
 httpx==0.28.1 --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc
-anyio==4.15.1 --hash=sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94
-certifi==2026.10.19 --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae
+anyio==4.16.0 --hash=sha256:59bb03251907983d1603d27c3087ddb1e93299ea2163adcdba37899a4fb12ffb --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
+certifi==2026.11.20 --hash=sha256:7422df25243767b9877031a2248cb14d09ddac9beee846f4cef3d5c9191d488f --hash=sha256:af1cb240a8133f105aa52684a3a3258339d7f2fd0bd4e2812698ff5cf5588c4e
 httpcore==1.0.9 --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
 idna==3.20 --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44
 h11==0.16.0 --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1
 typing_extensions==4.16.0 --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
-platformdirs==4.13.5 --hash=sha256:05831adf87d392760f4b5c3a0a95579ab5a10b18b9b9bd43680dcb47544788a0
+platformdirs==4.14.8 --hash=sha256:1e34af590de4d978631b751eb2202f2fee4497537a17c1720b12fcf57b331392 --hash=sha256:96893d686e84e9e6f358a9ea41a8de544df66dbf2ba6cda250e7dc73acf85b9b
 tqdm==4.70.1 --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
-hatchling==1.32.4 --hash=sha256:c4468f73144c054d2aab4ef0f0378c43b9878bf07f8ffd6b79690e970d375f07
+hatchling==1.33.0 --hash=sha256:415290b84f464d2884303fca8974d38e7b85579069fab02a15db0828fbb1446d --hash=sha256:4c422bd4d554fcff5de5b73e9596f85e41e9f97f7e553d8f7595ecb31a627bef
 hatch-vcs==0.5.0 --hash=sha256:0395fa126940340215090c344a2bf4e2a77bcbe7daab16f41b37b98c95809ff9
 hatch-fancy-pypi-readme==25.1.0 --hash=sha256:9c58ed3dff90d51f43414ce37009ad1d5b0f08ffc9fc216998a06380f01c0045
-setuptools-scm==8.3.1 --hash=sha256:3d555e92b75dacd037d32bafdf94f97af51ea29ae8c7b234cf94b7a5bd242a63
+setuptools-scm==10.3.4 --hash=sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e --hash=sha256:a69f28bfc245608781205e912faae437c2b2165773afa4e7b979d77447a69dd2
 # hatchling's own runtime deps (packaging already prefetched above):
 pathspec==1.1.1 --hash=sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a
 pluggy==1.7.0 --hash=sha256:d1eaa46ebb595891b860ab086b4d09c8588af65ebd4361b8e8f4bb8920b90ba8
-tomlkit==0.15.2 --hash=sha256:83e32755ba1d20d9340bd069ee97e9f6232ba2346b63ffcba425de01f7e327a6
+tomlkit==0.15.3 --hash=sha256:a83ce6de3b648e68dd9b50aabadad749ba823eb58b1d026f3c0a283c4767a9c1 --hash=sha256:b3c3020ec1a4bd469d12e31fb4da938e7f6ba758cdbec3fd9047db63120eaf81
 trove-classifiers==2026.9.21.13 --hash=sha256:0a9ebc8d4e2f3e8a22848c5258033035bec17a3012ac3fea16dbaa764489eb71
 # tomlkit's build backend is poetry-core (a THIRD build-backend
 # ecosystem, alongside setuptools/flit_core/hatchling) -- self-hosting
@@ -212,7 +212,7 @@ calver==2025.10.20 --hash=sha256:c98b376c2424642224d456b2f70c51402343e008c63d204
 # nothing further.
 docutils==0.23 --hash=sha256:746f5060322511280a1e50eb76846ed6bf2342984b2ac04dc42caa1a8d78799e
 changelog-chug==0.0.3 --hash=sha256:98ee1e8be75b6e9d512c35292c3c293a124541a4ec2014a6ec3cf33a3d265d2d
-semver==3.1.0 --hash=sha256:14bc073439513d7773662a338f4db9829cf16c12b74b9568e2d2689975fbd7fc
+semver==3.1.2 --hash=sha256:45d107c3fa880910441dfab9d555046cba2829a25feeadfe4a1566439635c510 --hash=sha256:bea193552413194252d33ff26ce0962b76669bd1c6fb17e8e203ac37f072feaf
 # aiohttp (from osac-aap's own execution-environment/requirements.txt,
 # the main 99-package file, not just the build-tools one) needs
 # pkgconfig (bare) alongside setuptools>=67.0 (already have), confirmed
@@ -226,7 +226,7 @@ pkgconfig==1.6.0 --hash=sha256:4a5a6631ce937fafac457104a40d558785a658bbdca5c49b6
 # (already have); its own runtime need is packaging (have) +
 # pyproject_hooks (new, bare, also flit_core-backed, no further
 # cascade).
-setuptools-scm==9.2.2 --hash=sha256:1c674ab4665686a0887d7e24c03ab25f24201c213e82ea689d2f3e169ef7ef57
+setuptools-scm==10.3.4 --hash=sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e --hash=sha256:a69f28bfc245608781205e912faae437c2b2165773afa4e7b979d77447a69dd2
 pyproject_hooks==1.3.3 --hash=sha256:defda19b854fa0d3bd4f76ea4ddcba8abd7dcfcdd585a6690ade050744fc5f43
 build==1.6.1 --hash=sha256:51cc11666391ab6f092070437ac747002ff46f3e4113a3622177ee6b488bfc53
 # frozenlist's own build-system.requires also lists a bare "expandvars"
@@ -246,7 +246,7 @@ expandvars==1.1.2 --hash=sha256:6c5822b7b756a99a356b915dd1267f52ab8a4efaa135963b
 # satisfies the requirement Cython~=3.1.0 (from versions: 3.3.0)". A
 # SECOND coexisting Cython version, same pattern as setuptools/wheel/
 # setuptools-scm above.
-Cython==3.1.8 --hash=sha256:518475fbe633ba30c1577669f417440f41e1a23ad6b6e2dbb20703cd457f04ef
+Cython==3.3.2 --hash=sha256:087dd0dfd85a40f17f88befdd7a9448fcc7ed6689e70aae1ca003c7b87951138 --hash=sha256:0acfcf02010f56bb211e9b4e03c262ce85a2e15bbc041038b7f2958058b3752a --hash=sha256:0b2b865e94b0464bc3e1b4aeee4b9224b19727e26ba2b53c535eb6c9729c1822 --hash=sha256:11d40feefebd712e571f811b7c0ae922eafa388f4d3b9e2c22274b0cf15c6184 --hash=sha256:135821f97059980d7f2c7be9b527db6d678e9f6f3623ef2af9770dd3f0519118 --hash=sha256:15aec2b43368e9781a80e7e52ff470ffda8d93e1f115a47467b14fe189af1536 --hash=sha256:1e06773efe53957c00782fba641c1262cb8def78ae14eeeefa344b663aed0e00 --hash=sha256:1fdb32187141db8bdbe172636d4892187b9115ccba425a39cf1fa5d9575ac86e --hash=sha256:3e51a6bf45d1c40334071de7fc36774f1296b2cd3c2778a8e0efdb89a321049c --hash=sha256:50a90024b29057b3c1948a3f14e9666ce589006e954df8507538987c280a8dc0 --hash=sha256:50d897bf566eed97f3a24328bc8aba8881a80a885eb98e313c496a2a1538904e --hash=sha256:53234bb85a21f3735ed42c787cf5db3cc74b115943a3c46f81567140a48b9a89 --hash=sha256:53d681bee402add71745229efc99e3e7e6521a4acc3ff61b115a3b1f0c460321 --hash=sha256:5a67eaeba88ca5674e23160b4fb884e9fb8766e8c38c979c0522707be0bd0246 --hash=sha256:5aa4f21ac90350a2c3893e40049fd66daa37b636341f523e97bc554276954331 --hash=sha256:5e7e8d959ad262d1cda9e4a43b19cfc8c84b78830cf39d8a402e985dd9e7b5e5 --hash=sha256:6fe8f608e8a1949715e59ebe44fb88f493ded20403ac1c5ed50753247cd759ba --hash=sha256:70b42d46b4a63da7c78538ec9b97374813b4967817eece5112c0f62e538e3fd3 --hash=sha256:77f7eb2b1615ff1c6504c7a9986130910c0064ac5f46a6be29cee9910ce7a8e0 --hash=sha256:83489ca3f20dc6a60394b9fb69342a7589dd9c9daf5c69c4160d18cd8458d77f --hash=sha256:835fb36d75736f24792e4c056772dd920b037f0015cf7a618badcc1c8f52816c --hash=sha256:8b138c8351b29d361d866c3b3ab142a1ed318df977c90e0a522ee8f90575d183 --hash=sha256:93ebae3f7d1cd0ce5e49cdc8df2e83c54596fe2f1971767738efb78f43e4032b --hash=sha256:9bb14b1d8bffad0b0f76e246a63f387a281118005915ab89f47b9f62396190d7 --hash=sha256:a15465611e6b5b12ae8822a45f53ecc7b0fe47b4e36d21be7d816079fdc7438b --hash=sha256:aa604d17130cbfcf1c253db427612e900b9ddb107345e6ded95b7ef09e5810e7 --hash=sha256:aaa520548f0c6186fb4b40c4899efe65e298dc2deab023e43aeb871f2ab21edc --hash=sha256:b2830879d118ffa057d6819eb6be66f11e222d00b779e39253cf2931e0b0b32b --hash=sha256:b553d3ad24c9fdb5f62c0d34eb4224bf0c7e349ce76b48a8295e6e6b1ffaeac2 --hash=sha256:bdf74fa39f5949de6004704684d721185535f754be6d18a7e5921c9bf04b1b86 --hash=sha256:cd5637d8b53dfa96a554e9a9e59ba998c6fd5f6dedc35db7a5b2421f45719d4b --hash=sha256:d0978d0b247701acbe97fcb223ef812f687700ccefd25939be23340c6cd48ee2 --hash=sha256:ddcd76f9cf3cf14438995ce8ec09b3c070607185defccbb4556170cab5ade716 --hash=sha256:e5f298e45245c07d3094962a1cc77be9cb34b1efeefbaaae7ad659f83145b3ed --hash=sha256:e789d9fd939b74fb8c572fc2b689e3b14bd141ba95243693a546064c8179a1d3 --hash=sha256:ebdd98653e2a64e7d6ff5abaa526dce94a1ec99e033174eba84151f477640db6 --hash=sha256:f407195e0e87193ba9d79b5155ae6f02714ae5dc625f6d622ea8427705ac4517 --hash=sha256:f7efcadf660ab16198fd1573fd17214a506e9d45af2c69ab6fce46354efccbc0 --hash=sha256:f87d479106fa67bf06808ae80e6c02eefa0e0ebf597e42e6a8653b038372d18f
 # ansible-builder's own build-time introspection (introspect.py, vendored
 # under execution-environment/ansible-builder-scripts/) independently
 # scans every vendored collection's own requirements.txt and merges them
@@ -268,7 +268,7 @@ pycountry==26.2.16 --hash=sha256:5b6027d453fcd6060112b951dd010f01f168b51b4bf8a1f
 # setuptools version, same pattern as above; its own build-system.
 # requires is commented out in its real sdist (self-hosting, no further
 # cascade).
-setuptools==80.10.2 --hash=sha256:8b0e9d10c784bf7d262c4e5ec5d4ec94127ce206e8738f29a437945fbc219b70
+setuptools==84.2.1 --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
 # pycountry's own build backend is poetry-core (unconstrained),
 # confirmed via its real sdist pyproject.toml -- already satisfied by
 # poetry-core==2.5.0 above, no further need.

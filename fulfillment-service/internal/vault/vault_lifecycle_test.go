@@ -455,6 +455,47 @@ var _ = Describe("VaultLifecycleClient", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("reprovisions a tenant that OpenBao already provisioned", func() {
+			// OpenBao answers a duplicate namespace, mount or auth mount with
+			// HTTP 409 "path is already in use at ...", where Vault uses 400.
+			// Both mean the previous reconciliation already did this step.
+			client, _ := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/sys/mounts":
+					w.Write([]byte(`{"data":{` +
+						`"secret/":{"type":"kv","options":{"version":"2"}},` +
+						`"transit/":{"type":"transit"}}}`))
+				case "/v1/sys/namespaces/tenant-a",
+					"/v1/sys/mounts/secret",
+					"/v1/sys/mounts/transit",
+					"/v1/sys/auth/jwt":
+					w.WriteHeader(http.StatusConflict)
+					w.Write([]byte(`{"errors":["path is already in use"]}`))
+				default:
+					w.Write([]byte(`{}`))
+				}
+			})
+
+			Expect(client.EnsureTenantNamespace(ctx, "tenant-a")).To(Succeed())
+		})
+
+		It("still rejects a path occupied by another engine after a conflict", func() {
+			client, _ := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/sys/mounts/transit":
+					w.WriteHeader(http.StatusConflict)
+					w.Write([]byte(`{"errors":["path is already in use at transit/"]}`))
+				case "/v1/sys/mounts":
+					w.Write([]byte(`{"data":{"transit/":{"type":"kv"}}}`))
+				default:
+					w.Write([]byte(`{}`))
+				}
+			})
+
+			err := client.EnsureTenantNamespace(ctx, "tenant-a")
+			Expect(err).To(MatchError(ContainSubstring("configure a different transit mount path")))
+		})
+
 		It("returns error when namespace creation fails with non-exists error", func() {
 			client, _ := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/v1/sys/namespaces/tenant-a" {
@@ -517,6 +558,25 @@ var _ = Describe("VaultLifecycleClient", func() {
 			err := client.EnsureTenantNamespace(ctx, "tenant-a")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to create policy"))
+		})
+
+		It("reports the failed step and provider status for the reconciler log", func() {
+			client, _ := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/sys/policies/acl/tenant-kv-access" {
+					w.WriteHeader(http.StatusBadGateway)
+					w.Write([]byte(`{"errors":["synthetic-provider-body-marker"]}`))
+					return
+				}
+				w.Write([]byte(`{}`))
+			})
+			// Avoid SDK retry delays.
+			client.client.SetMaxRetries(0)
+
+			err := client.EnsureTenantNamespace(ctx, "tenant-a")
+			Expect(err).To(HaveOccurred())
+			detail := ErrorDetail(err)
+			Expect(detail).To(Equal(`failed to create policy for tenant "tenant-a" (HTTP 502)`))
+			Expect(detail).ToNot(ContainSubstring("synthetic-provider-body-marker"))
 		})
 
 		It("returns error when role creation fails", func() {
@@ -707,6 +767,17 @@ var _ = Describe("VaultLifecycleClient", func() {
 
 		It("returns true for 'path is already in use' in error body", func() {
 			err := generateResponseError(http.StatusBadRequest, "path is already in use at secret/")
+			Expect(isAlreadyExistsError(err)).To(BeTrue())
+		})
+
+		It("returns true for an OpenBao conflict", func() {
+			// OpenBao reports duplicate mounts and auth mounts with HTTP 409.
+			err := generateResponseError(http.StatusConflict, "path is already in use at secret/")
+			Expect(isAlreadyExistsError(err)).To(BeTrue())
+		})
+
+		It("returns true for an OpenBao conflict without a recognized message", func() {
+			err := generateResponseError(http.StatusConflict, "existing mount at secret/")
 			Expect(isAlreadyExistsError(err)).To(BeTrue())
 		})
 

@@ -15,13 +15,32 @@ package vault
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"strings"
 
 	vaultapi "github.com/hashicorp/vault/api"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
+
+// ErrorDetail returns the messages of the provisioning errors in the chain,
+// which name the failed step, the tenant and the provider HTTP status. It is
+// meant for log lines: provider response bodies are never included, so a
+// failure is reported without leaking secrets. It returns an empty string when
+// the chain holds no provisioning error, for example for token or login
+// failures whose text may reproduce a provider response body.
+func ErrorDetail(err error) string {
+	var details []string
+	for err != nil {
+		if provisioning, ok := err.(*provisioningError); ok {
+			details = append(details, provisioning.Error())
+		}
+		err = errors.Unwrap(err)
+	}
+	return strings.Join(details, ": ")
+}
 
 // ToGrpcError converts a vault error to an appropriate gRPC status error.
 func ToGrpcError(err error) error {
@@ -60,7 +79,7 @@ func ToGrpcError(err error) error {
 				"vault internal error")
 		}
 		return grpcstatus.Error(grpccodes.Internal,
-			"vault operation failed")
+			fmt.Sprintf("vault operation failed (HTTP %d)", responseErr.StatusCode))
 	}
 
 	var netErr net.Error

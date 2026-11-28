@@ -13,7 +13,7 @@ import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import fulfillment_users_for_username
-from tests.e2e.core.k8s_client import impersonation_args
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.keycloak_admin import (
     get_admin_token,
     keycloak_admin_request,
@@ -223,9 +223,9 @@ def _user_listed(grpc: GRPCClient, *, username: str, tenant_name: str) -> bool:
     return False
 
 
-def _namespace_json(name: str) -> dict[str, Any]:
-    """Return the Kubernetes Namespace object as JSON."""
-    raw, rc = run_unchecked("kubectl", *impersonation_args(), "get", "ns", name, "-o", "json")
+def _namespace_json(k8s: K8sClient, name: str) -> dict[str, Any]:
+    """Return the Kubernetes Namespace object as JSON, read on the hub."""
+    raw, rc = run_unchecked(*k8s.base_args(), "get", "ns", name, "-o", "json")
     assert rc == 0, f"namespace {name} not found: {raw}"
     data = json.loads(raw)
     assert isinstance(data, dict)
@@ -245,6 +245,7 @@ def test_tenant_onboarding_demo1_milestone_02(
     private_grpc: GRPCClient,
     keycloak_url: str,
     keycloak_admin_password: str,
+    k8s_hub_client: K8sClient,
 ) -> None:
     """Demo 1 tenant onboarding: create, IdP users, RBAC, project, cascade delete."""
     resources = onboarding_resources
@@ -300,7 +301,7 @@ def test_tenant_onboarding_demo1_milestone_02(
 
     def _ns_active() -> str:
         """Return the tenant namespace phase, or empty if it is not ready yet."""
-        raw, rc = run_unchecked("kubectl", *impersonation_args(), "get", "ns", tenant_name, "-o", "json")
+        raw, rc = run_unchecked(*k8s_hub_client.base_args(), "get", "ns", tenant_name, "-o", "json")
         if rc != 0:
             return ""
         try:
@@ -321,7 +322,7 @@ def test_tenant_onboarding_demo1_milestone_02(
         resource_kind=WaitResourceKind.NAMESPACE,
         resource_id=tenant_name,
     )
-    ns = _namespace_json(tenant_name)
+    ns = _namespace_json(k8s_hub_client, tenant_name)
     labels = ns.get("metadata", {}).get("labels", {}) if isinstance(ns.get("metadata"), dict) else {}
     assert isinstance(labels, dict)
     has_tenant_ref = labels.get("osac.openshift.io/tenant-ref") == tenant_name

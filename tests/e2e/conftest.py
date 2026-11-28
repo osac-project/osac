@@ -218,9 +218,32 @@ def _private_grpc_for_hooks() -> GRPCClient:
     """A private-API client for the session hooks, which run outside the fixture graph."""
     namespace = env("OSAC_NAMESPACE", "osac-devel")
     service_account = env("OSAC_SERVICE_ACCOUNT", "admin")
-    cluster_domain = run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
+    # The hooks cannot use fixtures, so the hub kubeconfig comes from the
+    # environment: a vcluster run keeps the ambient context on the outer
+    # cluster, where neither the ingress nor the service account exists.
+    kubeconfig = hub_kubeconfig()
+    kubeconfig_args = ["--kubeconfig", kubeconfig] if kubeconfig is not None else []
+    cluster_domain = run(
+        "kubectl",
+        *kubeconfig_args,
+        "get",
+        "ingress.config.openshift.io",
+        "cluster",
+        "-o",
+        "jsonpath={.spec.domain}",
+    )
     address = env("OSAC_FULFILLMENT_PRIVATE_ADDRESS", f"fulfillment-internal-api-{namespace}.{cluster_domain}:443")
-    token = run("oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin")
+    token = run(
+        "oc",
+        "create",
+        "token",
+        *service_account_token_args(
+            namespace=namespace,
+            service_account=service_account,
+            duration="4h",
+            kubeconfig=kubeconfig,
+        ),
+    )
     return GRPCClient(address=address, token=token)
 
 
@@ -313,14 +336,22 @@ def cluster_tenants(quota_defaults: None, namespace: str, k8s_hub_client: K8sCli
 
 
 @pytest.fixture(scope="session")
-def cluster_domain() -> str:
+def cluster_domain(k8s_hub_client: K8sClient) -> str:
     # OSAC_CLUSTER_DOMAIN overrides the cluster read: a vcluster has no
     # ingresses.config.openshift.io API to ask, so a run against one carries
-    # the outer cluster's domain explicitly.
+    # the outer cluster's domain explicitly. The fallback reads through the hub
+    # client, so a vcluster run does not silently ask the outer cluster.
     override = env("OSAC_CLUSTER_DOMAIN", "")
     if override:
         return override
-    return run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
+    return run(
+        *k8s_hub_client.base_args(),
+        "get",
+        "ingress.config.openshift.io",
+        "cluster",
+        "-o",
+        "jsonpath={.spec.domain}",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -385,12 +416,21 @@ def grpc(
 
 
 @pytest.fixture(scope="session")
-def private_grpc(fulfillment_private_address: str, namespace: str, service_account: str) -> GRPCClient:
+def private_grpc(
+    fulfillment_private_address: str, namespace: str, service_account: str, k8s_hub_client: K8sClient
+) -> GRPCClient:
+    # Mint the token on the hub: the service account exists there, not on an
+    # outer cluster a vcluster run keeps in the ambient context.
     token: str = run(
         "oc",
         "create",
         "token",
-        *service_account_token_args(namespace=namespace, service_account=service_account, duration="4h"),
+        *service_account_token_args(
+            namespace=namespace,
+            service_account=service_account,
+            duration="4h",
+            kubeconfig=k8s_hub_client.kubeconfig,
+        ),
     )
     return GRPCClient(address=fulfillment_private_address, token=token)
 
@@ -601,8 +641,16 @@ def pull_secret_name(cli: OsacCLI, pull_secret_path: str) -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
-def private_cli(namespace: str, fulfillment_private_address: str, service_account: str) -> Iterator[OsacCLI]:
-    token_args = service_account_token_args(namespace=namespace, service_account=service_account)
+def private_cli(
+    namespace: str, fulfillment_private_address: str, service_account: str, k8s_hub_client: K8sClient
+) -> Iterator[OsacCLI]:
+    # Same as private_grpc: the CLI's token script runs `oc create token`, so it
+    # needs the hub kubeconfig to reach the service account.
+    token_args = service_account_token_args(
+        namespace=namespace,
+        service_account=service_account,
+        kubeconfig=k8s_hub_client.kubeconfig,
+    )
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_private_address.rsplit(':', 1)[0]}",

@@ -51,13 +51,26 @@ def bmh_kubeconfig() -> str | None:
     return os.environ.get("OSAC_BMH_KUBECONFIG", "").strip() or None
 
 
-def service_account_token_args(*, namespace: str, service_account: str, duration: str | None = None) -> list[str]:
+def service_account_token_args(
+    *,
+    namespace: str,
+    service_account: str,
+    duration: str | None = None,
+    kubeconfig: str | None = None,
+) -> list[str]:
     """The `oc create token` arguments for a service-account token.
 
     The caller prepends the binary and the ``create token`` verbs; the
     impersonation flags are appended only when ``OSAC_IMPERSONATE_USER`` is set.
+
+    ``kubeconfig`` names the cluster the token is minted on. Pass the hub
+    client's kubeconfig: a vcluster run keeps the ambient context on the outer
+    cluster, where the service account does not exist. None keeps the ambient
+    context, which is how a single-cluster deployment runs.
     """
     args = [service_account, "-n", namespace]
+    if kubeconfig is not None:
+        args.extend(["--kubeconfig", kubeconfig])
     if duration is not None:
         args.extend(["--duration", duration])
     return [*args, *impersonation_args()]

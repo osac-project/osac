@@ -8,7 +8,7 @@ import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import assert_grpc_rejected
-from tests.e2e.core.k8s_client import impersonation_args
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import CommandFailed, CommandTimedOut, run, run_unchecked
 
 pytestmark = pytest.mark.sanity
@@ -86,10 +86,9 @@ def test_shared_infrastructure_always_available(private_grpc: GRPCClient) -> Non
         assert rc == 0, f"{service_method} should succeed (shared infra), got rc={rc}: {output}"
 
 
-def test_disabled_service_controllers_not_running(namespace: str) -> None:
+def test_disabled_service_controllers_not_running(namespace: str, k8s_hub_client: K8sClient) -> None:
     pods_json = run(
-        "kubectl",
-        *impersonation_args(),
+        *k8s_hub_client.base_args(),
         "get",
         "pods",
         "-n",
@@ -112,8 +111,7 @@ def test_disabled_service_controllers_not_running(namespace: str) -> None:
     assert found_manager, "No manager container found in osac-operator pod(s)"
 
     bmf_json = run(
-        "kubectl",
-        *impersonation_args(),
+        *k8s_hub_client.base_args(),
         "get",
         "pods",
         "-n",

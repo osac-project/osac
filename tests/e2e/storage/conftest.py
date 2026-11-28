@@ -9,7 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from tests.e2e.core.helpers import registered_ssh_key_secret
-from tests.e2e.core.k8s_client import impersonation_args
+from tests.e2e.core.k8s_client import K8sClient, hub_kubeconfig
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, run_unchecked
 
@@ -39,10 +39,15 @@ def _storage_controller_configured(namespace: str) -> bool:
 
     Checks two sources: direct env vars on the operator deployment
     and envFrom secrets (e.g. osac-config) that may inject the var at runtime.
+
+    The operator runs on the hub, so a vcluster run must read the vcluster API:
+    the ambient context points at the outer cluster, where the deployment does
+    not exist. Collection hooks cannot use fixtures, so the hub client is built
+    from the environment here.
     """
-    operator_args = [
-        "kubectl",
-        *impersonation_args(),
+    kubectl = K8sClient(namespace=namespace, kubeconfig=hub_kubeconfig()).base_args()
+    deployment_args = [
+        *kubectl,
         "get",
         "deployment",
         "-n",
@@ -51,7 +56,7 @@ def _storage_controller_configured(namespace: str) -> bool:
         "control-plane=controller-manager",
     ]
     output, rc = run_unchecked(
-        *operator_args, "-o", "jsonpath={.items[*].spec.template.spec.containers[*].env[*].name}"
+        *deployment_args, "-o", "jsonpath={.items[*].spec.template.spec.containers[*].env[*].name}"
     )
     if rc == 0 and (
         "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE" in output or "OSAC_ENABLE_STORAGE_CONTROLLER" in output
@@ -60,14 +65,12 @@ def _storage_controller_configured(namespace: str) -> bool:
 
     # Check envFrom secrets for the storage env var
     secret_names, rc = run_unchecked(
-        *operator_args, "-o", "jsonpath={.items[*].spec.template.spec.containers[*].envFrom[*].secretRef.name}"
+        *deployment_args, "-o", "jsonpath={.items[*].spec.template.spec.containers[*].envFrom[*].secretRef.name}"
     )
     if rc != 0:
         return False
     for secret_name in secret_names.strip().split():
-        data_keys, rc = run_unchecked(
-            "kubectl", *impersonation_args(), "get", "secret", secret_name, "-n", namespace, "-o", "jsonpath={.data}"
-        )
+        data_keys, rc = run_unchecked(*kubectl, "get", "secret", secret_name, "-n", namespace, "-o", "jsonpath={.data}")
         if rc == 0 and "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE" in data_keys:
             return True
         if rc == 0 and "OSAC_ENABLE_STORAGE_CONTROLLER" in data_keys:

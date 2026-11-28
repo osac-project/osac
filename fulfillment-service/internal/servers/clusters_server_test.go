@@ -535,6 +535,16 @@ var _ = Describe("Clusters server", func() {
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
+
+			var upgradeGate *publicv1.ClusterCondition
+			for _, condition := range object.GetStatus().GetConditions() {
+				if condition.GetType() == publicv1.ClusterConditionType_CLUSTER_CONDITION_TYPE_UPGRADE_ADMISSIBLE {
+					upgradeGate = condition
+				}
+			}
+			Expect(upgradeGate).ToNot(BeNil())
+			Expect(upgradeGate.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(upgradeGate.GetReason()).To(Equal("AwaitingReadiness"))
 		})
 
 		It("Drops a caller-supplied status on create", func() {
@@ -553,6 +563,12 @@ var _ = Describe("Clusters server", func() {
 						State: publicv1.ClusterState_CLUSTER_STATE_READY,
 						StateTransitionTime: timestamppb.New(
 							time.Now().Add(24 * time.Hour)),
+						Conditions: []*publicv1.ClusterCondition{
+							publicv1.ClusterCondition_builder{
+								Type:   publicv1.ClusterConditionType_CLUSTER_CONDITION_TYPE_UPGRADE_ADMISSIBLE,
+								Status: publicv1.ConditionStatus_CONDITION_STATUS_TRUE,
+							}.Build(),
+						},
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -561,6 +577,15 @@ var _ = Describe("Clusters server", func() {
 			Expect(object.GetStatus().GetState()).To(
 				Equal(publicv1.ClusterState_CLUSTER_STATE_UNSPECIFIED))
 			Expect(object.GetStatus().GetStateTransitionTime()).To(BeNil())
+
+			var upgradeGate *publicv1.ClusterCondition
+			for _, condition := range object.GetStatus().GetConditions() {
+				if condition.GetType() == publicv1.ClusterConditionType_CLUSTER_CONDITION_TYPE_UPGRADE_ADMISSIBLE {
+					upgradeGate = condition
+				}
+			}
+			Expect(upgradeGate).ToNot(BeNil())
+			Expect(upgradeGate.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
 		})
 
 		It("Doesn't create object without template", func() {
@@ -1192,22 +1217,9 @@ var _ = Describe("Clusters server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
-				Id: "unmasked-update-target",
-				Metadata: privatev1.Metadata_builder{
-					Name: "4-18-0-unmasked", Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.ClusterVersionSpec_builder{
-					Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
-					Enabled: proto.Bool(true), Version: "4.18.0",
-				}.Build(),
-			}.Build())
 			object := proto.Clone(createResponse.GetObject()).(*publicv1.Cluster)
 			originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachment()).(*publicv1.ClusterNetworkAttachment)
 			object.GetMetadata().SetLabels(map[string]string{"test": "unmasked-update"})
-			object.GetSpec().SetVersion(publicv1.ClusterVersionReference_builder{
-				Name: "4-18-0-unmasked",
-			}.Build())
 			object.SetStatus(publicv1.ClusterStatus_builder{
 				ApiUrl:     "https://forged.api",
 				ConsoleUrl: "https://forged.console",
@@ -1503,6 +1515,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).NotTo(HaveOccurred())
 			_, err = clustersDAO.Update().SetObject(privateCluster.GetObject()).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
+			openClusterUpgradeGate(ctx, server.private, privateCluster.GetObject())
 			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 				Id:       "full-object-target",
 				Metadata: privatev1.Metadata_builder{Name: "4-18-full-object", Tenant: testTenant}.Build(),
@@ -1530,7 +1543,7 @@ var _ = Describe("Clusters server", func() {
 			full.GetMetadata().SetLabels(map[string]string{"example.com/review": "updated"})
 			full.GetSpec().GetNodeSets()["compute"].SetSize(4)
 			for _, attempt := range full.GetStatus().GetUpgradeHistory() {
-				attempt.SetState(publicv1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED)
+				attempt.SetState(publicv1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
 			}
 			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object:     full,
@@ -1545,6 +1558,71 @@ var _ = Describe("Clusters server", func() {
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(1))
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal(attemptID))
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		})
+
+		It("returns Aborted for a stale locked public update before gate admission", func() {
+			created, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: "test-cluster"}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			id := created.GetObject().GetId()
+
+			privateCluster, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			privateCluster.GetObject().GetStatus().SetObservedVersion("4.17.0")
+			clustersDAO, err := dao.NewGenericDAO[*privatev1.Cluster]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = clustersDAO.Update().SetObject(privateCluster.GetObject()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			openClusterUpgradeGate(ctx, server.private, privateCluster.GetObject())
+			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
+				Id:       "stale-locked-target",
+				Metadata: privatev1.Metadata_builder{Name: "4-18-stale-locked", Tenant: testTenant}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Image:   "quay.io/openshift-release-dev/ocp-release:4.18.7-multi",
+					Enabled: proto.Bool(true), Version: "4.18.7",
+				}.Build(),
+			}.Build())
+
+			current, err := server.Get(ctx, publicv1.ClustersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			staleVersion := current.GetObject().GetMetadata().GetVersion()
+			update := func(lock bool, metadataVersion int32) error {
+				_, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+					Object: publicv1.Cluster_builder{
+						Id:       id,
+						Metadata: publicv1.Metadata_builder{Version: metadataVersion}.Build(),
+						Spec: publicv1.ClusterSpec_builder{
+							Version: publicv1.ClusterVersionReference_builder{Name: "4-18-stale-locked"}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
+					Lock:       lock,
+				}.Build())
+				return err
+			}
+
+			Expect(update(false, 0)).NotTo(HaveOccurred())
+			Expect(update(true, staleVersion)).To(HaveOccurred())
+			Expect(grpcstatus.Code(update(true, staleVersion))).To(Equal(grpccodes.Aborted))
+
+			refetched, err := server.Get(ctx, publicv1.ClustersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			err = update(false, refetched.GetObject().GetMetadata().GetVersion())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+
+			stored, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.GetObject().GetStatus().GetUpgradeAttemptId()).NotTo(BeEmpty())
+			Expect(stored.GetObject().GetStatus().GetActiveUpgradeAttempt()).NotTo(BeNil())
 		})
 
 		It("updates node-set size then version in separate masked requests", func() {
@@ -1614,6 +1692,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			_, err = clustersDAO.Update().SetObject(privateCluster.GetObject()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			openClusterUpgradeGate(ctx, server.private, privateCluster.GetObject())
 
 			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 				Id:       "public-node-target",

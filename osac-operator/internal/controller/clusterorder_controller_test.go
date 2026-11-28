@@ -741,6 +741,74 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeTrue())
 		})
 
+		DescribeTable("sets WorkersReady from live NodePool capacity",
+			func(name string, replicas int32, expectedReady bool) {
+				instance := &v1alpha1.ClusterOrder{
+					ObjectMeta: metav1.ObjectMeta{Name: "workers-" + name + "-live", Namespace: "default"},
+					Status:     v1alpha1.ClusterOrderStatus{Phase: v1alpha1.ClusterOrderPhaseProgressing},
+					Spec: v1alpha1.ClusterOrderSpec{
+						NodeRequests: []v1alpha1.NodeRequest{{
+							NodeSet: "worker", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "worker"}, NumberOfNodes: 1,
+						}},
+					},
+				}
+				hc := &hypershiftv1beta1.HostedCluster{
+					ObjectMeta: metav1.ObjectMeta{Name: "workers-" + name + "-live", Namespace: "default"},
+					Status: hypershiftv1beta1.HostedClusterStatus{Conditions: []metav1.Condition{
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
+						{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue},
+					}},
+				}
+				initialReplicas := int32(1)
+				if expectedReady {
+					initialReplicas = 0
+				}
+				nodePool := readyClusterOrderNodePool("worker", initialReplicas)
+				nodePool.ObjectMeta = metav1.ObjectMeta{
+					Name:      "workers-" + name + "-live-worker",
+					Namespace: "default",
+					Labels: map[string]string{
+						agentNodeSetLabel:         "worker",
+						osacClusterOrderNameLabel: instance.Name,
+						agentInstanceTypeLabel:    "worker",
+					},
+				}
+				Expect(k8sClient.Create(ctx, &nodePool)).To(Succeed())
+				nodePool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{
+					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
+				}
+				statusBase := nodePool.DeepCopy()
+				statusBase.Status = hypershiftv1beta1.NodePoolStatus{}
+				nodePool.Status.Replicas = replicas
+				Expect(k8sClient.Status().Patch(ctx, &nodePool, client.MergeFrom(statusBase))).To(Succeed())
+				DeferCleanup(func() {
+					Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &nodePool))).To(Succeed())
+				})
+				reconciler.Client = k8sClient
+
+				stored := &hypershiftv1beta1.NodePool{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(&nodePool), stored)).To(Succeed())
+				Expect(stored.Status.Replicas).To(Equal(replicas))
+				Expect(stored.Status.Conditions).To(HaveLen(2))
+				Expect(stored.Status.Conditions[0].Status).To(Equal(corev1.ConditionTrue))
+				Expect(stored.Status.Conditions[1].Status).To(Equal(corev1.ConditionTrue))
+				Expect(reconciler.handleHostedCluster(ctx, instance, hc)).To(Succeed())
+
+				workersReady := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionWorkersReady)
+				Expect(workersReady).NotTo(BeNil())
+				Expect(workersReady.Status == metav1.ConditionTrue).To(Equal(expectedReady))
+				expectedReason := v1alpha1.ReasonAsExpected
+				if !expectedReady {
+					expectedReason = v1alpha1.ReasonWorkersJoining
+				}
+				Expect(workersReady.Reason).To(Equal(expectedReason))
+			},
+			Entry("matching capacity", "ready", int32(1), true),
+			Entry("incomplete capacity", "not-ready", int32(0), false),
+		)
+
 		It("should finalize Ready after provisioning and live worker readiness", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{

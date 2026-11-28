@@ -151,6 +151,12 @@ func upgradeCluster(
 		return fmt.Errorf("failed to upgrade cluster: %w", err)
 	}
 
+	selected := cluster.GetSpec().GetVersion()
+	if selected.GetId() != "" && selected.GetId() == version.GetId() {
+		console.Infof(ctx, "No upgrade was triggered for cluster '%s'; version '%s' is already selected.\n",
+			cluster.GetId(), version.GetSpec().GetVersion())
+		return nil
+	}
 	console.Infof(ctx, "Requested upgrade of cluster '%s' to version '%s'.\n",
 		cluster.GetId(), version.GetSpec().GetVersion())
 	return nil

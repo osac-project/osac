@@ -1598,6 +1598,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					{Type: osacv1alpha1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: osacv1alpha1.ReasonAsExpected, Message: "installation complete", LastTransitionTime: now},
 					{Type: osacv1alpha1.ConditionControlPlaneCreated, Status: metav1.ConditionTrue, Reason: osacv1alpha1.ReasonAsExpected, Message: "control plane created", LastTransitionTime: now},
 					{Type: osacv1alpha1.ConditionControlPlaneAvailable, Status: metav1.ConditionTrue, Reason: osacv1alpha1.ReasonAsExpected, Message: "control plane available", LastTransitionTime: now},
+					{Type: osacv1alpha1.ConditionWorkersReady, Status: metav1.ConditionTrue, Reason: osacv1alpha1.ReasonAsExpected, Message: "workers ready", LastTransitionTime: now},
 					{Type: string(osacv1alpha1.ClusterOrderConditionClusterStorageReady), Status: metav1.ConditionTrue, Reason: osacv1alpha1.TenantReasonFound, Message: "storage ready", LastTransitionTime: now},
 					{Type: osacv1alpha1.ConditionClusterAvailable, Status: metav1.ConditionTrue, Reason: osacv1alpha1.ReasonAsExpected, Message: "cluster available", LastTransitionTime: now},
 					{Type: osacv1alpha1.ConditionNamespaceCreated, Status: metav1.ConditionTrue, Reason: osacv1alpha1.ReasonAsExpected, Message: "namespace created", LastTransitionTime: now},
@@ -1613,9 +1614,9 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			}
 
 			assertResult := func() {
-				// Two fulfillment conditions only: PROGRESSING and READY. The installation
-				// steps do not add their own conditions and NamespaceCreated is ignored.
-				Expect(mockClient.lastUpdate.GetStatus().GetConditions()).To(HaveLen(2))
+				// Four fulfillment conditions: PROGRESSING, READY, and the two orthogonal
+				// readiness axes. Installation steps and NamespaceCreated do not add conditions.
+				Expect(mockClient.lastUpdate.GetStatus().GetConditions()).To(HaveLen(4))
 
 				ready := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_READY)
 				Expect(ready).NotTo(BeNil())
@@ -1626,6 +1627,16 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				// Follows Progressing (False); a completed step never flips it back to True.
 				Expect(progressing.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 				Expect(progressing.GetMessage()).To(Equal("installation complete"))
+
+				controlPlaneAvailable := findRemoteCondition(
+					privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE)
+				Expect(controlPlaneAvailable).NotTo(BeNil())
+				Expect(controlPlaneAvailable.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+
+				workersReady := findRemoteCondition(
+					privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY)
+				Expect(workersReady).NotTo(BeNil())
+				Expect(workersReady.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 			}
 
 			// Stored order.
@@ -1660,6 +1671,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			osacv1alpha1.ConditionNamespaceCreated,
 			osacv1alpha1.ConditionControlPlaneCreated,
 			osacv1alpha1.ConditionControlPlaneAvailable,
+			osacv1alpha1.ConditionWorkersReady,
 			osacv1alpha1.ConditionClusterAvailable,
 			string(osacv1alpha1.ClusterOrderConditionClusterStorageReady),
 			string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady),
@@ -1673,18 +1685,19 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		It("handles every known ClusterOrder condition exactly once", func() {
 			for _, condition := range knownClusterOrderConditions {
 				_, mapped := clusterOrderConditionMappings[condition]
+				_, readiness := clusterOrderReadinessConditionMappings[condition]
 				stage := slices.Contains(clusterOrderProvisioningStages, condition)
 				_, degraded := clusterOrderDegradedConditionSources[condition]
 				_, unsurfaced := clusterOrderUnsurfacedConditions[condition]
 
 				handledCount := 0
-				for _, handled := range []bool{mapped, stage, degraded, unsurfaced} {
+				for _, handled := range []bool{mapped, readiness, stage, degraded, unsurfaced} {
 					if handled {
 						handledCount++
 					}
 				}
 				Expect(handledCount).To(Equal(1),
-					"condition %q must be handled by exactly one of: mapping, provisioning stage, degraded, unsurfaced (got %d)",
+					"condition %q must be handled by exactly one of: mapping, readiness mapping, provisioning stage, degraded, unsurfaced (got %d)",
 					condition, handledCount)
 			}
 		})

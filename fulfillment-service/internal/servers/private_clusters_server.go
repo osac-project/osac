@@ -441,6 +441,8 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 		nodeSetStatus[name] = status
 	}
 	candidate.GetStatus().SetNodeSets(nodeSetStatus)
+	setClusterUpgradeAdmissible(candidate.GetStatus(), nil, false, "AwaitingReadiness",
+		"Observed control-plane and node-pool versions are not yet established.")
 
 	return
 }
@@ -548,21 +550,25 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 		request.GetObject().GetStatus().GetUpgradeAttemptId(),
 		request.GetObject().GetStatus().GetActiveUpgradeAttempt(), resolvedTarget)
 	preserveNodeSetVersions(current, candidate)
-	initializeAddedNodeSetVersions(current, candidate)
+	if err := s.initializeAddedNodeSetVersions(ctx, current, candidate); err != nil {
+		return err
+	}
 	if err := s.prepareClusterVersionChange(ctx, current, candidate, mask, resolvedTarget); err != nil {
 		return err
 	}
-	advanceClusterUpgradeAfterControlPlaneSuccess(candidate)
+	successRelease := advanceClusterUpgradeAfterControlPlaneSuccess(candidate)
+	reconcileClusterUpgradeAdmissibility(current, candidate, successRelease)
 	if err := s.validateUpdatedClusterSpec(ctx, current, candidate, mask); err != nil {
 		return err
 	}
 	return s.prepareUpdatedClusterReferences(ctx, current, candidate, mask, sizeOnlyNodeSets)
 }
 
-// initializeAddedNodeSetVersions seeds the selected version for node sets
-// added by an update. A new node set follows the control-plane version in the
-// candidate Cluster spec.
-func initializeAddedNodeSetVersions(current, candidate *privatev1.Cluster) {
+// initializeAddedNodeSetVersions seeds the selected version and observed
+// baseline for node sets added by an update. The new node set does not join
+// an already active attempt.
+func (s *PrivateClustersServer) initializeAddedNodeSetVersions(ctx context.Context,
+	current, candidate *privatev1.Cluster) error {
 	hasNewNodeSet := false
 	for name, nodeSet := range candidate.GetSpec().GetNodeSets() {
 		if current.GetSpec().GetNodeSets()[name] == nil && nodeSet != nil {
@@ -572,28 +578,24 @@ func initializeAddedNodeSetVersions(current, candidate *privatev1.Cluster) {
 	}
 	selectedVersion := candidate.GetSpec().GetVersion()
 	if !hasNewNodeSet || selectedVersion == nil {
-		return
+		return nil
 	}
-	if !candidate.HasStatus() {
-		candidate.SetStatus(&privatev1.ClusterStatus{})
+
+	version, err := getClusterVersionByID(ctx, s.clusterVersionsDao, selectedVersion.GetId())
+	if err != nil {
+		return err
 	}
-	statuses := candidate.GetStatus().GetNodeSets()
-	if statuses == nil {
-		statuses = map[string]*privatev1.ClusterNodeSetStatus{}
-		candidate.GetStatus().SetNodeSets(statuses)
-	}
+	selectedSemver := version.GetSpec().GetVersion()
+
 	for name, nodeSet := range candidate.GetSpec().GetNodeSets() {
 		if current.GetSpec().GetNodeSets()[name] != nil || nodeSet == nil {
 			continue
 		}
-		status := statuses[name]
-		if status == nil {
-			status = &privatev1.ClusterNodeSetStatus{}
-			statuses[name] = status
-		}
+		status := ensureClusterNodeSetStatus(candidate, name)
 		status.SetVersion(cloneMessage(selectedVersion))
-		status.SetObservedVersion("")
+		status.SetObservedVersion(selectedSemver)
 	}
+	return nil
 }
 
 func (s *PrivateClustersServer) validateUpdatedClusterSpec(ctx context.Context, current, candidate *privatev1.Cluster,

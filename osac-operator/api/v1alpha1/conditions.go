@@ -26,6 +26,8 @@ const (
 	ConditionControlPlaneCreated = "ControlPlaneCreated"
 	// ConditionControlPlaneAvailable indicates the hosted control plane is available.
 	ConditionControlPlaneAvailable = "ControlPlaneAvailable"
+	// ConditionWorkersReady indicates every requested node set has joined and is healthy.
+	ConditionWorkersReady = "WorkersReady"
 	// ConditionClusterAvailable indicates the cluster has reached a fully available state.
 	ConditionClusterAvailable = "ClusterAvailable"
 	// ConditionProgressing indicates the resource is actively being provisioned.

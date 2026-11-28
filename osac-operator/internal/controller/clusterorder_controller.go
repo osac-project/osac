@@ -764,6 +764,12 @@ func (r *ClusterOrderReconciler) handleHostedClusterWithClusterLookup(
 	if err := r.handleNodePools(ctx, instance, nodePools); err != nil {
 		return err
 	}
+	workersReady := nodePoolsMatchRequests(instance.Spec.NodeRequests, nodePools.Items)
+	if workersReady {
+		instance.SetStatusCondition(v1alpha1.ConditionWorkersReady, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+	} else {
+		instance.SetStatusCondition(v1alpha1.ConditionWorkersReady, metav1.ConditionFalse, "", v1alpha1.ReasonWorkersJoining)
+	}
 	recordObservedClusterVersions(instance, hc, nodePools.Items)
 	recordUpgradeObservations(instance, hc, nodePools.Items)
 	// A successful provisioning job only means that the infrastructure request
@@ -1609,6 +1615,12 @@ func (r *ClusterOrderReconciler) initializeStatusConditions(instance *v1alpha1.C
 	r.initializeStatusCondition(
 		instance,
 		v1alpha1.ConditionControlPlaneAvailable,
+		metav1.ConditionFalse,
+		v1alpha1.ReasonInitialized,
+	)
+	r.initializeStatusCondition(
+		instance,
+		v1alpha1.ConditionWorkersReady,
 		metav1.ConditionFalse,
 		v1alpha1.ReasonInitialized,
 	)

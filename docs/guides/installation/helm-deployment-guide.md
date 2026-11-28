@@ -34,6 +34,7 @@ permissions, before installing the platform chart.
 - [When Prerequisites Already Exist](#when-prerequisites-already-exist)
   - [How Toggles Affect Operands](#how-toggles-affect-operands)
   - [Skipping Phase 1 Entirely](#skipping-phase-1-entirely)
+- [MCP endpoint](#mcp-endpoint)
 - [Development-Only Values](#development-only-values)
   - [Infra chart (`osac-infra`) values](#infra-chart-osac-infra-values)
   - [Instance chart (`osac`) values](#instance-chart-osac-values)
@@ -1250,6 +1251,65 @@ charts create and the `osac` release depends on.
 
 If any of these is missing, run the phase-1 installations with the matching
 toggles set to `false`.
+
+## MCP endpoint
+
+The supported installer contract for the Model Context Protocol endpoint is
+`global.mcp`. The previous `service.mcp` values are no longer accepted.
+
+```yaml
+global:
+  mcp:
+    enabled: true
+    publicURL: https://mcp.example.com/
+    issuerURL: https://keycloak.example.com/realms/osac
+    audience: osac-api
+    exchangeTokenEndpoint: https://keycloak.example.com/realms/osac/protocol/openid-connect/token
+    exchangeClientID: https://mcp.example.com/
+    exchangeClientSecret:
+      name: osac-mcp-exchange-credentials
+      key: client-secret
+    trust:
+      mode: configMap
+      configMap: ca-bundle
+    replicas: 2
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    limits:
+      requestSize: 1Mi
+      concurrency: 100
+      timeout: 30s
+```
+
+`publicURL` must be the canonical HTTPS root URL and include the trailing
+slash. `exchangeClientSecret` is a reference to an existing Kubernetes Secret;
+the credential value is never stored in Helm values. `trust.mode` accepts
+`configMap` or `system`. Use `configMap` with the shared `ca-bundle` unless the
+MCP server image already trusts the issuer and Fulfillment API roots.
+
+Disabled installs render no MCP workload, route, runtime metadata, or client
+registration. To migrate an opt-in `service.mcp` deployment, move the values to
+`global.mcp`, set `publicURL` to the previous external HTTPS root URL, and
+provide the exchange token endpoint, client ID, Secret reference, and trust
+source explicitly. Rollback restores the prior chart revision and its values;
+it does not delete existing Fulfillment resources.
+
+The Kind development overlay is:
+
+```bash
+make install PLATFORM=kind PROFILE=dev NS=osac \
+  INFRA_VALUES_EXTRA='--values values/dev/mcp.yaml' \
+  EXTRA_HELM_ARGS='--values values/dev/mcp.yaml'
+```
+
+The infrastructure and instance phases are separate Helm releases. Apply the
+same overlay to both so Keycloak development fixtures and the MCP workload use
+one enablement decision.
 
 ## Development-Only Values
 

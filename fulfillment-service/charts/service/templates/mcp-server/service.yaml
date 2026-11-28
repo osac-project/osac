@@ -11,7 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 specific language governing permissions and limitations under the License.
 */}}
 
-{{- if .Values.mcp.enabled }}
+{{- if .Values.global.mcp.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -22,7 +22,6 @@ metadata:
 spec:
   selector:
     app: fulfillment-mcp-server
-  clusterIP: None
   ports:
   - name: mcp
     port: 8000
@@ -45,8 +44,8 @@ spec:
   ports:
   # Keep names distinct when a Helm upgrade changes externalPort. Kubernetes
   # may temporarily merge the old and new Service ports in one patch.
-  - name: mcp-{{ .Values.mcp.externalPort }}
-    port: {{ .Values.mcp.externalPort }}
+  - name: mcp-{{ include "fulfillment-mcp-server.externalPort" . }}
+    port: {{ include "fulfillment-mcp-server.externalPort" . }}
     targetPort: mcp
 {{- end }}
 {{- end }}

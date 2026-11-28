@@ -1,0 +1,23 @@
+{{/*
+The MCP setup page needs only non-secret runtime metadata. Secret values and
+exchange credentials remain in Kubernetes Secrets and are never rendered here.
+*/}}
+{{- if .Values.global.mcp.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-mcp-runtime
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: osac
+    app.kubernetes.io/component: mcp
+data:
+  OSAC_MCP_PUBLIC_URL: {{ tpl (required "global.mcp.publicURL is required when global.mcp.enabled=true" .Values.global.mcp.publicURL) . | quote }}
+  OSAC_MCP_ISSUER_URL: {{ tpl (required "global.mcp.issuerURL is required when global.mcp.enabled=true" .Values.global.mcp.issuerURL) . | quote }}
+  OSAC_MCP_AUDIENCE: {{ required "global.mcp.audience is required when global.mcp.enabled=true" .Values.global.mcp.audience | quote }}
+  OSAC_MCP_TRUST_MODE: {{ .Values.global.mcp.trust.mode | quote }}
+  {{- if eq .Values.global.mcp.trust.mode "configMap" }}
+  OSAC_MCP_CA_CONFIG_MAP: {{ .Values.global.mcp.trust.configMap | quote }}
+  {{- end }}
+  OSAC_MCP_CHECK_CONNECTION_TOOL: "check_connection"
+{{- end }}

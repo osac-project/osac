@@ -309,8 +309,6 @@ def check_profile_emergency_service_accounts() -> None:
             "service.internalHostname=fulfillment-internal-api.test",
             "--set",
             "service.externalHostname=fulfillment.test",
-            "--set",
-            "service.mcp.externalHostname=mcp.osac.localhost",
         ]
         manifest = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
         docs = [doc for doc in manifest.split("\n---\n") if doc.strip()]

@@ -147,6 +147,236 @@
           },
           "additionalProperties": false
         },
+        "mcp": {
+          "type": "object",
+          "description": "Supported MCP endpoint contract shared by the OSAC installer charts",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Deploy the supported MCP endpoint",
+              "default": false
+            },
+            "publicURL": {
+              "type": "string",
+              "description": "Canonical externally reachable HTTPS MCP root URL, including the trailing slash",
+              "default": ""
+            },
+            "issuerURL": {
+              "type": "string",
+              "description": "HTTPS OAuth issuer URL that signs MCP caller tokens",
+              "default": ""
+            },
+            "audience": {
+              "type": "string",
+              "description": "OAuth audience required in tokens exchanged for Fulfillment API calls",
+              "default": "osac-api",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "exchangeTokenEndpoint": {
+              "type": "string",
+              "description": "HTTPS OAuth token exchange endpoint used by the confidential MCP exchange client",
+              "default": ""
+            },
+            "exchangeClientID": {
+              "type": "string",
+              "description": "Confidential OAuth client ID used for per-caller token exchange",
+              "default": "",
+              "maxLength": 256
+            },
+            "exchangeClientSecret": {
+              "type": "object",
+              "description": "Existing Kubernetes Secret reference for the confidential exchange client credential. The credential value is never stored in Helm values.",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Secret name in the OSAC release namespace",
+                  "default": "",
+                  "maxLength": 253
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Secret key containing the exchange client credential",
+                  "default": "client-secret",
+                  "minLength": 1,
+                  "maxLength": 253
+                }
+              },
+              "required": ["name", "key"],
+              "additionalProperties": false
+            },
+            "trust": {
+              "type": "object",
+              "description": "TLS trust source used by the MCP server",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "description": "Use a PEM ConfigMap or the container image system roots",
+                  "enum": ["system", "configMap"],
+                  "default": "configMap"
+                },
+                "configMap": {
+                  "type": "string",
+                  "description": "ConfigMap in the OSAC release namespace containing a PEM CA bundle",
+                  "default": "",
+                  "maxLength": 253
+                }
+              },
+              "required": ["mode"],
+              "additionalProperties": false
+            },
+            "replicas": {
+              "type": "integer",
+              "description": "MCP server replica count. Supported deployments use at least two replicas.",
+              "minimum": 2,
+              "maximum": 100,
+              "default": 2
+            },
+            "resources": {
+              "type": "object",
+              "description": "Kubernetes CPU and memory resources for each MCP server container",
+              "required": ["requests", "limits"],
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "description": "Guaranteed CPU and memory requests",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": {
+                      "type": "string",
+                      "description": "Kubernetes CPU quantity",
+                      "minLength": 1,
+                      "default": "50m"
+                    },
+                    "memory": {
+                      "type": "string",
+                      "description": "Kubernetes memory quantity",
+                      "minLength": 1,
+                      "default": "128Mi"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "description": "Maximum CPU and memory limits",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": {
+                      "type": "string",
+                      "description": "Kubernetes CPU quantity",
+                      "minLength": 1,
+                      "default": "500m"
+                    },
+                    "memory": {
+                      "type": "string",
+                      "description": "Kubernetes memory quantity",
+                      "minLength": 1,
+                      "default": "512Mi"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "limits": {
+              "type": "object",
+              "description": "Supported request-size, concurrency, and timeout settings reserved for the MCP runtime contract",
+              "required": ["requestSize", "concurrency", "timeout"],
+              "properties": {
+                "requestSize": {
+                  "type": "string",
+                  "description": "Maximum accepted MCP request body size as a Kubernetes quantity",
+                  "minLength": 1,
+                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?:E|P|T|G|M|k|Ei|Pi|Ti|Gi|Mi|Ki)?$",
+                  "default": "1Mi"
+                },
+                "concurrency": {
+                  "type": "integer",
+                  "description": "Maximum concurrent in-flight MCP requests across the deployment",
+                  "minimum": 1,
+                  "maximum": 100000,
+                  "default": 100
+                },
+                "timeout": {
+                  "type": "string",
+                  "description": "Maximum MCP request duration as a Go duration",
+                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?:ns|us|µs|ms|s|m|h)$",
+                  "default": "30s"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "enabled": {"const": true}
+                }
+              },
+              "then": {
+                "required": [
+                  "publicURL",
+                  "issuerURL",
+                  "audience",
+                  "exchangeTokenEndpoint",
+                  "exchangeClientID",
+                  "exchangeClientSecret",
+                  "trust",
+                  "replicas",
+                  "resources",
+                  "limits"
+                ],
+                "properties": {
+                  "publicURL": {
+                    "pattern": "^https://(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:.]+\\])(?::[0-9]{1,5})?/$"
+                  },
+                  "issuerURL": {
+                    "pattern": "^https://[^\\s?#]+$"
+                  },
+                  "exchangeTokenEndpoint": {
+                    "pattern": "^https://[^\\s?#]+$"
+                  },
+                  "exchangeClientID": {
+                    "minLength": 1
+                  },
+                  "exchangeClientSecret": {
+                    "properties": {
+                      "name": {"minLength": 1}
+                    }
+                  }
+                }
+              }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "enabled": {"const": true},
+                      "trust": {
+                        "properties": {
+                          "mode": {"const": "configMap"}
+                        },
+                        "required": ["mode"]
+                      }
+                    },
+                    "required": ["enabled", "trust"]
+                  },
+                  "then": {
+                    "properties": {
+                      "trust": {
+                        "required": ["configMap"],
+                        "properties": {
+                          "configMap": {"minLength": 1}
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+          "additionalProperties": false
+        },
         "services": {
           "type": "object",
           "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components. At least one tier must be enabled.",
@@ -805,74 +1035,6 @@
           "type": "string",
           "minLength": 1,
           "description": "Hostname for the internal API Route"
-        },
-        "mcp": {
-          "type": "object",
-          "description": "Optional fulfillment MCP endpoint",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Deploy the fulfillment MCP server",
-              "default": false
-            },
-            "externalHostname": {
-              "type": "string",
-              "description": "DNS hostname advertised by the MCP server; Kind requires mcp.<namespace>.localhost"
-            },
-            "externalPort": {
-              "type": "integer",
-              "description": "Externally reachable TLS port for the MCP server; OpenShift Routes require 443",
-              "minimum": 1,
-              "maximum": 65535,
-              "default": 443
-            },
-            "exchangeClientId": {
-              "type": "string",
-              "description": "Confidential OAuth token exchange client ID; use the MCP resource URL ending in / for Keycloak audience validation"
-            },
-            "exchangeCredentialsSecret": {
-              "type": "string",
-              "description": "Secret containing client-secret for the MCP token exchange client"
-            },
-            "resources": {
-              "type": "object",
-              "description": "CPU and memory resources for the MCP server container",
-              "required": ["requests", "limits"],
-              "properties": {
-                "requests": {
-                  "type": "object",
-                  "required": ["cpu", "memory"],
-                  "properties": {
-                    "cpu": {"type": "string", "minLength": 1, "default": "50m"},
-                    "memory": {"type": "string", "minLength": 1, "default": "128Mi"}
-                  },
-                  "additionalProperties": false
-                },
-                "limits": {
-                  "type": "object",
-                  "required": ["cpu", "memory"],
-                  "properties": {
-                    "cpu": {"type": "string", "minLength": 1, "default": "500m"},
-                    "memory": {"type": "string", "minLength": 1, "default": "512Mi"}
-                  },
-                  "additionalProperties": false
-                }
-              },
-              "additionalProperties": false
-            }
-          },
-          "allOf": [{
-            "if": {"properties": {"enabled": {"const": true}}},
-            "then": {
-              "required": ["externalHostname", "exchangeClientId", "exchangeCredentialsSecret"],
-              "properties": {
-                "externalHostname": {"minLength": 1},
-                "exchangeClientId": {"minLength": 1},
-                "exchangeCredentialsSecret": {"minLength": 1}
-              }
-            }
-          }],
-          "additionalProperties": false
         },
         "variant": {
           "type": "string",

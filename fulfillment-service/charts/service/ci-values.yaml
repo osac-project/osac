@@ -15,6 +15,33 @@
 # `helm lint`/`helm template` can exercise every template. Not used for real deploys -- see
 # values.yaml for the real, documented defaults and the actual deploy-time overrides.
 
+global:
+  mcp:
+    enabled: true
+    publicURL: https://mcp.default.localhost/
+    issuerURL: https://issuer.ci.example.com
+    audience: osac-api
+    exchangeTokenEndpoint: https://issuer.ci.example.com/token
+    exchangeClientID: https://mcp.default.localhost/
+    exchangeClientSecret:
+      name: ci-mcp-exchange-credentials
+      key: client-secret
+    trust:
+      mode: configMap
+      configMap: ci-ca-bundle
+    replicas: 2
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    limits:
+      requestSize: 1Mi
+      concurrency: 100
+      timeout: 30s
+
 certs:
   issuerRef:
     name: ci-selfsigned-issuer
@@ -23,14 +50,6 @@ certs:
 
 externalHostname: fulfillment-api.ci.example.com
 internalHostname: fulfillment-internal-api.ci.example.com
-
-# Exercise the opt-in MCP templates in the existing chart lint/render job.
-mcp:
-  enabled: true
-  externalHostname: mcp.default.localhost
-  externalPort: 443
-  exchangeClientId: https://mcp.default.localhost/
-  exchangeCredentialsSecret: ci-mcp-exchange-credentials
 
 auth:
   issuerUrl: https://issuer.ci.example.com

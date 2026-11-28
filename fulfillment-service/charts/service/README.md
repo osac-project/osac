@@ -29,10 +29,17 @@ The following table lists the configurable parameters of the chart and their def
 | `externalHostname`         | Hostname used to access the public API via the external network                   | Required                                                       |
 | `internalHostname`         | Hostname used to access both the public and private APIs via the internal network | Required                                                       |
 | `auth.issuerUrl`           | OAuth issuer URL for authentication                                               | `https://keycloak.keycloak.svc.cluster.local:8000/realms/osac` |
-| `mcp.enabled`              | Deploy the optional MCP endpoint                                                  | `false`                                                        |
-| `mcp.externalHostname`     | Public DNS hostname of the MCP resource; Kind requires `mcp.<namespace>.localhost` | Empty; required when MCP is enabled                            |
-| `mcp.exchangeClientId`     | Confidential OAuth exchange client ID                                             | Empty; required when MCP is enabled                            |
-| `mcp.exchangeCredentialsSecret` | Secret in the release namespace containing `client-secret`                  | Empty; required when MCP is enabled                            |
+| `global.mcp.enabled`       | Deploy the supported MCP endpoint                                                 | `false`                                                        |
+| `global.mcp.publicURL`     | Canonical external HTTPS MCP URL, including the trailing `/`                     | Empty; required when MCP is enabled                            |
+| `global.mcp.issuerURL`     | OAuth issuer URL for MCP caller tokens                                           | Empty; required when MCP is enabled                            |
+| `global.mcp.audience`      | OAuth audience required by exchanged Fulfillment API tokens                      | `osac-api`                                                     |
+| `global.mcp.exchangeTokenEndpoint` | OAuth token exchange endpoint                                             | Empty; required when MCP is enabled                            |
+| `global.mcp.exchangeClientID` | Confidential OAuth exchange client ID                                          | Empty; required when MCP is enabled                            |
+| `global.mcp.exchangeClientSecret` | Existing Secret reference for the exchange client credential; the value is never in Helm values | Empty; required when MCP is enabled |
+| `global.mcp.trust`         | MCP TLS trust mode and optional PEM ConfigMap source                             | `configMap`; `configMap` is required when enabled              |
+| `global.mcp.replicas`      | MCP server replica count                                                         | `2`                                                            |
+| `global.mcp.resources`     | Per-pod CPU and memory requests and limits                                       | `50m`/`128Mi`, `500m`/`512Mi`                                 |
+| `global.mcp.limits`        | Request size, concurrency, and timeout settings                                  | `1Mi`, `100`, `30s`                                            |
 | `log.level`                | Log level for all components (debug, info, warn, error)                           | `info`                                                         |
 | `log.headers`              | Enable logging of HTTP/gRPC headers                                               | `false`                                                        |
 | `log.bodies`               | Enable logging of HTTP/gRPC request and response bodies                           | `false`                                                        |
@@ -59,9 +66,8 @@ is not already trusted.
 
 When MCP is enabled, register a dedicated confidential OAuth token-exchange
 client with the authorization server. The MCP ingress accepts tokens addressed
-to `https://<mcp.externalHostname>/` (including `:<mcp.externalPort>` before
-the slash when it is not 443). Use that exact URL, including the slash, for
-the exchange client ID and the authorization server's resource URI. The
+to `global.mcp.publicURL`. Use that exact URL, including the slash, for the
+exchange client ID and the authorization server's resource URI. The
 exchange client must be allowed to receive those tokens and mint
 a separate `osac-api` access token for the same user. Its default scopes must
 include OSAC's identity claims (`username`, `groups`, `organization`, and

@@ -65,6 +65,7 @@ Focused contracts, selected by the changed wiring:
 | MCE defaults and lifecycle gate | `make mce-render-test` |
 | Optional LVMS worker/device allowlist | `make lvms-optional-path-render-test` |
 | Fulfillment trust and CA mounts | `make fulfillment-trust-render-test` |
+| Supported MCP installer contract and `global.mcp` wiring | `make mcp-render-test` |
 | Service-account IDP credentials and realm roles | `make service-account-idp-render-test` |
 | Fulfillment hook token exchange and dev-full wiring | `make fulfillment-auth-test dev-full-render-test` |
 | Billing provider mounts and tuning bounds | `make billing-render-test` |

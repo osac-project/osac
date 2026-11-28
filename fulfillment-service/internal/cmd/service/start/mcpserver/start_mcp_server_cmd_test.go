@@ -17,7 +17,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -67,6 +69,20 @@ var _ = Describe("Cmd", func() {
 		Expect(cmd.Flags().Lookup("ca-file")).ToNot(BeNil())
 	})
 
+	It("Has MCP runtime-limit flags with supported defaults", func() {
+		cmd := Cmd()
+		flags := cmd.Flags()
+		requestBodyLimit := flags.Lookup("mcp-request-body-limit")
+		concurrencyLimit := flags.Lookup("mcp-concurrency-limit")
+		requestTimeout := flags.Lookup("mcp-request-timeout")
+		Expect(requestBodyLimit).ToNot(BeNil())
+		Expect(requestBodyLimit.DefValue).To(Equal("1Mi"))
+		Expect(concurrencyLimit).ToNot(BeNil())
+		Expect(concurrencyLimit.DefValue).To(Equal("100"))
+		Expect(requestTimeout).ToNot(BeNil())
+		Expect(requestTimeout.DefValue).To(Equal("30s"))
+	})
+
 	It("Has an --oauth-authorization-server flag", func() {
 		cmd := Cmd()
 		Expect(cmd.Flags().Lookup("oauth-authorization-server")).ToNot(BeNil())
@@ -77,9 +93,115 @@ var _ = Describe("Cmd", func() {
 		Expect(cmd.Flags().Lookup("oauth-resource-url")).ToNot(BeNil())
 	})
 
+	It("Has an --oauth-api-audience flag with the canonical default", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("oauth-api-audience")
+		Expect(flag).ToNot(BeNil())
+		Expect(flag.DefValue).To(Equal(auth.Audience))
+	})
+
 	It("Accepts no arguments", func() {
 		cmd := Cmd()
 		Expect(cmd.Args).ToNot(BeNil())
+	})
+})
+
+var _ = Describe("runtime limits", func() {
+	It("parses positive Kubernetes request-size quantities", func() {
+		size, err := parseRequestBodyLimit("64Ki")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(size).To(Equal(int64(64 * 1024)))
+	})
+
+	It("rejects unsupported request-size spellings and non-positive values", func() {
+		for _, value := range []string{
+			"64ki", "not-a-quantity", "0", "-1Ki", "18446744073709551617",
+		} {
+			_, err := parseRequestBodyLimit(value)
+			Expect(err).To(HaveOccurred(), value)
+		}
+	})
+
+	It("forwards runtime-limit options through NewHandler", func() {
+		validator := auth.NewMockJwtValidator(gomock.NewController(GinkgoT()))
+		_, err := NewHandler(
+			ServerDeps{}, validator, "", "", testExchanger,
+			WithRuntimeLimits(RuntimeLimits{RequestBodySize: 1, Concurrency: 0, Timeout: time.Second}),
+		)
+		Expect(err).To(MatchError("MCP concurrency limit must be positive"))
+	})
+
+	It("rejects invalid runtime limits", func() {
+		validator := auth.NewMockJwtValidator(gomock.NewController(GinkgoT()))
+		for _, limits := range []RuntimeLimits{
+			{RequestBodySize: 0, Concurrency: 1, Timeout: time.Second},
+			{RequestBodySize: 1, Concurrency: 0, Timeout: time.Second},
+			{RequestBodySize: 1, Concurrency: 1, Timeout: 0},
+		} {
+			_, err := NewHandlerWithOptions(
+				ServerDeps{}, validator, "", "", testExchanger, WithRuntimeLimits(limits),
+			)
+			Expect(err).To(HaveOccurred())
+		}
+	})
+
+	It("bounds request duration with the request context", func() {
+		handler := newRuntimeLimitsMiddleware(1, 10*time.Millisecond)(http.HandlerFunc(func(
+			writer http.ResponseWriter, request *http.Request,
+		) {
+			<-request.Context().Done()
+		}))
+
+		completed := make(chan struct{})
+		request := httptest.NewRequest(http.MethodPost, "/", nil)
+		recorder := httptest.NewRecorder()
+		go func() {
+			defer close(completed)
+			handler.ServeHTTP(recorder, request)
+		}()
+		Eventually(completed).Should(BeClosed())
+	})
+
+	It("interrupts an incomplete request body over a real connection", func() {
+		completed := make(chan struct{})
+		handler := newRuntimeLimitsMiddleware(1, 20*time.Millisecond)(http.HandlerFunc(func(
+			writer http.ResponseWriter, request *http.Request,
+		) {
+			defer close(completed)
+			_, _ = io.Copy(io.Discard, request.Body)
+		}))
+		server := httptest.NewServer(handler)
+		DeferCleanup(server.Close)
+
+		connection, err := net.Dial("tcp", server.Listener.Addr().String())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(connection.Close)
+		_, err = connection.Write([]byte("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nshort"))
+		Expect(err).ToNot(HaveOccurred())
+
+		Eventually(completed).Should(BeClosed())
+	})
+
+	It("rejects requests while the concurrency limit is exhausted", func() {
+		blocked := make(chan struct{})
+		release := make(chan struct{})
+		DeferCleanup(func() { close(release) })
+		handler := newRuntimeLimitsMiddleware(1, time.Minute)(http.HandlerFunc(func(
+			writer http.ResponseWriter, request *http.Request,
+		) {
+			close(blocked)
+			<-release
+		}))
+
+		go func() {
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", nil))
+		}()
+		Eventually(blocked).Should(BeClosed())
+
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/", nil))
+		Expect(recorder.Code).To(Equal(http.StatusServiceUnavailable))
+		Expect(recorder.Header().Get("Retry-After")).To(Equal("1"))
 	})
 })
 

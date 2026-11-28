@@ -713,6 +713,12 @@ automatically by Phase 1. Each is gated by a values toggle (e.g.,
 for details on what each prerequisite provides. For a custom MetalLB
 **IPAddressPool**, see [MetalLB address pool](#metallb-address-pool) below.
 
+The supported MCP endpoint is configured through `global.mcp`. The Kind
+development overlay is `values/dev/mcp.yaml`. The infrastructure and instance
+phases are separate Helm releases, so apply it to both; see the
+[MCP endpoint](../docs/guides/installation/helm-deployment-guide.md#mcp-endpoint)
+section for the full contract and migration guidance.
+
 Standalone MCE is disabled by default. Set `mce.enabled: true` in the
 infrastructure values when this installation owns its lifecycle; the `caas-ci`
 profile does so explicitly. Leave it `false` when RHACM or an existing MCE

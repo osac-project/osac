@@ -68,9 +68,11 @@ fulfillment-json-report = $(if $(strip $(FULFILLMENT_IT_REPORT_DIR)),--json-repo
 JUNIT_REPORT_DIR ?=
 junit-report = $(if $(strip $(JUNIT_REPORT_DIR)),--junit-report="$(abspath $(JUNIT_REPORT_DIR)/$(1).xml)")
 MCP_TEST_ENABLED ?= false
+MCP_INFRA_HELM_ARGS :=
 
 ifeq ($(MCP_TEST_ENABLED),true)
-MCP_TEST_HELM_ARGS := --set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443
+MCP_TEST_HELM_ARGS := --values values/dev/mcp.yaml
+MCP_INFRA_HELM_ARGS := --values values/dev/mcp.yaml
 MCP_TEST_URL := https://mcp.osac.localhost:8443
 endif
 DRY_RUN ?= 0
@@ -351,6 +353,10 @@ INSTANCE_VALUES_EXTRA := -f values/bmaas-netbox-ci/instance.yaml
 else ifdef PROFILE
 INFRA_VALUES    := values/$(PROFILE)/infra.yaml
 INSTANCE_VALUES := values/$(PROFILE)/instance.yaml
+endif
+
+ifneq ($(strip $(MCP_INFRA_HELM_ARGS)),)
+INFRA_HELM_ARGS += $(MCP_INFRA_HELM_ARGS)
 endif
 
 # install-multicluster's recipe passes the multicluster infra overlay to its
@@ -1478,6 +1484,10 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
 
+.PHONY: mcp-render-test
+mcp-render-test: helm-deps helm-infra-deps ## Check the supported MCP installer contract
+	python3 scripts/test-mcp-render.py
+
 .PHONY: service-account-idp-render-test
 service-account-idp-render-test: helm-infra-deps helm-osac-deps ## Check service-account management credentials and realm permissions
 	python3 scripts/test-service-account-idp-render.py
@@ -1551,7 +1561,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test mcp-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

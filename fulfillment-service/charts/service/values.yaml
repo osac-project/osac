@@ -28,6 +28,33 @@ global:
     # Canonical IPv4 CIDRs that the provider's infrastructure uses. VirtualNetwork, ExternalIPPool and Cluster
     # ranges can't overlap them.
     excludedIpv4Cidrs: []
+  # Supported MCP endpoint contract. The umbrella installer normally supplies
+  # these values; direct chart users set them under global.mcp as well.
+  mcp:
+    enabled: false
+    publicURL: ""
+    issuerURL: ""
+    audience: "osac-api"
+    exchangeTokenEndpoint: ""
+    exchangeClientID: ""
+    exchangeClientSecret:
+      name: ""
+      key: "client-secret"
+    trust:
+      mode: "configMap"
+      configMap: ""
+    replicas: 2
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    limits:
+      requestSize: "1Mi"
+      concurrency: 100
+      timeout: "30s"
 
 # Controller configuration:
 controller:
@@ -69,24 +96,6 @@ externalHostname:
 # is protected by authentication and authorization, but it is good practice to add network-level isolation as an
 # additional layer of defense.
 internalHostname:
-
-# MCP is an opt-in integration endpoint.
-# Custom external ports are supported on Kind; OpenShift Routes use HTTPS port 443.
-mcp:
-  enabled: false
-  externalHostname: ""
-  externalPort: 443
-  # Dedicated confidential OAuth client registered for token exchange. Its
-  # credentials Secret must contain client-secret and live in this namespace.
-  exchangeClientId: ""
-  exchangeCredentialsSecret: ""
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
 
 # Authentication and authorization configuration:
 auth:

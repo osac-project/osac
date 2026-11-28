@@ -11,7 +11,7 @@ Run `make help` to list the test targets.
 |---|---|---|---|
 | Unit | `make kind-runtime-test` | Makefile/runtime routing and shell behavior | Container engines, Helm, host privilege changes and downloads are command stubs |
 | Unit | `make infra-ready-wait-test` | The readiness waits that end `make install-infra` fail the step naming a dependency that never becomes ready | Commands and time are mocked through a stub `kubectl`; no cluster is started |
-| Contract (Helm render) | `make mce-render-test`, `make fulfillment-trust-render-test`, `make helm-networking-test` | Production chart templates and their configuration contracts | No Kubernetes API, running hooks, MCE catalog, deployed TLS or provider calls |
+| Contract (Helm render) | `make mce-render-test`, `make fulfillment-trust-render-test`, `make mcp-render-test`, `make helm-networking-test` | Production chart templates and their configuration contracts | No Kubernetes API, running hooks, MCE catalog, deployed TLS or OAuth, or provider calls |
 | Component integration | `make test` (suite selection in `make help`) | Current images and chart wiring in Kind | Depends on the selected suite; provider networking is disabled in the standard profile |
 
 The installer networking checks script under `scripts/` runs against the

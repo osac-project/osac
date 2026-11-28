@@ -556,6 +556,17 @@ spec:
     {{- end }}
     termination: {{ if .Values.keycloak.route.publicIngress }}reencrypt{{ else }}passthrough{{ end }}
 {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-mcp-reconciler
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+data:
+  reconcile_mcp_exchange_client.py: |
+{{ .Files.Get "files/hooks/reconcile_mcp_exchange_client.py" | indent 4 }}
 {{- if .Values.keycloak.devFixtures.enabled }}
 ---
 apiVersion: v1
@@ -568,6 +579,85 @@ metadata:
 data:
   client.json: |
 {{ .Files.Get "files/mcp-client.json" | indent 4 }}
+{{- end }}
+{{- if not .Values.keycloak.devFixtures.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-reconcile-mcp-scope
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "16"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "osac-infra.cliJobPodSecurityContext" . | nindent 8 }}
+      containers:
+      - name: reconcile-mcp-scope
+        image: {{ .Values.cliImage }}
+        command: ["python3", "/mcp-reconciler/reconcile_mcp_exchange_client.py"]
+        env:
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+        - name: KEYCLOAK_URL
+          value: https://keycloak:443
+        - name: KEYCLOAK_CA_PATH
+          value: /etc/keycloak/ca/ca.crt
+        - name: ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-username
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-password
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - "ALL"
+        volumeMounts:
+        - name: mcp-reconciler
+          mountPath: /mcp-reconciler
+          readOnly: true
+        - name: keycloak-ca
+          mountPath: /etc/keycloak/ca
+          readOnly: true
+      volumes:
+      - name: mcp-reconciler
+        configMap:
+          name: keycloak-mcp-reconciler
+          defaultMode: 0444
+      - name: keycloak-ca
+        secret:
+          secretName: keycloak-tls-cert
+          items:
+          - key: ca.crt
+            path: ca.crt
+          defaultMode: 0444
+{{- end }}
+{{- if .Values.keycloak.devFixtures.enabled }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -625,27 +715,6 @@ data:
       keycloak_curl -sf -X PUT \
         "https://keycloak:443/admin/realms/osac/clients/${client_uuid}/optional-client-scopes/${scope_uuid}" \
         -H "Authorization: Bearer ${token}"
-    }
-
-    ensure_mcp_exchange_client() {
-      local token client_uuid payload
-      token="$(keycloak_curl -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
-        -H 'Content-Type: application/x-www-form-urlencoded' \
-        -d 'grant_type=password' -d 'client_id=admin-cli' \
-        --data-urlencode "username=${ADMIN_USERNAME}" \
-        --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")"
-      client_uuid="$(keycloak_curl -sfG 'https://keycloak:443/admin/realms/osac/clients' \
-        --data-urlencode "clientId=${MCP_RESOURCE_URL}" \
-        -H "Authorization: Bearer ${token}" | \
-        python3 -c 'import sys,json,os; print(next((x["id"] for x in json.load(sys.stdin) if x["clientId"]==os.environ["MCP_RESOURCE_URL"]), ""))')"
-      payload="$(python3 -c 'import json,os; print(json.dumps({"clientId":os.environ["MCP_RESOURCE_URL"],"name":"OSAC MCP resource and exchange client","enabled":True,"protocol":"openid-connect","publicClient":False,"secret":os.environ["MCP_EXCHANGE_SECRET"],"standardFlowEnabled":False,"directAccessGrantsEnabled":False,"serviceAccountsEnabled":False,"fullScopeAllowed":True,"defaultClientScopes":["groups","basic","username","organization","roles","osac-api"],"attributes":{"standard.token.exchange.enabled":"true","resource_url":os.environ["MCP_RESOURCE_URL"]}}))')"
-      if [[ -n "${client_uuid}" ]]; then
-        printf '%s' "${payload}" | keycloak_curl -sf -X PUT "https://keycloak:443/admin/realms/osac/clients/${client_uuid}" \
-          -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' --data-binary @-
-      else
-        printf '%s' "${payload}" | keycloak_curl -sf -X POST https://keycloak:443/admin/realms/osac/clients \
-          -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' --data-binary @-
-      fi
     }
 
     ensure_controller_idp_roles() {
@@ -824,7 +893,7 @@ data:
     set_password "your_user" "${DEFAULT_USER_PASSWORD}"
 
     echo "All demo-user passwords set"
-    ensure_mcp_exchange_client
+    python3 /mcp-reconciler/reconcile_mcp_exchange_client.py
     ensure_mcp_client
     ensure_controller_idp_roles
     ensure_service_account_registration_policies
@@ -848,6 +917,9 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "osac-infra.cliJobPodSecurityContext" . | nindent 8 }}
       containers:
       - name: set-passwords
         image: {{ .Values.cliImage }}
@@ -857,6 +929,12 @@ spec:
         env:
         - name: HOME
           value: /tmp
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+        - name: KEYCLOAK_URL
+          value: https://keycloak:443
+        - name: KEYCLOAK_CA_PATH
+          value: /etc/keycloak/ca/ca.crt
         - name: ADMIN_USERNAME
           valueFrom:
             secretKeyRef:
@@ -898,6 +976,9 @@ spec:
         - name: mcp-client
           mountPath: /mcp-client
           readOnly: true
+        - name: mcp-reconciler
+          mountPath: /mcp-reconciler
+          readOnly: true
         - name: keycloak-ca
           mountPath: /etc/keycloak/ca
           readOnly: true
@@ -911,6 +992,10 @@ spec:
       - name: mcp-client
         configMap:
           name: keycloak-mcp-client
+      - name: mcp-reconciler
+        configMap:
+          name: keycloak-mcp-reconciler
+          defaultMode: 0444
       - name: keycloak-ca
         secret:
           secretName: keycloak-tls-cert

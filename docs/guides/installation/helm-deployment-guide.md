@@ -551,6 +551,23 @@ helm upgrade --install osac-infra ./charts/osac-infra \
     --wait-for-jobs --timeout 30m
 ```
 
+When bundled Keycloak is enabled, `osac-infra` reconciles the `osac-api`
+client scope, its audience mapper, and the scope's first-party client
+assignments during install and upgrade. This repairs an existing realm without
+requiring `keycloak.realmOverwrite`. When `keycloak.enabled` is `false`,
+configure the same scope, mapper, and default-scope assignment in the external
+realm. If MCP token exchange fails, inspect the Keycloak hook job logs; the
+exchanged token must contain the `osac-api` audience.
+
+For an external realm, create a client scope named `osac-api` with
+`include.in.token.scope` set to `false`. Add the `osac-api-aud` audience mapper
+to that scope with type `oidc-audience-mapper`, protocol `openid-connect`,
+consent not required, `included.custom.audience` set to `osac-api`, and
+`access.token.claim` set to `true`. Assign `osac-api` as a default client scope
+on `osac-cli`, `osac-ui`, `osac-admin`, `osac-ui-backend`, and
+`osac-csi-driver`. Also assign it to the confidential MCP token-exchange client
+whose client ID is the canonical MCP public URL ending in `/`.
+
 ### Phase 2: install the OSAC platform
 
 Use Helm 4 when it supports your cluster's Kubernetes version. Helm 4 is

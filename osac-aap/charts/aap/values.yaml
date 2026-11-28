@@ -51,8 +51,9 @@ bootstrap:
 vcluster:
   # Base URL of the vcluster API as the AAP controller reaches it: a TLS SAN
   # the vcluster carries, for example
-  # https://pr2100v1.vc-pr2100v1.svc.cluster.local. Must be an http(s) URL
-  # without a path; the credential uses it as the API host.
+  # https://pr2100v1.vc-pr2100v1.svc.cluster.local. Must be an https:// URL
+  # without a path: the controller sends the token there as a bearer
+  # credential.
   apiServerUrl: ""
   # Secret, in the release namespace, holding the vcluster service-account
   # token (a long-lived cluster-admin token minted in the vcluster) that the

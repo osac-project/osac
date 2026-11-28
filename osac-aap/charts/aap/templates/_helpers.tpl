@@ -82,20 +82,21 @@ must be an http(s) URL without a path, because callers append
 {{/*
 The run's vcluster API URL (the umbrella chart's aap.vcluster.apiServerUrl).
 Empty leaves every vcluster wiring out of the render. A non-empty value must
-be an http(s) URL without a path (the AAP credential uses it as the API host)
-and must come with vcluster.tokenSecret.name and .key: the controller reads
-the bearer token from that Secret, so a half-set pair would configure a
-credential that cannot work. Each check fails the render naming what is
-missing; config-as-code-secret.yaml always renders, so the validation always
-runs. Include this in an {{ if }} to gate vcluster-only template sections.
+be an https:// URL without a path (the AAP credential uses it as the API host,
+and the job pods' bearer token is sent there), and must come with
+vcluster.tokenSecret.name and .key: the controller reads the bearer token from
+that Secret, so a half-set pair would configure a credential that cannot work.
+Each check fails the render naming what is missing; config-as-code-secret.yaml
+always renders, so the validation always runs. Include this in an {{ if }} to
+gate vcluster-only template sections.
 */}}
 {{- define "osac-aap.vclusterApiServerUrl" -}}
 {{- $url := .Values.vcluster.apiServerUrl | toString -}}
 {{- $secretName := .Values.vcluster.tokenSecret.name | toString -}}
 {{- $secretKey := .Values.vcluster.tokenSecret.key | toString -}}
 {{- if $url -}}
-{{- if not (regexMatch "^https?://[^/?#\\[\\s]+$" $url) }}
-{{- fail (printf "vcluster.apiServerUrl must be an http(s) URL without a path, for example https://pr2100v1.vc-pr2100v1.svc.cluster.local (got %q)" $url) }}
+{{- if not (regexMatch "^https://[^/?#\\[\\s]+$" $url) }}
+{{- fail (printf "vcluster.apiServerUrl must be an https:// URL without a path, for example https://pr2100v1.vc-pr2100v1.svc.cluster.local (got %q)" $url) }}
 {{- end -}}
 {{- if not $secretName -}}
 {{- fail "vcluster.tokenSecret.name is required when vcluster.apiServerUrl is set" }}

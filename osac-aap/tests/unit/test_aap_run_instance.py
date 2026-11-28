@@ -201,7 +201,19 @@ def test_malformed_vcluster_url_fails_the_render():
     )
 
     assert result.returncode != 0
-    assert "vcluster.apiServerUrl must be an http(s) URL without a path" in result.stderr
+    assert "vcluster.apiServerUrl must be an https:// URL without a path" in result.stderr
+
+
+def test_plain_http_vcluster_url_fails_the_render():
+    # The controller sends the token to this URL as a bearer credential.
+    result = _render(
+        "vcluster.apiServerUrl=http://pr2100v1.vc-pr2100v1.svc.cluster.local",
+        "vcluster.tokenSecret.name=pr2100v1-vcluster-token",
+        "vcluster.tokenSecret.key=token",
+    )
+
+    assert result.returncode != 0
+    assert "vcluster.apiServerUrl must be an https:// URL without a path" in result.stderr
 
 
 # --- The roles' run-ID plumbing (group_vars/all/osac_instance.yaml) ---

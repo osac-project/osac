@@ -1642,6 +1642,19 @@
                       "type": "string",
                       "description": "Internal network CIDR for API access"
                     },
+                    "CI_GUEST_INGRESS_IP_RANGE": {
+                      "type": "string",
+                      "description": "Provider-reserved IPv4 range for CaaS guest ingress VIPs, written as <first>-<last> with full addresses, for example 10.10.0.240-10.10.0.243. The create-hosted-cluster job reserves one address per ClusterOrder from it and holds the claim until teardown, so the CI fabric must route the whole range to guest workers. Required with CaaS; empty leaves it unset and the job fails with guidance.",
+                      "default": "",
+                      "anyOf": [
+                        {
+                          "enum": [""]
+                        },
+                        {
+                          "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])-((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"
+                        }
+                      ]
+                    },
                     "HOSTED_CLUSTER_BASE_DOMAIN": {
                       "type": "string",
                       "description": "Base domain for hosted clusters"

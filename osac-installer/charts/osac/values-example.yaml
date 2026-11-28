@@ -355,6 +355,9 @@ aap:
         EXTERNAL_ACCESS_BASE_DOMAIN: ""
         EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: ""
         EXTERNAL_ACCESS_API_INTERNAL_NETWORK: ""
+        # Provider-reserved IPv4 range for CaaS guest ingress VIPs, written as
+        # <first>-<last> with full addresses (10.10.0.240-10.10.0.243).
+        CI_GUEST_INGRESS_IP_RANGE: ""
         HOSTED_CLUSTER_BASE_DOMAIN: ""
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""

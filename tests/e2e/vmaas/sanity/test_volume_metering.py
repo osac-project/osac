@@ -66,6 +66,23 @@ def test_volume_bills_gibibyte_seconds(
 ) -> None:
     """An AVAILABLE volume bills capacity x size per interval; deletion bills the
     final partial interval up to the recorded deletion, then ends billing."""
+    # The volume phase only moves past Progressing when the operator has a
+    # vendor provisioner (e.g. the in-cluster LVMS controller). The vcluster
+    # CI flavor runs without one — the CRDs it watches do not exist in a
+    # vanilla Kubernetes vcluster — so the volume can never become AVAILABLE
+    # and the test would wait its full budget for a state that cannot occur.
+    import os
+
+    from tests.e2e.core.runner import run_unchecked
+
+    vendor_env, _ = run_unchecked(
+        "kubectl", "get", "deployment", "osac-operator", "-n",
+        os.environ.get("OSAC_NAMESPACE", "osac"), "-o",
+        "jsonpath={.spec.template.spec.containers[0].env[?(@.name=='OSAC_VENDOR_CONTROLLERS')].value}",
+        timeout=60,
+    )
+    if not vendor_env.strip():
+        pytest.skip("no vendor volume provisioner configured; volume cannot become AVAILABLE in this flavor")
     node = run("kubectl", "get", "nodes", "-o", "jsonpath={.items[0].metadata.name}")
     name = unique_name("e2e-volume-metering")
     response: dict[str, Any] = private_grpc.call(

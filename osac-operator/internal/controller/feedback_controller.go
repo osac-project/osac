@@ -204,7 +204,7 @@ func newClusterOrderSyncUpdate(hubClient clnt.Client,
 		syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
 		syncClusterOrderObservedVersions(clusterOrder, remote)
 		syncClusterOrderUpgradeObservationsAt(clusterOrder, remote, time.Now(), timeouts)
-		if err := syncRemovedNodeSetUpgrades(ctx, infrastructureClient, clusterOrder, remote); err != nil {
+		if err := pruneRemovedNodeSetStatuses(ctx, infrastructureClient, clusterOrder, remote); err != nil {
 			return err
 		}
 		syncClusterOrderAddOnOperators(clusterOrder, remote)

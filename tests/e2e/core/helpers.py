@@ -2013,9 +2013,13 @@ def assert_bmi_lifecycle_on_running(
 
     Returns (bmi_cr_name, bmh_name).
     """
+    assert bmi_id in grpc.list_baremetal_instance_ids()
+    bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s, uuid=bmi_id)
 
-    namespace: str
-    name: str
+    external_host_id: str = k8s.get_baremetal_instance_external_host_id(name=bmi_cr_name)
+    assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
+    bmh_ns, bmh_name = external_host_id.split("/", 1)
+    assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
 
     wait_for_bmh_provisioned(k8s=bmh_k8s, name=bmh_name, bmh_namespace=bmh_ns)
 
@@ -2052,6 +2056,42 @@ def assert_bmi_lifecycle_on_running(
             description=f"{bmh_name} powered on",
             resource_kind=WaitResourceKind.BARE_METAL_HOST,
             resource_id=bmh_name,
+        )
+
+    return bmi_cr_name, bmh_name
+
+
+@dataclass(frozen=True)
+class HostRef:
+    """A provisioning host: the BMH the inventory handed over to metal3.
+
+    On every inventory backend the BMI's externalHostID names the BMH once
+    a host is allocated, so the assertions below run identically on both:
+    - metal3: the pre-existing BMH.
+    - netbox: the bare-metal-fulfillment operator derives
+      ``netbox-<device-id>`` and creates it on the fly.
+    """
+
+    namespace: str
+    name: str
+
+
+def wait_for_host_allocated(*, k8s: K8sClient, host: HostRef, expected_image_url: str | None = None) -> None:
+    """Wait until the BMH is provisioned to a BMI and assert the allocation.
+
+    Bundles into one wait+assert pass:
+    - the BMH provisioning-state wait,
+    - the image URL (``expected_image_url`` compares exactly; ``None`` only
+      requires one to be set),
+    - consumerRef non-empty,
+    - online.
+    """
+    wait_for_bmh_provisioned(k8s=k8s, name=host.name, bmh_namespace=host.namespace)
+
+    image_url: str = k8s.get_bmh_image_url(name=host.name, bmh_namespace=host.namespace)
+    if expected_image_url is not None:
+        assert image_url == expected_image_url, (
+            f"BMH {host.name} image URL {image_url!r} does not match the expected {expected_image_url!r}"
         )
     else:
         assert image_url != "", f"BMH {host.name} has no image URL after provisioning"
